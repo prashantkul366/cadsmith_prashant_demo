@@ -1,3 +1,12 @@
+> **Provenance.** The CADSmith pipeline in `autofab/`, the benchmark in
+> `data/`, and everything below this note are the work of Jesse Barkley, Rumi
+> Loghmani and Amir Barati Farimani (Carnegie Mellon University) — see
+> [the paper](https://arxiv.org/abs/2603.26512) and the upstream repository,
+> [Ashutosh-Chauhan3025/CADSmith](https://github.com/Ashutosh-Chauhan3025/CADSmith).
+> This repository adds a web application in [`app/`](app/) around that
+> pipeline, which is itself unmodified. See [`app/README.md`](app/README.md)
+> to run it.
+
 # CADSmith
 
 **Multi-agent CAD generation with programmatic geometric validation.**
