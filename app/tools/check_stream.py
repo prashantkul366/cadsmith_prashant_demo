@@ -20,6 +20,90 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
+def _probe(client, model: str, thinking) -> dict:
+    """One streamed call. Returns what came back, or the error."""
+    kwargs = {
+        "model": model,
+        "max_tokens": 4096,
+        "messages": [{"role": "user", "content": SWEEP_PROMPT}],
+    }
+    if thinking is not None:
+        kwargs["thinking"] = thinking
+    blocks, think_chars, text_chars = Counter(), 0, 0
+    try:
+        with client.messages.stream(**kwargs) as stream:
+            for event in stream:
+                etype = getattr(event, "type", "?")
+                if etype == "content_block_start":
+                    blocks[getattr(getattr(event, "content_block", None),
+                                   "type", "?")] += 1
+                elif etype == "content_block_delta":
+                    d = getattr(event, "delta", None)
+                    if getattr(d, "type", "") == "thinking_delta":
+                        think_chars += len(getattr(d, "thinking", "") or "")
+                    elif getattr(d, "type", "") == "text_delta":
+                        text_chars += len(getattr(d, "text", "") or "")
+            final = stream.get_final_message()
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {str(exc)[:90]}"}
+    return {"blocks": dict(blocks), "think": think_chars, "text": text_chars,
+            "out": final.usage.output_tokens}
+
+
+SWEEP_PROMPT = (
+    "A bearing housing: 90mm diameter body 40mm tall, bored 52mm through, on a "
+    "120mm square flange 10mm thick with four M8 holes on a 100mm pattern. "
+    "Work out the wall thickness and say whether the bore needs a shoulder, "
+    "then write the CadQuery."
+)
+
+#: Which configurations to try. Absent reasoning could be the parameter being
+#: ignored, the display mode being unsupported, or thinking simply being off by
+#: default - these separate those.
+SWEEP_CONFIGS = [
+    ("adaptive+summarized", {"type": "adaptive", "display": "summarized"}),
+    ("adaptive (no display)", {"type": "adaptive"}),
+    ("no thinking parameter", None),
+]
+
+
+def sweep(models: list[str], region: str, backend: str) -> int:
+    if backend == "bedrock":
+        from anthropic import AnthropicBedrockMantle
+        client = AnthropicBedrockMantle(aws_region=region)
+    else:
+        import anthropic
+        client = anthropic.Anthropic()
+
+    print(f"Sweeping {len(models)} model(s) x {len(SWEEP_CONFIGS)} configs "
+          f"on {backend}\n")
+    any_thinking = False
+    for model in models:
+        print(model)
+        for label, thinking in SWEEP_CONFIGS:
+            r = _probe(client, model, thinking)
+            if "error" in r:
+                print(f"  {label:<24} ERROR  {r['error']}")
+                continue
+            blocks = ",".join(f"{k}x{v}" for k, v in r["blocks"].items()) or "-"
+            mark = "THINKS" if r["think"] > 0 else "      "
+            if r["think"] > 0:
+                any_thinking = True
+            print(f"  {label:<24} {mark}  blocks={blocks:<18} "
+                  f"thinking={r['think']:<6} text={r['text']:<6} out={r['out']}")
+        print()
+
+    print("=" * 62)
+    if any_thinking:
+        print("  At least one configuration streams reasoning - use it.")
+        return 0
+    print("  No configuration returned reasoning on this platform.")
+    print("  The Reasoning panel will show streamed output only, which is")
+    print("  still live per-agent content. To get genuine reasoning, point")
+    print("  the app at the first-party Anthropic provider instead.")
+    return 1
+
+
 def main() -> int:
     backend = os.getenv("LLM_BACKEND", "bedrock").strip().lower()
     model = os.getenv("CODER_MODEL") or (
@@ -28,6 +112,17 @@ def main() -> int:
 
     print(f"backend={backend}  model={model}"
           + (f"  region={region}" if backend == "bedrock" else ""))
+
+    if "--sweep" in sys.argv:
+        models = [a for a in sys.argv[1:] if not a.startswith("-")] or [
+            "anthropic.claude-sonnet-5",
+            "anthropic.claude-opus-5",
+            "anthropic.claude-opus-4-8",
+            "anthropic.claude-fable-5-1",
+        ]
+        if backend != "bedrock":
+            models = [m.removeprefix("anthropic.") for m in models]
+        return sweep(models, region, backend)
 
     if backend == "bedrock":
         from anthropic import AnthropicBedrockMantle
