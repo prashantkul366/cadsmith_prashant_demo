@@ -129,6 +129,31 @@ const Viewer = (() => {
     });
   }
 
+  /* ── build reveal ─────────────────────────────────────────────────────
+     A new version does not simply pop into place: it fades and scales up over
+     ~0.4s so successive refinement iterations read as the part being reworked
+     rather than as an unexplained flicker. `building` orbits the camera while
+     the pipeline is running, independently of the user's own SPIN toggle.   */
+  let reveal = 1;          // 0 → 1 while animating in
+  let building = false;
+
+  function startReveal() { reveal = 0; }
+
+  function stepReveal() {
+    if (reveal >= 1 || !model) return;
+    reveal = Math.min(1, reveal + 0.042);
+    const e = 1 - Math.pow(1 - reveal, 3);      // easeOutCubic
+    model.scale.setScalar(0.93 + 0.07 * e);
+    eachMaterial((m, isLine) => {
+      m.transparent = true;
+      m.opacity = (isLine ? 0.32 : 1) * e;
+    });
+    if (reveal >= 1) {
+      model.scale.setScalar(1);
+      applyModes();                              // restore exact final state
+    }
+  }
+
   function applyModes() {
     eachMaterial((m, isLine) => {
       m.needsUpdate = true;
@@ -163,6 +188,7 @@ const Viewer = (() => {
     group.add(edges);
 
     setModel(group, geometry.boundingBox);
+    startReveal();
     return geometry.boundingBox;
   }
 
@@ -294,7 +320,8 @@ const Viewer = (() => {
   (function loop() {
     requestAnimationFrame(loop);
     if (tween) tween();
-    if (spin && model) theta += 0.0034;
+    stepReveal();
+    if ((spin || building) && model) theta += building && !spin ? 0.0022 : 0.0034;
     cam.position.set(
       target.x + dist * Math.sin(phi) * Math.cos(theta),
       target.y + dist * Math.sin(phi) * Math.sin(theta),
@@ -309,6 +336,9 @@ const Viewer = (() => {
     load, clear, fit, view,
     get spin() { return spin; },
     set spin(v) { spin = v; },
+    //: Slow orbit while the pipeline works, without touching the SPIN toggle.
+    get building() { return building; },
+    set building(v) { building = !!v; },
     get extents() { return extents; },
     toggleWire() { wire = !wire; applyModes(); return wire; },
     snapshot(white) {

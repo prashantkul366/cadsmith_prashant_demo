@@ -545,3 +545,60 @@ textarea.src{
 .optnote.ok{color:var(--valid)}
 .optnote.warn{color:var(--warn)}
 .optnote code{font-family:var(--mono);font-size:10px;color:var(--ink-2)}
+
+
+/* ══════════ Reasoning panel ══════════
+   One collapsible block per agent run. Reasoning streams in live, then the
+   block folds itself away when the step finishes so the column does not grow
+   without bound over five refinement iterations. */
+
+.rsec.think{min-height:0;display:flex;flex-direction:column}
+.think-body{
+  flex:1;min-height:0;overflow-y:auto;padding:8px 10px;
+  scrollbar-width:thin;scrollbar-color:var(--line) transparent;
+}
+.think-body::-webkit-scrollbar{width:8px}
+.think-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+
+.livedot{
+  width:7px;height:7px;border-radius:50%;background:var(--accent);
+  margin-left:8px;flex:none;animation:breathe 1.4s ease-in-out infinite;
+}
+
+.tblock{
+  border:1px solid var(--line-soft);border-radius:var(--r);
+  background:var(--panel-2);margin-bottom:6px;overflow:hidden;
+  animation:fin .22s ease both;
+}
+.tblock[data-state="run"]{border-color:var(--accent-dim)}
+.tblock[data-state="fail"]{border-color:var(--err)}
+
+.tblock>summary{
+  display:flex;align-items:center;gap:8px;cursor:pointer;
+  padding:7px 9px;list-style:none;user-select:none;
+  font-size:12px;color:var(--ink-2);
+}
+.tblock>summary::-webkit-details-marker{display:none}
+.tblock>summary:hover{background:var(--raise)}
+.tblock>summary b{color:var(--ink);font-weight:600}
+.tblock .tsub{color:var(--ink-dim);font-size:11px}
+.tblock .tms{margin-left:auto;color:var(--ink-dim);font-size:10.5px;font-family:var(--mono)}
+
+/* caret rotates when the block is open */
+.tcar{width:9px;height:9px;flex:none;transition:transform .16s ease;color:var(--ink-dim)}
+.tblock[open] .tcar{transform:rotate(90deg)}
+
+.tstream{padding:2px 10px 10px 26px;border-top:1px solid var(--line-soft)}
+.tthink{
+  font-size:11.5px;line-height:1.55;color:var(--ink-dim);
+  white-space:pre-wrap;word-break:break-word;font-style:italic;
+}
+.ttext{
+  font-family:var(--mono);font-size:11px;line-height:1.5;color:var(--ink-2);
+  white-space:pre-wrap;word-break:break-word;margin-top:6px;
+}
+/* the caret only shows on the block currently being written */
+.tblock[data-state="run"] .tstream>:last-child::after{
+  content:"\258B";color:var(--accent);animation:blink 1s steps(1) infinite;
+  margin-left:1px;
+}

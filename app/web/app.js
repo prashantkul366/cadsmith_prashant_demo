@@ -205,6 +205,94 @@ const PHASE_STAGE = {
   render: "judge", judge: "judge", refine: "code",
 };
 
+/* ══════════ Reasoning panel ══════════
+   One collapsible block per agent run, keyed by agent + iteration so the five
+   refinement rounds stay distinguishable. Reasoning and output stream into
+   separate lanes; a finished block folds itself away. */
+
+const AGENT_LABEL = {
+  plan:      ["Planner",       "decomposing the request"],
+  code:      ["Coder",         "writing CadQuery"],
+  error_fix: ["Error Refiner", "repairing the script"],
+  judge:     ["Judge",         "inspecting the part"],
+  refine:    ["Refiner",       "correcting the geometry"],
+};
+
+const TH = { blocks: new Map(), order: 0 };
+
+function thinkReset() {
+  TH.blocks.clear();
+  TH.order = 0;
+  $("#thinkBody").innerHTML = "";
+  $("#thinkLive").hidden = true;
+}
+
+function thinkKey(agent, iteration) { return `${agent}#${iteration || 0}`; }
+
+function thinkBlock(agent, iteration) {
+  const key = thinkKey(agent, iteration);
+  let block = TH.blocks.get(key);
+  if (block) return block;
+
+  const [label, sub] = AGENT_LABEL[agent] || [agent, ""];
+  const el = document.createElement("details");
+  el.className = "tblock";
+  el.open = true;
+  el.dataset.state = "run";
+  el.innerHTML = `
+    <summary>
+      <svg class="tcar" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
+      <b></b><span class="tsub"></span><span class="tms"></span>
+    </summary>
+    <div class="tstream"></div>`;
+  el.querySelector("b").textContent = label;
+  el.querySelector(".tsub").textContent =
+    iteration ? `${sub} · iteration ${iteration}` : sub;
+
+  const body = $("#thinkBody");
+  if (!TH.order) body.innerHTML = "";
+  body.appendChild(el);
+  TH.order += 1;
+
+  block = { el, stream: el.querySelector(".tstream"), started: Date.now(),
+            lanes: {} };
+  TH.blocks.set(key, block);
+  return block;
+}
+
+function thinkAppend(agent, iteration, lane, text) {
+  if (!text) return;
+  const block = thinkBlock(agent, iteration);
+  let node = block.lanes[lane];
+  if (!node) {
+    node = document.createElement("div");
+    node.className = lane === "thinking" ? "tthink" : "ttext";
+    block.stream.appendChild(node);
+    block.lanes[lane] = node;
+  }
+  node.textContent += text;
+
+  // Follow the stream only while the reader is already at the bottom, so
+  // scrolling back to read something is not yanked away.
+  const body = $("#thinkBody");
+  const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
+  if (atBottom) body.scrollTop = body.scrollHeight;
+  $("#thinkLive").hidden = false;
+}
+
+function thinkFinish(agent, iteration, ok, ms) {
+  const block = TH.blocks.get(thinkKey(agent, iteration));
+  if (!block) return;
+  block.el.dataset.state = ok ? "done" : "fail";
+  const elapsed = ms != null ? ms : Date.now() - block.started;
+  block.el.querySelector(".tms").textContent = `${(elapsed / 1000).toFixed(1)}s`;
+  // Fold finished steps away, the way a completed thought collapses.
+  if (ok) block.el.open = false;
+}
+
+function thinkIdle() { $("#thinkLive").hidden = true; }
+
 function handleEvent(event) {
   const { phase, status, message, data } = event;
   S.seq = Math.max(S.seq, event.seq + 1);
@@ -212,6 +300,17 @@ function handleEvent(event) {
   if (S.editing) { handleEditEvent(event); return; }
 
   if (phase === "log") { appendLog(message); return; }
+
+  if (phase === "thinking") {
+    thinkAppend(data.agent || "code", data.iteration || 0,
+                data.stream === "thinking" ? "thinking" : "text", message);
+    return;
+  }
+
+  // A step that produced reasoning is finished when its own phase resolves.
+  if (AGENT_LABEL[phase] && (status === "ok" || status === "failed")) {
+    thinkFinish(phase, data.iteration || 0, status === "ok", data.ms);
+  }
 
   const stage = PHASE_STAGE[phase];
   if (stage) {
@@ -438,6 +537,8 @@ async function generate() {
   $("#iters").innerHTML = "";
   $("#plog").innerHTML = "";
   Viewer.clear();
+  thinkReset();
+  Viewer.building = true;     // slow orbit while the pipeline works
   setCode("");
   // Everything on the right belongs to the run that is being replaced, so
   // clear it now rather than leaving the previous part's plan and verdict on
@@ -488,6 +589,8 @@ function follow(jobId, fromSeq) {
 
 function finishRun(data) {
   S.busy = false;
+  Viewer.building = false;
+  thinkIdle();
   S.converged = !!data.converged;
   $("#genBtn").disabled = !(S.health && S.health.can_generate);
 
@@ -513,6 +616,8 @@ function finishRun(data) {
 
 function failRun(message) {
   S.busy = false;
+  Viewer.building = false;
+  thinkIdle();
   $("#genBtn").disabled = !(S.health && S.health.can_generate);
   $("#errTitle").textContent = "The run could not complete";
   $("#errMsg").textContent = message || "Unknown error.";
@@ -647,6 +752,13 @@ $$(".vt[data-view]").forEach(button => {
     Viewer.view(button.dataset.view, true);
   };
 });
+// Collapse every finished step; the running one stays open.
+$("#thinkClear").onclick = () => {
+  document.querySelectorAll(".tblock").forEach(el => {
+    if (el.dataset.state !== "run") el.open = false;
+  });
+};
+
 $("#fitBtn").onclick = () => Viewer.fit(true);
 $("#wireBtn").onclick = () => $("#wireBtn").classList.toggle("on", Viewer.toggleWire());
 $("#spinBtn").onclick = () => {
@@ -880,6 +992,8 @@ async function startReplay(sourceJobId) {
   $("#iters").innerHTML = "";
   $("#plog").innerHTML = "";
   Viewer.clear();
+  thinkReset();
+  Viewer.building = true;     // slow orbit while the pipeline works
   setCode("");
   showOverlay("pipe");
   renderStages("plan", "Replaying a recorded run");
