@@ -27,6 +27,33 @@ from typing import Any
 _state: dict[str, Any] = {}
 
 
+def _already_injected() -> bool:
+    """Has something already replaced ssl.SSLContext with truststore's?"""
+    import ssl
+
+    return "truststore" in getattr(ssl.SSLContext, "__module__", "")
+
+
+def _undo_injection() -> bool:
+    """Restore the stdlib ssl.SSLContext if truststore replaced it."""
+    import ssl
+
+    if not _already_injected():
+        return False
+    for name in ("pip._vendor.truststore", "truststore"):
+        try:
+            module = __import__(name, fromlist=["extract_from_ssl"])
+            extract = getattr(module, "extract_from_ssl", None)
+            if extract is None:
+                continue
+            extract()
+            if not _already_injected():
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def configure() -> dict:
     """Point Python's TLS at the OS trust store. Safe to call more than once.
 
@@ -40,8 +67,14 @@ def configure() -> dict:
     bundle = os.getenv("SSL_CERT_FILE") or os.getenv("REQUESTS_CA_BUNDLE")
 
     if bundle:
-        _state.update(source="bundle", ok=True,
-                      detail=f"using the CA bundle at {bundle}")
+        # An explicit bundle is the most predictable option, and it is the way
+        # out of the double-injection trap above: undo any startup injection so
+        # the bundle is what actually gets used.
+        undone = _undo_injection()
+        _state.update(
+            source="bundle", ok=True,
+            detail=f"using the CA bundle at {bundle}"
+                   + (" (startup truststore injection undone)" if undone else ""))
         return _state
 
     if preference == "certifi":
@@ -51,6 +84,19 @@ def configure() -> dict:
 
     try:
         import truststore
+
+        if _already_injected():
+            # Some Python installs inject pip's vendored truststore into
+            # ssl.SSLContext at interpreter startup. Injecting a second,
+            # separately installed copy on top makes setting verify_mode
+            # recurse until the stack runs out, and every HTTPS request then
+            # fails as "Connection error" - which reads like a network fault
+            # and is not one. One injection is enough.
+            _state.update(
+                source="system", ok=True,
+                detail="using the operating system certificate store "
+                       "(already injected by the Python installation)")
+            return _state
 
         truststore.inject_into_ssl()
         _state.update(source="system", ok=True,
