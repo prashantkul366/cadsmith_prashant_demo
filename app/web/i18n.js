@@ -109,6 +109,7 @@ const I18N = (function () {
     "stage.done":       ["Ready", "完了"],
 
     "detail.sending":   ["Sending the request", "リクエストを送信中"],
+    "detail.grounded":  ["Retrieving standard dimensions", "規格寸法を参照中"],
     "detail.decompose": ["Decomposing the request", "要求を分解中"],
     "detail.apidocs":   ["Retrieving CadQuery API docs", "CadQuery API 文書を参照中"],
     "detail.lines":     ["{n} lines written", "{n} 行を生成"],
@@ -159,6 +160,32 @@ const I18N = (function () {
     "val.heading":      ["Validation", "検証"],
     "val.none":         ["Nothing validated yet.", "まだ検証されていません。"],
     "val.waiting":      ["Waiting for the first attempt…", "最初の試行を待機中…"],
+    /* ── what the kernel measured ───────────────────────────────────────
+       A measurement settles a dimension; the Judge's opinion about one does
+       not. These label the rows and the refusal that follows from them. */
+    "spec.heading":     ["MEASURED BY THE KERNEL", "カーネルによる実測"],
+    "spec.wanted":      ["wanted {expected}", "期待値 {expected}"],
+    "spec.solid_valid": ["watertight solid", "閉じたソリッド"],
+    "spec.bbox":        ["overall size", "外形寸法"],
+    "spec.num_holes":   ["hole count", "穴の数"],
+    "spec.num_holes.advisory": ["hole count (advisory)", "穴の数（参考）"],
+    "spec.hole_diameter": ["hole diameter", "穴径"],
+    "spec.volume_estimate": ["volume (advisory)", "体積（参考）"],
+
+    "val.refused":      ["Refused on measurement", "実測により却下"],
+    "val.refused.judgepassed": ["The Judge accepted this, but the kernel disagrees: ",
+                                "判定モデルは合格としましたが、カーネルの実測は"
+                                + "一致しません: "],
+    "val.refused.measured": ["The kernel measured this part against the plan: ",
+                             "カーネルが設計プランと照合して実測しました: "],
+    "val.refused.tail": [
+      ". A measurement settles a dimension; an opinion about one does not.",
+      "。寸法は実測が決めるものであり、意見が決めるものではありません。"],
+    "val.refused.item": ["{label} measured {actual}, wanted {expected}",
+                         "{label} の実測値は {actual}（期待値 {expected}）"],
+    "val.refused.judgetoo": [" The Judge also rejected it: {feedback}",
+                             " 判定モデルも不合格としています: {feedback}"],
+
     "val.accepted":     ["Accepted by the Judge", "判定モデルが合格としました"],
     "val.rejected":     ["Rejected by the Judge", "判定モデルが不合格としました"],
     "val.rebuilt":      ["Rebuilt and checked by the kernel",
@@ -324,6 +351,84 @@ const I18N = (function () {
 
     "plan.heading":     ["Design Plan", "設計プラン"],
     "tier.demo":        ["DEMO", "デモ"],
+
+    /* ── token accounting ───────────────────────────────────────────────
+       Canonical agent ids, translated only when drawn. The counters are keyed
+       by id, so a language change re-labels the strip without losing the
+       split between agents. */
+    "agent.planner":    ["planner", "プランナー"],
+    "agent.coder":      ["coder", "コーダー"],
+    "agent.errorfix":   ["error refiner", "エラーリファイナー"],
+    "agent.judge":      ["judge", "検証"],
+    "agent.refiner":    ["refiner", "リファイナー"],
+
+    "usage.total":      ["{total} tokens · {in} in · {out} out · {calls}",
+                         "{total} トークン · 入力 {in} · 出力 {out} · {calls}"],
+    "usage.calls":      ["{n} call", "{n} 回の呼び出し"],
+    "usage.calls.pl":   ["{n} calls", "{n} 回の呼び出し"],
+    "usage.budget":     ["{pct}% of the {cap} budget", "上限 {cap} の {pct}%"],
+
+    /* ── the standard-parts catalogue ───────────────────────────────────────
+       A part no agent produced must not be shown as evidence that the agents
+       work, so every one of these says where it came from. */
+    "diag.catalog":     ["catalogue", "カタログ"],
+    "opt.grounding":    ["Standard dimensions", "標準寸法の参照"],
+    "opt.grounding.tip": [
+      "Give the Planner the published dimensions for any standard part the "
+      + "request names — thread sizes, bearings, NEMA frames. Off reproduces "
+      + "the pipeline as published.",
+      "リクエストに含まれる標準部品（ねじ、軸受、NEMA フレームなど）の"
+      + "規格寸法をプランナーに渡します。オフにすると、公開されている"
+      + "パイプラインそのままの動作になります。"],
+    "opt.catalog":      ["Standard parts", "標準部品"],
+    "opt.catalog.tip": [
+      "Answer an unambiguous standard-part request from the catalogue "
+      + "instead of generating it — exact dimensions, no model call. Off "
+      + "reproduces the pipeline as published.",
+      "明確な標準部品の要求に対して、生成ではなくカタログから"
+      + "回答します。寸法は正確で、モデル呼び出しはありません。"
+      + "オフにすると、公開されているパイプラインそのままの動作になります。"],
+
+    "banner.catalog": [
+      "No model backend configured, so the five agents cannot run. Standard "
+      + "parts still work — ask for a fastener, bearing, gear, pulley or "
+      + "spring and it comes from the catalogue, exactly and instantly. "
+      + "Anything custom needs a provider below.",
+      "モデルのバックエンドが設定されていないため、5 つのエージェントは"
+      + "動作しません。標準部品は利用できます。締結部品・軸受・歯車・"
+      + "プーリー・ばねであればカタログから正確に即座に生成されます。"
+      + "それ以外の部品には、下でプロバイダーの設定が必要です。"],
+
+    "detail.fromcatalog": ["Serving a standard part", "標準部品を提供中"],
+    "hist.catalog":     ["CATALOGUE", "カタログ"],
+    "iter.catalog":     ["STANDARD", "標準"],
+    "label.catalog":    ["CATALOGUE · {backend}", "カタログ · {backend}"],
+    "facts.standard":   ["Standard part", "標準部品"],
+    "usage.free":       ["No model call — served from the catalogue",
+                         "モデル呼び出しなし — カタログから提供"],
+    "run.catalogdone":  ["{title} — from the catalogue{seconds}, no model call",
+                         "{title} — カタログから取得{seconds}、モデル呼び出しなし"],
+    "plan.catalog": [
+      "This part is defined by a published standard, so there was no plan to "
+      + "make — the dimensions come from the standard itself.",
+      "この部品は公開された規格で定められているため、作成すべき設計プランは"
+      + "ありません。寸法は規格そのものによります。"],
+
+    "val.catalog.heading": ["Standard part, served from the catalogue",
+                            "カタログから提供された標準部品"],
+    "val.catalog.body": [
+      "{title} is defined by {standard}, so its dimensions are exact rather "
+      + "than estimated. No model wrote it and no Judge assessed it. "
+      + "OpenCASCADE built it and reports a valid watertight solid, and the "
+      + "source is parametric — edit it like any other part.",
+      "{title} は {standard} で定められているため、寸法は推定ではなく"
+      + "正確です。モデルは使われておらず、検証も行われていません。"
+      + "OpenCASCADE が構築し、閉じた正しいソリッドであることを報告しています。"
+      + "ソースはパラメトリックなので、他の部品と同じように編集できます。"],
+    "val.catalog.thispart": ["This part", "この部品"],
+    "val.catalog.itsstandard": ["its published standard", "公開規格"],
+    "val.src.catalog":  ["CATALOGUE · {backend} · NO MODEL CALL",
+                         "カタログ · {backend} · モデル呼び出しなし"],
 
     /* ── the Reasoning panel ────────────────────────────────────────────
        One collapsible block per agent run, streaming as it works. The label

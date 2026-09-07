@@ -218,6 +218,65 @@ run options. See **Model backends** above.
 the model backend and the metrics stack. Click it for detail. A demo that will
 not work says so before you start.
 
+## Standard parts, measured checks, and a spend ceiling
+
+Four things sit between the request and the five agents.
+
+**A standard part is served, not generated.** When a request is unambiguously
+a catalogue part — "an M8x30 socket head cap screw", "a 6203 bearing", "a 20
+tooth spur gear module 2" — there is nothing for five agents to work out. The
+dimensions come from the published standard, the geometry is exact, and a
+model can only introduce error. `app/catalog/router.py` refuses anything
+ambiguous, under-specified, or merely *mentioning* a standard part inside a
+custom one ("a bearing housing for a 6203" is a housing), and it builds and
+verifies every candidate before returning it. The result is badged
+`CATALOGUE` everywhere it appears, carries no Judge verdict, and reports *no
+model call* — a part no agent produced must never read as evidence that the
+agents work. Turn it off with **Standard parts** to reproduce the published
+pipeline exactly.
+
+**The Planner is given published dimensions.** With **Standard dimensions**
+on, a request naming a thread size, a bearing or a NEMA frame has the real
+figures retrieved and handed to the Planner, so it is not guessing at an M8
+pitch. Off reproduces the pipeline as published; the run log names what each
+request was grounded in either way.
+
+**Measurable claims are settled by the kernel, not the Judge.** The vision
+Judge has been observed passing a plate carrying one hole where four were
+asked for, and rejecting a part whose volume was exactly right.
+`app/server/spec.py` measures the built solid for the quantities the plan
+stated and lets the measurement decide: a hole-count shortfall blocks the
+version whatever the Judge said. Which claims may block was decided by
+measurement rather than taste — `overall_bbox` and `volume_estimate` both
+flagged correct parts in testing, so they are reported and never block. A
+gate that rejects correct work gets switched off, which is worse than not
+having one. The Validation panel shows every measured row, and leads with the
+measurement when it contradicts the Judge.
+
+**A run cannot bill without bound.** Every turn of the loop is a paid model
+call and the vision Judge sends an image each time, so on a metered backend a
+loop that will not converge is not a slow run, it is a bill. Each run carries
+a token ceiling (`CADSMITH_TOKEN_BUDGET`, 250,000 by default), checked before
+each call; when the next call would exceed it the run stops and says so, and
+the attempts it did produce are kept. The strip under the viewer shows the
+spend per agent as the run goes. Tokens rather than money: tokens are what
+the API reports exactly, and Bedrock is priced by AWS per region and per
+model — set `CADSMITH_INPUT_PER_MTOK` and `CADSMITH_OUTPUT_PER_MTOK` from
+your own pricing page if you want a cost estimate, and nothing is guessed
+without them.
+
+The gear and wider fastener families need two optional libraries:
+
+```bash
+.venv/bin/pip install -r app/requirements-catalog.txt
+```
+
+Without them the catalogue degrades to the families it builds itself —
+washers, bearings, springs, pulleys, pins and ISO 4762/4014/4032 screws — and
+the health chip says which are missing. `app/tests/test_catalog_library.py`
+covers that path and reports the library-dependent checks as skipped rather
+than failed.
+
 ## English and Japanese
 
 The interface has a language switch in the header, and opens in Japanese by
@@ -268,7 +327,19 @@ app/
     drawing.py     orthographic projections composed into a sheet
     replay.py      re-emits a recorded run at presentation speed
     i18n.py        the messages a person reads, in English and Japanese
-    japanese.py    Japanese edit instructions, in the words edits.py matches
+    spec.py        kernel-measured checks against what the plan claimed
+    budget.py      the token ceiling a run may not spend past
+    catalog_run.py serves a standard part instead of generating it
+  catalog/
+    standards.py   dimensions from ISO 4762/4014/4032/7089/273/2338, ISO 15,
+                   and NEMA ICS 16 motor frames
+    parts.py       the families this app builds itself, parametrically
+    grounding.py   published dimensions handed to the Planner
+    library.py     gears, fasteners and sprockets from cq_gears/cq_warehouse
+    router.py      is this request a standard part, and which one
+    verify.py      build it and check it before anyone relies on it
+    japanese.py    Japanese read with the English vocabulary both the router
+                   and edits.py match on
   web/
     index.html  style.css  app.js  api.js  viewer.js  vendor/three.min.js
     i18n.js        the interface dictionary and the language switch
@@ -321,6 +392,12 @@ deterministic.
 .venv/bin/python -m app.tests.test_providers        # non-Anthropic backend, real kernel
 .venv/bin/python -m app.tests.test_i18n             # both dictionaries, and what
                                                     # must stay English
+.venv/bin/python -m app.tests.test_catalog          # the catalogue, real kernel
+.venv/bin/python -m app.tests.test_catalog_library  # every family builds and routes
+.venv/bin/python -m app.tests.test_grounding        # published dimensions retrieved
+.venv/bin/python -m app.tests.test_spec             # measurement over opinion
+.venv/bin/python -m app.tests.test_budget           # the spend ceiling
+.venv/bin/python -m app.tests.test_edit_chain       # chained edits, real kernel
 .venv/bin/python -m app.tests.test_encoding         # UTF-8 everywhere (Windows)
 .venv/bin/python -m app.tests.test_layout           # panel geometry, real browser
 .venv/bin/python -m app.tests.test_thinking_stream  # streamed reasoning

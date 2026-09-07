@@ -32,6 +32,60 @@ LANGS = ("en", "ja")
 #: needs, since the verb goes last and the qualifier goes first.
 MESSAGES: dict[str, dict[str, str]] = {
 
+    # -- the Planner found nothing to build --------------------------------
+    "plan.empty": {
+        "en": "The Planner did not find a part to make in this request: it "
+              "returned no components and no overall size. Describe a part - "
+              "its shape, size and features.",
+        "ja": "このリクエストから作成する部品を特定できませんでした。"
+              "構成要素も全体寸法も返されていません。形状・寸法・特徴を"
+              "含めて部品を説明してください。",
+    },
+    "plan.empty.note": {
+        "en": ' The Planner noted: "{note}"',
+        "ja": "（プランナーの補足: 「{note}」）",
+    },
+    "plan.prose": {
+        "en": "The Planner replied with prose instead of a design plan, "
+              "which usually means the model did not treat this as a request "
+              "for a physical part. Describe a part to make - its shape, "
+              "size and features.",
+        "ja": "プランナーが設計プランではなく文章で応答しました。多くの"
+              "場合、これはモデルがこの入力を物理部品の要求として扱わな"
+              "かったことを意味します。形状・寸法・特徴を含めて、作成する"
+              "部品を説明してください。",
+    },
+    "plan.malformed": {
+        "en": "The Planner's reply was shaped like a design plan but would "
+              "not parse, so there is nothing to build from. That is usually "
+              "a smaller model writing notes or arithmetic in among the "
+              "values; the app repairs the common cases and could not repair "
+              "this one. A stronger generation model is the reliable fix.",
+        "ja": "プランナーの応答は設計プランの形をしていましたが、解析できません"
+              "でした。多くの場合、小さめのモデルが値の中に注記や計算式を"
+              "書き込むことが原因です。よくあるケースはアプリ側で修復します"
+              "が、今回は修復できませんでした。確実な対処は、より強力な生成"
+              "モデルを使うことです。",
+    },
+    "plan.prose.said": {
+        "en": ' The model said: "{said}"',
+        "ja": "（モデルの応答: 「{said}」）",
+    },
+
+    # -- the spend ceiling --------------------------------------------------
+    "budget.stopped": {
+        "en": "This run reached its {limit}-token budget after {calls} model "
+              "calls ({spent} tokens), so it was stopped before spending "
+              "more. The attempts it did produce are still here. Raise "
+              "CADSMITH_TOKEN_BUDGET if this part genuinely needs more, or "
+              "lower the refinement iterations.",
+        "ja": "この実行は {calls} 回のモデル呼び出し（{spent} トークン）で"
+              "上限 {limit} トークンに達したため、これ以上消費する前に停止"
+              "しました。ここまでの試行は残っています。この部品に本当に"
+              "追加の予算が必要な場合は CADSMITH_TOKEN_BUDGET を引き上げる"
+              "か、改良の反復回数を減らしてください。",
+    },
+
     # -- the run ------------------------------------------------------------
     "job.samemodel": {
         "en": "Generation and judging both use {model}, so the Judge is "
@@ -76,6 +130,33 @@ MESSAGES: dict[str, dict[str, str]] = {
     "replay.noevents": {
         "en": "That run has no recorded events.",
         "ja": "この実行には、記録されたイベントがありません。",
+    },
+
+    "job.catalogskipped": {
+        "en": "Catalogue lookup skipped: {error}",
+        "ja": "カタログ照会をスキップしました: {error}",
+    },
+    "job.catalogunbuildable": {
+        "en": "The catalogue part would not build here, so the pipeline will "
+              "generate it instead: {error}",
+        "ja": "カタログ部品をこの環境で構築できなかったため、パイプラインで"
+              "生成します: {error}",
+    },
+    "job.catalogserved": {
+        "en": "Served from the catalogue.",
+        "ja": "カタログから提供しました。",
+    },
+
+    # -- the catalogue path -------------------------------------------------
+    "catalog.served": {
+        "en": "{title} - served from the catalogue, not generated",
+        "ja": "{title} — 生成ではなくカタログから提供されました",
+    },
+    "catalog.built": {
+        "en": "Built in {ms} ms with no model call. Edit it like any other "
+              "part - it is parametric source.",
+        "ja": "モデルを呼び出さずに {ms} ミリ秒で構築しました。パラメトリック"
+              "なソースなので、他の部品と同じように編集できます。",
     },
 
     # -- edits --------------------------------------------------------------

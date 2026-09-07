@@ -179,9 +179,40 @@ def _health() -> dict:
     trust = tls.status()
     checks["tls_trust"] = {"ok": trust["ok"], "detail": trust["detail"]}
 
+    # The catalogue reports ok whether or not the optional gear and fastener
+    # libraries are installed - without them it simply covers less - and says
+    # what is actually available.
+    try:
+        from app.catalog import router as catalog_router
+
+        described = catalog_router.describe()
+        live = [name for name, present in described["backends"].items() if present]
+        missing = [name for name, present in described["backends"].items()
+                   if not present]
+        detail = f"{len(described['families'])} part families"
+        if live:
+            detail += f" ({', '.join(live)})"
+        if missing:
+            # Actionable rather than merely factual: the usual reason these
+            # are absent is a machine without git, and the fix is one line.
+            detail += (f" - {', '.join(missing)} not installed; add gears and "
+                       f"the wider fastener range with "
+                       f"'pip install -r app/requirements-catalog.txt'")
+        checks["catalog"] = {"ok": True, "detail": detail}
+    except Exception as exc:
+        checks["catalog"] = {"ok": True,
+                             "detail": f"catalogue unavailable: {exc}"}
+
     return {
         "ok": all(c["ok"] for c in checks.values()),
-        "can_generate": checks["cadquery"]["ok"] and checks["model_backend"]["ok"],
+        # A standard part is answered from the catalogue with no model call,
+        # so the app can generate *something* as soon as CadQuery works.
+        # Whether the agents can run is a separate question, and the banner
+        # says so - greying out Generate entirely would refuse work the app
+        # can plainly do.
+        "can_generate": checks["cadquery"]["ok"] and (
+            checks["model_backend"]["ok"] or checks["catalog"]["ok"]),
+        "can_run_agents": checks["cadquery"]["ok"] and checks["model_backend"]["ok"],
         "checks": checks,
         "providers": providers.status(),
     }

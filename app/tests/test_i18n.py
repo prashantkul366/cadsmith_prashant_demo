@@ -36,7 +36,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from app.server import edits, i18n, japanese  # noqa: E402
+from app.catalog import japanese  # noqa: E402
+from app.server import edits, i18n  # noqa: E402
 from app.server.jobs import JobOptions  # noqa: E402
 
 WEB = ROOT / "app" / "web"
@@ -294,7 +295,8 @@ def main() -> int:  # noqa: C901 - a checklist, not a branchy function
     # string constants count - a comment explaining why 「補強リブを追加する」
     # must be refused is documentation, and never reaches anything.
     for module in ("instrument.py", "jobs.py", "app.py", "edits.py",
-                   "providers.py", "drawing.py", "replay.py"):
+                   "providers.py", "drawing.py", "replay.py", "spec.py",
+                   "budget.py", "catalog_run.py"):
         found = japanese_strings(ROOT / "app" / "server" / module)
         check(f"server/{module} holds no Japanese string of its own",
               not found, ", ".join(found[:3]))

@@ -68,6 +68,16 @@
           <span data-i18n="opt.vision">Vision Judge</span>
           <span class="sw on" id="optVision" role="switch" aria-checked="true" tabindex="0"></span>
         </div>
+        <div class="opt">
+          <span data-i18n="opt.grounding" data-i18n-title="opt.grounding.tip"
+                title="Give the Planner the published dimensions for any standard part the request names — thread sizes, bearings, NEMA frames. Off reproduces the pipeline as published.">Standard dimensions</span>
+          <span class="sw on" id="optGround" role="switch" aria-checked="true" tabindex="0"></span>
+        </div>
+        <div class="opt">
+          <span data-i18n="opt.catalog" data-i18n-title="opt.catalog.tip"
+                title="Answer an unambiguous standard-part request from the catalogue instead of generating it — exact dimensions, no model call. Off reproduces the pipeline as published.">Standard parts</span>
+          <span class="sw on" id="optCatalog" role="switch" aria-checked="true" tabindex="0"></span>
+        </div>
       </div>
 
       <div class="opts" id="llmOpts">
@@ -162,7 +172,10 @@
       </div>
     </div>
 
-    <div class="iters" id="iters"></div>
+    <div class="itersrow">
+      <div class="iters" id="iters"></div>
+      <div class="usage" id="usage" hidden></div>
+    </div>
   </div>
 
   <!-- ══════════ RIGHT: plan, code, validation ══════════ -->

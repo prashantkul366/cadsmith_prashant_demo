@@ -34,6 +34,9 @@ const S = {
   provider: null,
   editing: false,
   examples: [],    // kept so a language change can redraw them translated
+  catalog: null,   // set when a standard part answered instead of the agents
+  usage: null,     // per-agent token counters, rebuilt from the events
+  spend: null,     // the server's own spend summary, ceiling included
   stage: null,     // {key, detail} - the pipeline strip, redrawn from state
   codeLines: undefined,
 };
@@ -130,7 +133,11 @@ async function loadHealth() {
 
   if (!checks.model_backend.ok) {
     $("#keyBanner").hidden = false;
-    $("#keyBannerText").textContent = t("banner.nobackend");
+    // A standard part still works with no backend at all, and saying so is
+    // the difference between the two paths made visible.
+    $("#keyBannerText").textContent =
+      t(checks.catalog && checks.catalog.ok ? "banner.catalog"
+                                            : "banner.nobackend");
   } else {
     $("#keyBanner").hidden = true;
   }
@@ -245,6 +252,100 @@ const PHASE_STAGE = {
    the pair cannot be assembled from an English word order. */
 const AGENT_KEYS = ["plan", "code", "error_fix", "judge", "refine"];
 
+/* ── what the run spent ──────────────────────────────────────────────
+   Each agent event carries autofab's *cumulative* counters, so the cost of
+   one call is the step between consecutive events. That is what makes a
+   per-agent breakdown possible at all: the job record only holds the total. */
+
+const AGENT_IDS = {
+  plan: "planner", code: "coder", error_fix: "errorfix",
+  judge: "judge", refine: "refiner",
+};
+const AGENT_ORDER = ["planner", "coder", "errorfix", "judge", "refiner"];
+const agentLabel = id => I18N.has("agent." + id) ? t("agent." + id) : id;
+const compact = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+
+function resetUsage() {
+  S.usage = { seen: { input: 0, output: 0, calls: 0 }, byAgent: {} };
+  S.spend = null;
+  const strip = $("#usage");
+  if (strip) { strip.hidden = true; strip.innerHTML = ""; }
+}
+
+function noteUsage(phase, tokens) {
+  if (!tokens || !S.usage) return;
+  const input = tokens.input_tokens || 0;
+  const output = tokens.output_tokens || 0;
+  const calls = tokens.calls || 0;
+  const seen = S.usage.seen;
+
+  // Cumulative counters only ever climb; a drop means the run restarted, so
+  // rebase rather than recording a negative.
+  const step = {
+    input: Math.max(0, input - seen.input),
+    output: Math.max(0, output - seen.output),
+    calls: Math.max(0, calls - seen.calls),
+  };
+  S.usage.seen = { input, output, calls };
+
+  const name = AGENT_IDS[phase] || phase;
+  const entry = S.usage.byAgent[name] || { input: 0, output: 0, calls: 0 };
+  entry.input += step.input;
+  entry.output += step.output;
+  entry.calls += step.calls;
+  S.usage.byAgent[name] = entry;
+  renderUsage();
+}
+
+function renderUsage() {
+  const strip = $("#usage");
+  if (!strip || !S.usage) return;
+  const { seen, byAgent } = S.usage;
+  const total = seen.input + seen.output;
+  if (!total) {
+    // A catalogue part costs nothing, and saying so is the point - it is the
+    // difference between the two paths made visible.
+    if (S.catalog) {
+      strip.hidden = false;
+      strip.innerHTML = `<span class="unone">${esc(t("usage.free"))}</span>`;
+    } else {
+      strip.hidden = true;
+    }
+    return;
+  }
+
+  const parts = AGENT_ORDER
+    .filter(name => byAgent[name] && (byAgent[name].input + byAgent[name].output))
+    .map(name => {
+      const a = byAgent[name];
+      return `<span class="uagent"><b>${compact(a.input + a.output)}</b>`
+           + `<span>${esc(agentLabel(name))}${a.calls > 1 ? ` ×${a.calls}` : ""}</span></span>`;
+    });
+
+  // On a metered backend the useful number is not just what this run spent
+  // but how close it came to the ceiling that stops it, so show both once
+  // the run is a meaningful way through its allowance.
+  const cap = S.spend && S.spend.budget;
+  const share = cap ? total / cap : 0;
+  const budgetNote = share > 0.25
+    ? `<span class="ubudget${share > 0.8 ? " near" : ""}">`
+      + `${esc(t("usage.budget", { pct: Math.round(share * 100),
+                                   cap: compact(cap) }))}</span>`
+    : "";
+  const costNote = S.spend && S.spend.estimated_cost !== undefined
+    ? `<span class="ucost">≈ $${S.spend.estimated_cost.toFixed(4)}</span>` : "";
+
+  strip.hidden = false;
+  strip.innerHTML =
+    `<span class="utot">${esc(t("usage.total", {
+        total: total.toLocaleString(),
+        in: seen.input.toLocaleString(),
+        out: seen.output.toLocaleString(),
+        calls: I18N.plural("usage.calls", "usage.calls.pl", seen.calls),
+      }))}</span>`
+    + costNote + budgetNote + parts.join("");
+}
+
 const TH = { blocks: new Map(), order: 0 };
 
 function thinkReset() {
@@ -330,6 +431,20 @@ function handleEvent(event) {
 
   if (phase === "log") { appendLog(message); return; }
 
+  if (phase === "catalog") {
+    if (data && data.part_id) {
+      S.catalog = data;
+      const label = t("label.catalog",
+                      { backend: String(data.backend || "").toUpperCase() });
+      $("#genModelLabel").textContent = label;
+      $("#judgeModelLabel").textContent = label;
+      renderStages("code", t("detail.fromcatalog"));
+      renderPlan(null);
+    }
+    appendLog(message);
+    return;
+  }
+
   if (phase === "thinking") {
     thinkAppend(data.agent || "code", data.iteration || 0,
                 data.stream === "thinking" ? "thinking" : "text", message);
@@ -341,9 +456,15 @@ function handleEvent(event) {
     thinkFinish(phase, data.iteration || 0, status === "ok", data.ms);
   }
 
+  // Cumulative counters ride on every agent event, so the strip fills in as
+  // the run goes rather than only at the end.
+  if (data && data.tokens) noteUsage(phase, data.tokens);
+  if (data && data.spend) { S.spend = data.spend; renderUsage(); }
+
   const stage = PHASE_STAGE[phase];
   if (stage) {
     let detail = "";
+    if (phase === "ground") detail = t("detail.grounded");
     if (phase === "plan" && status === "started") detail = t("detail.decompose");
     if (phase === "code" && status === "started") detail = t("detail.apidocs");
     if (phase === "code" && status === "ok") detail = t("detail.lines", { n: data.lines });
@@ -389,9 +510,12 @@ function addVersion(version) {
 function renderIterations() {
   if (!S.versions.length) { $("#iters").innerHTML = ""; return; }
   const cards = S.versions.map((v, i) => {
-    const kind = v.source === "edit" ? "edit" : (v.passed ? "pass" : "fail");
-    const label = t(v.source === "edit" ? "iter.edit" : "iter.iteration",
-                    { n: v.iteration });
+    const kind = v.source === "edit" ? "edit"
+               : v.source === "catalog" ? "catalog"
+               : (v.passed ? "pass" : "fail");
+    const label = v.source === "catalog" ? t("iter.catalog")
+      : t(v.source === "edit" ? "iter.edit" : "iter.iteration",
+          { n: v.iteration });
     const thumb = v.has_render
       ? `<img src="${API.artifact(S.jobId, v.iteration, "render.png")}" alt="" />`
       : "";
@@ -446,6 +570,12 @@ async function selectVersion(index, options) {
 /* ═══════════════════════ panels ═══════════════════════ */
 
 function renderPlan(plan) {
+  // A catalogue part has no plan: its dimensions come from the standard.
+  if (S.catalog) {
+    $("#planBody").innerHTML =
+      `<div class="await">${esc(t("plan.catalog"))}</div>`;
+    return;
+  }
   if (!plan) return;
   const dimensions = (plan.dimensions && plan.dimensions.key_dimensions) || {};
   const bbox = (plan.dimensions && plan.dimensions.overall_bbox) || {};
@@ -479,8 +609,9 @@ function renderPlan(plan) {
 function renderKernelFacts(version) {
   const geometry = version.geometry || {};
   const bbox = geometry.bounding_box || {};
-  $("#mtitle").textContent = version.source === "edit"
-    ? t("facts.updated")
+  $("#mtitle").textContent =
+    version.source === "catalog" ? t("facts.standard")
+    : version.source === "edit" ? t("facts.updated")
     : t(version.passed ? "facts.validated" : "facts.unvalidated");
   $("#mfacts").innerHTML = [
     [t("facts.bbox"), `${fmt(bbox.xlen)}×${fmt(bbox.ylen)}×${fmt(bbox.zlen)}`],
@@ -496,6 +627,32 @@ function renderKernelFacts(version) {
   if (icon) icon.style.color = version.passed ? "var(--valid)" : "var(--warn)";
 }
 
+function specLabel(check) {
+  const advisory = check.hard === false;
+  const key = "spec." + check.key + (advisory ? ".advisory" : "");
+  if (I18N.has(key)) return t(key);
+  if (I18N.has("spec." + check.key)) return t("spec." + check.key);
+  return check.label;
+}
+
+function specRows(spec) {
+  // The measured checks, shown whether they passed or not: the point of this
+  // panel is that a number was read off the solid, not asserted about it.
+  if (!spec || spec.error || !spec.checks || !spec.checks.length) return "";
+  const rows = spec.checks.map((c) => {
+    const state = c.passed ? "ok" : (c.hard ? "bad" : "soft");
+    const mark = c.passed ? "&#10003;" : (c.hard ? "&#10007;" : "&#8210;");
+    return `<div class="specrow ${state}">
+      <span class="specmark">${mark}</span>
+      <span class="speclabel">${esc(specLabel(c))}</span>
+      <span class="specval">${esc(c.actual)}</span>
+      <span class="specwant">${esc(t("spec.wanted", { expected: c.expected }))}</span>
+    </div>`;
+  }).join("");
+  return `<div class="eyebrow" style="margin:14px 0 6px">${esc(t("spec.heading"))}</div>
+    <div class="specgrid">${rows}</div>`;
+}
+
 function renderValidation(version) {
   const passed = version.passed;
   const renderUrl = version.has_render
@@ -507,14 +664,43 @@ function renderValidation(version) {
   const judged = version.judge_passed !== null
                  && version.judge_passed !== undefined;
 
+  const spec = version.spec || null;
+  const specFailed = spec && spec.ok === false;
+
   let heading, body, attribution;
   if (judged) {
-    heading = t(passed ? "val.accepted" : "val.rejected");
-    // The Judge's own words, which are model output and stay as written.
-    body = version.judge_feedback || version.feedback_text || "";
+    if (specFailed) {
+      // A measurement outranks an opinion about the same quantity, so it
+      // leads whatever the Judge concluded. Crediting the Judge for a
+      // rejection the kernel can prove would also contradict the rows below,
+      // which name the measurement that failed.
+      const failed = (spec.checks || []).filter(c => !c.passed && c.hard);
+      const named = failed.map(c => t("val.refused.item", {
+        label: specLabel(c), actual: c.actual, expected: c.expected })).join("; ");
+      heading = t("val.refused");
+      body = t(version.judge_passed ? "val.refused.judgepassed"
+                                    : "val.refused.measured")
+        + named + t("val.refused.tail")
+        + (version.judge_passed || !version.judge_feedback ? ""
+           : t("val.refused.judgetoo", { feedback: version.judge_feedback }));
+    } else {
+      heading = t(passed ? "val.accepted" : "val.rejected");
+      // The Judge's own words, which are model output and stay as written.
+      body = version.judge_feedback || version.feedback_text || "";
+    }
     const judgeModel = (S.judgeModel || "").toUpperCase() || t("val.src.judge");
     attribution = judgeModel + " · " + t(version.has_render
       ? "val.src.render" : "val.src.metrics");
+  } else if (version.source === "catalog") {
+    // No agent produced this, so there is nothing for a Judge to have
+    // accepted. Say where it came from instead of implying a verdict.
+    const cat = version.catalog || {};
+    heading = t("val.catalog.heading");
+    body = t("val.catalog.body", {
+      title: cat.title || t("val.catalog.thispart"),
+      standard: cat.standard || t("val.catalog.itsstandard") });
+    attribution = t("val.src.catalog", {
+      backend: String(cat.backend || "cadsmith").toUpperCase() });
   } else {
     heading = t(passed ? "val.rebuilt" : "val.rebuilt.failed");
     body = passed ? t("val.rebuilt.body")
@@ -534,6 +720,7 @@ function renderValidation(version) {
         <div class="judge-src">${esc(attribution)}</div>
       </div>
     </div>
+    ${specRows(spec)}
     ${renderUrl ? `
       <div class="eyebrow" style="margin-bottom:6px">${esc(t("val.sawheading"))}</div>
       <img class="rthumb" id="rthumb" src="${renderUrl}" alt="${esc(t("val.renderalt"))}" />
@@ -567,6 +754,8 @@ async function generate() {
   $("#plog").innerHTML = "";
   Viewer.clear();
   thinkReset();
+  resetUsage();
+  S.catalog = null;
   Viewer.building = true;     // slow orbit while the pipeline works
   setCode("");
   // Everything on the right belongs to the run that is being replaced, so
@@ -584,6 +773,8 @@ async function generate() {
   const options = {
     max_iterations: +$("#optIters").value,
     use_vision: $("#optVision").classList.contains("on"),
+    use_catalog: $("#optCatalog").classList.contains("on"),
+    ground_dimensions: $("#optGround").classList.contains("on"),
     provider: $("#optProvider").value,
     generation_model: $("#optGenModel").value.trim(),
     judge_model: $("#optJudgeModel").value.trim(),
@@ -635,7 +826,9 @@ function finishRun(data) {
   const seconds = data.total_ms
     ? t("run.seconds", { s: (data.total_ms / 1000).toFixed(1) }) : "";
 
-  if (S.converged) {
+  if (S.catalog) {
+    toast(t("run.catalogdone", { title: S.catalog.title || "", seconds }));
+  } else if (S.converged) {
     // Japanese has no plural agreement, so {s} resolves to nothing there.
     toast(t("run.converged", { n: data.iterations, seconds, cost,
                                s: data.iterations === 1 ? "" : "s" }));
@@ -676,6 +869,8 @@ async function loadHistory() {
     const origin =
       job.source === "replay"
         ? `<span class="hbadge replay">${esc(t("hist.replay"))}</span>`
+      : job.source === "catalog"
+        ? `<span class="hbadge catalog">${esc(t("hist.catalog"))}</span>`
       : job.source === "fixture"
         ? `<span class="hbadge fixture">${esc(t("hist.fixture"))}</span>`
       : "";
@@ -760,10 +955,12 @@ $("#prompt").addEventListener("keydown", e => {
 });
 
 $("#optIters").oninput = e => { $("#optItersOut").value = e.target.value; };
-$("#optVision").onclick = () => {
-  const on = $("#optVision").classList.toggle("on");
-  $("#optVision").setAttribute("aria-checked", String(on));
-};
+for (const id of ["#optVision", "#optCatalog", "#optGround"]) {
+  $(id).onclick = () => {
+    const on = $(id).classList.toggle("on");
+    $(id).setAttribute("aria-checked", String(on));
+  };
+}
 
 $("#healthChip").onclick = () => {
   const panel = $("#diag");
@@ -1028,6 +1225,8 @@ async function startReplay(sourceJobId) {
   $("#plog").innerHTML = "";
   Viewer.clear();
   thinkReset();
+  resetUsage();
+  S.catalog = null;
   Viewer.building = true;     // slow orbit while the pipeline works
   setCode("");
   showOverlay("pipe");
@@ -1277,7 +1476,9 @@ function relocalise() {
   else chip.textContent = S.health.ok ? t("health.ready")
     : S.health.can_generate ? t("health.degraded") : t("health.notready");
   if (S.health && S.health.checks && !S.health.checks.model_backend.ok) {
-    $("#keyBannerText").textContent = t("banner.nobackend");
+    const c = S.health.checks.catalog;
+    $("#keyBannerText").textContent = t(c && c.ok ? "banner.catalog"
+                                                  : "banner.nobackend");
   }
 
   if (S.health && S.health.checks) renderDiagRows(S.health.checks);
@@ -1294,15 +1495,26 @@ function relocalise() {
       ? "ph.apikey.memory" : "ph.apikey.none");
     updateProviderNote();
   }
-  if (S.genModel || S.judgeModel) setModelLabels(S.genModel, S.judgeModel);
+  if (S.catalog) {
+    // applyProvider has just put the model ids back; restore what actually
+    // built this part.
+    const label = t("label.catalog",
+                    { backend: String(S.catalog.backend || "").toUpperCase() });
+    $("#genModelLabel").textContent = label;
+    $("#judgeModelLabel").textContent = label;
+  } else if (S.genModel || S.judgeModel) {
+    setModelLabels(S.genModel, S.judgeModel);
+  }
   if (S.codeLines !== undefined) {
     $("#codeStat").textContent = S.codeLines
       ? t("code.stat", { n: S.codeLines }) : t("code.empty");
   }
   if (S.stage) renderStages(S.stage.key, S.stage.detail);
+  renderUsage();
   if (!S.replay) resetPill();
   renderIterations();
-  if (S.designPlan) renderPlan(S.designPlan);
+  // A catalogue part has no design plan, but its panel still has text.
+  if (S.designPlan || S.catalog) renderPlan(S.designPlan);
   const version = S.versions[S.selected];
   if (version) { renderKernelFacts(version); renderValidation(version); }
   if ($("#hist").classList.contains("open")) loadHistory();

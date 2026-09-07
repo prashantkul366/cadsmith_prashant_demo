@@ -35,9 +35,13 @@ from typing import Any, Callable, Optional
 
 from autofab.executor import Executor, ExecutionResult
 from autofab.pipeline import Pipeline
-from autofab.validator import Validator, ValidationReport
+from autofab.validator import Validator, ValidationCheck, ValidationReport
 
+from app.catalog import grounding
+
+from . import budget as budget_mod
 from . import i18n
+from . import spec
 from .providers import LLMConfig, build_client
 from .events import (
     EventSink,
@@ -48,7 +52,9 @@ from .events import (
     PHASE_LOG,
     PHASE_PLAN,
     PHASE_REFINE,
+    PHASE_GROUND,
     PHASE_RENDER,
+    PHASE_SPEC,
     PHASE_THINKING,
     PHASE_VERSION,
     STATUS_FAILED,
@@ -63,6 +69,16 @@ _ITER_RE = re.compile(r"_iter(\d+)$")
 # ---------------------------------------------------------------------------
 # Run context
 # ---------------------------------------------------------------------------
+
+
+class PipelineMessage(RuntimeError):
+    """An error whose text was written for the person reading it.
+
+    Ordinary failures are reported as "TypeError: ..." so the class is
+    visible, which is right when it came from the kernel or the network.
+    These did not: prefixing one with RuntimeError buries a sentence someone
+    can act on under a word that means nothing to them.
+    """
 
 
 @dataclass
@@ -87,6 +103,21 @@ class RunContext:
     #: Which agent is currently running, so streamed reasoning can be
     #: attributed to the step that produced it.
     agent: str = ""
+    #: The raw text of the most recent model reply, so a parse failure can be
+    #: explained in terms of what came back rather than where the parser
+    #: stopped.
+    last_reply: str = ""
+    #: Give the Planner the published dimensions for any standard part the
+    #: request names. Off reproduces the pipeline as published.
+    ground_dimensions: bool = True
+    #: The plan the Planner produced, which states the claims spec.py
+    #: measures the built solid against.
+    design_plan: Optional[dict] = None
+    #: The most recent kernel-measured specification result.
+    spec: Any = None
+    #: What this run may spend. ``None`` outside the web app, so run.py and
+    #: the benchmark scripts see the published behaviour untouched.
+    budget: Optional[budget_mod.Budget] = None
     #: The language the person who started this run is reading. Only the
     #: messages meant for them are translated; what the Refiner is told stays
     #: in English, because that is the language its instructions are in.
@@ -154,6 +185,26 @@ def install_agent_hooks() -> None:
 
     from autofab import agents
 
+    # Every agent reaches the model through _call_claude, so this is the one
+    # place a spend ceiling can cover all five of them. Gated on the run
+    # context like everything else here: outside the web app it is a
+    # pass-through.
+    _orig_call = agents._call_claude
+
+    def _call_claude(*args, **kwargs):
+        ctx = _current.get()
+        if ctx is not None and ctx.budget is not None:
+            # Checked before the call, not after: a request already in flight
+            # is already billable, so the only useful place to stop is here.
+            from autofab import agents as _agents
+            ctx.budget.check(_agents.get_token_usage())
+        reply = _orig_call(*args, **kwargs)
+        if ctx is not None and isinstance(reply, str):
+            ctx.last_reply = reply
+        return reply
+
+    agents._call_claude = _call_claude
+
     def wrap(fn: Callable, phase: str, describe_in: Callable[..., dict],
              describe_out: Callable[[Any], dict]) -> Callable:
         def inner(*args, **kwargs):
@@ -195,8 +246,82 @@ def install_agent_hooks() -> None:
         inner._cadsmith_wrapped = True  # type: ignore[attr-defined]
         return inner
 
+    _plan_inner = agents.plan
+
+    def _refuse_empty_plan(plan) -> None:
+        """Stop when the plan describes no part at all.
+
+        A smaller model answers "write me a poem" by filling the schema in
+        rather than declining: components empty, every bounding-box extent
+        zero, sometimes a note saying outright that this is not a part. The
+        pipeline would then spend four more agents and several minutes
+        producing a featureless block. Say so now instead.
+        """
+        if not isinstance(plan, dict):
+            return
+        components = plan.get("components")
+        bbox = ((plan.get("dimensions") or {}).get("overall_bbox") or {})
+        extents = [bbox.get(k) for k in ("xlen", "ylen", "zlen")]
+        sized = any(isinstance(v, (int, float)) and v > 0 for v in extents)
+        if sized or components:
+            return
+        note = " ".join(str(plan.get("notes") or "").split())[:200]
+        # Read the context here rather than closing over one: this runs from
+        # both the grounded and ungrounded paths, and only they hold a ctx.
+        current = _current.get()
+        lang = current.lang if current is not None else i18n.DEFAULT_LANG
+        raise PipelineMessage(
+            i18n.t("plan.empty", lang)
+            + (i18n.t("plan.empty.note", lang, note=note) if note else "")
+        )
+
+    def grounded_plan(prompt, *args, **kwargs):
+        ctx = _current.get()
+        if ctx is None:
+            # No run context: the pipeline is being used outside the app.
+            return _plan_inner(prompt, *args, **kwargs)
+        if not ctx.ground_dimensions:
+            # Grounding is a per-run ablation; refusing an empty plan is not,
+            # so that check still applies.
+            plan = _plan_inner(prompt, *args, **kwargs)
+            _refuse_empty_plan(plan)
+            ctx.design_plan = plan if isinstance(plan, dict) else None
+            return plan
+        grounded, facts = grounding.ground(prompt)
+        ctx.emit(
+            PHASE_GROUND,
+            STATUS_OK if facts else STATUS_INFO,
+            grounding.summary(facts),
+            subjects=[fact.subject for fact in facts],
+            standards=[fact.standard for fact in facts],
+            added_chars=len(grounded) - len(prompt),
+        )
+        try:
+            plan = _plan_inner(grounded, *args, **kwargs)
+        except json.JSONDecodeError:
+            # The overwhelmingly common cause is a prompt the model declined
+            # or did not read as a part - "write me a poem", an insult, a
+            # question. A bare JSONDecodeError makes that look like a fault
+            # in the app.
+            reply = ctx.last_reply or ""
+            said = " ".join(reply.split())[:220]
+            # Two different failures, and they were being reported as one.
+            # "The model replied with prose" was said of a reply that opened
+            # with a brace and ran to a closing one - it was a plan, it just
+            # would not parse - which sent the reader looking at their prompt
+            # instead of at their model.
+            key = "plan.malformed" if "{" in reply else "plan.prose"
+            raise PipelineMessage(
+                i18n.t(key, ctx.lang)
+                + (i18n.t("plan.prose.said", ctx.lang, said=said) if said else "")
+            ) from None
+        _refuse_empty_plan(plan)
+        # spec.py measures the built solid against what this plan claimed.
+        ctx.design_plan = plan if isinstance(plan, dict) else None
+        return plan
+
     agents.plan = wrap(
-        agents.plan,
+        grounded_plan,
         PHASE_PLAN,
         lambda prompt, *a, **k: {"prompt": prompt},
         lambda plan: {"design_plan": plan},
@@ -390,6 +515,7 @@ class InstrumentedValidator(Validator):
         if ctx.judge_error:
             self._demote_silent_pass(report, ctx.judge_error)
 
+        self._apply_spec(ctx, report)
         self._publish_version(ctx, report, geometry)
         return report
 
@@ -407,6 +533,66 @@ class InstrumentedValidator(Validator):
                 f"Validation could not be completed: {error}\n"
                 + report.feedback_text
             )
+
+    @staticmethod
+    def _apply_spec(ctx: RunContext, report: ValidationReport) -> None:
+        """Settle measurable claims with the kernel, over the Judge's head.
+
+        The Judge has been observed passing a plate with one hole where four
+        were asked for, and rejecting a part whose measurements were exactly
+        right. Neither verdict survives contact with a measurement, so where
+        the plan said something checkable, the measurement decides.
+        """
+        step = ctx.version_dir() / "model.step"
+        if not ctx.design_plan or not step.exists():
+            return
+
+        result = spec.check(ctx.design_plan, step)
+        ctx.spec = result
+        if result.error:
+            ctx.emit(PHASE_SPEC, STATUS_INFO, result.summary(),
+                     iteration=ctx.iteration)
+            return
+        if not result.checked:
+            return
+
+        for item in result.checks:
+            report.checks.append(ValidationCheck(
+                metric=f"spec_{item.key}",
+                actual=1.0 if item.passed else 0.0,
+                target=1.0,
+                passed=item.passed or not item.hard,
+                message=(f"{item.label}: wanted {item.expected}, "
+                         f"measured {item.actual}"),
+            ))
+
+        judge_said = next(
+            (c.passed for c in report.checks if c.metric == "llm_judge"), None)
+
+        if not result.ok:
+            report.all_passed = False
+            note = ("The Judge accepted this, but the kernel disagrees. "
+                    if judge_said else "")
+            report.feedback_text = (
+                f"{note}{result.feedback()}\n\n{report.feedback_text}").strip()
+            ctx.emit(PHASE_SPEC, STATUS_FAILED, result.summary(),
+                     iteration=ctx.iteration, spec=result.to_dict(),
+                     overrode_judge=bool(judge_said))
+            return
+
+        # Everything measurable is right. That does not by itself overturn a
+        # Judge rejection - it may have seen something no assertion covers -
+        # but the Refiner is given the measurements so it is not left acting
+        # on a description of the part that measurement contradicts.
+        ctx.emit(PHASE_SPEC, STATUS_OK, result.summary(),
+                 iteration=ctx.iteration, spec=result.to_dict(),
+                 disputes_judge=judge_said is False)
+        if judge_said is False:
+            report.feedback_text = (
+                f"{result.feedback()}\n\nEvery measurable claim in the plan "
+                f"is met. If you still see a problem, it is in something not "
+                f"measured above - do not restate a dimension as wrong when "
+                f"it measures correct.\n\n{report.feedback_text}").strip()
 
     @staticmethod
     def _publish_version(
@@ -434,8 +620,14 @@ class InstrumentedValidator(Validator):
             "method": ctx.method,
             "instruction": ctx.instruction,
             "changes": list(ctx.changes),
+            # What the kernel measured against the plan, so the client can
+            # show the reason a version was refused rather than only that it
+            # was - and can show it disagreeing with the Judge.
+            "spec": ctx.spec.to_dict() if ctx.spec is not None else None,
         }
         ctx.versions.append(version)
+        # Belongs to the version just published, so it must not carry over.
+        ctx.spec = None
         ctx.emit(PHASE_VERSION, STATUS_OK, **version)
 
 

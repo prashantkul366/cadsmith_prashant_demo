@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from app.server import japanese
+from app.catalog import japanese
 
 # A top-level parametric assignment: `name = 12.5  # mm`.  Anchored to column
 # zero so locals inside functions or loops are left alone.

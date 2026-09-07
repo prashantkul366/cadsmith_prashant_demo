@@ -24,6 +24,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from . import budget as budget_mod
+from . import catalog_run
 from . import i18n
 from .edits import apply_changes, describe, plan_edit
 from .events import (
@@ -42,6 +44,7 @@ from .instrument import (
     InstrumentedExecutor,
     InstrumentedPipeline,
     InstrumentedValidator,
+    PipelineMessage,
     RunContext,
     install_agent_hooks,
     set_context,
@@ -79,6 +82,15 @@ class JobOptions:
     #: The language this run reports itself in. Model input is unaffected -
     #: the agents' prompts stay English whatever this is set to.
     lang: str = i18n.DEFAULT_LANG
+    #: Tokens this run may spend before it is stopped. On a metered backend a
+    #: loop that will not converge is not a slow run, it is a bill.
+    token_budget: int = budget_mod.DEFAULT_BUDGET
+    #: Answer an unambiguous standard-part request from the catalogue instead
+    #: of generating it. Off reproduces the published pipeline exactly.
+    use_catalog: bool = True
+    #: Give the Planner the published dimensions for any standard part the
+    #: request names. Off reproduces the pipeline as published.
+    ground_dimensions: bool = True
 
     @classmethod
     def from_dict(cls, raw: Optional[dict]) -> "JobOptions":
@@ -91,6 +103,10 @@ class JobOptions:
             generation_model=str(raw.get("generation_model") or ""),
             judge_model=str(raw.get("judge_model") or ""),
             lang=i18n.normalise(raw.get("lang")),
+            token_budget=max(0, int(raw.get("token_budget")
+                                    or budget_mod.DEFAULT_BUDGET)),
+            use_catalog=bool(raw.get("use_catalog", True)),
+            ground_dimensions=bool(raw.get("ground_dimensions", True)),
         )
 
     def llm_config(self) -> LLMConfig:
@@ -197,7 +213,8 @@ class JobManager:
         job = Job(id=job_id, prompt=prompt, options=options, directory=directory)
         sink = EventSink(path=directory / "events.jsonl")
         ctx = RunContext(sink=sink, job_dir=directory,
-                         part_name=PART_NAME, lang=options.lang)
+                         part_name=PART_NAME, lang=options.lang,
+                         ground_dimensions=options.ground_dimensions)
 
         with self._lock:
             self._jobs[job_id] = job
@@ -220,6 +237,8 @@ class JobManager:
         job.status = STATUS_RUNNING
         job.started_at = time.time()
         lang = job.options.lang
+        ctx.budget = budget_mod.Budget(limit=job.options.token_budget,
+                                       lang=lang)
         sink.emit(PHASE_JOB, STATUS_STARTED, i18n.t("job.started", lang),
                   llm=ctx.llm.redacted())
         if ctx.llm.generation_model == ctx.llm.judge_model:
@@ -233,6 +252,46 @@ class JobManager:
             from autofab import agents
 
             agents.reset_token_usage()
+
+            # An unambiguous standard part has nothing for five agents to work
+            # out: the dimensions come from the standard and a model can only
+            # introduce error. The router refuses anything ambiguous and
+            # verifies whatever it does return, so reaching here means a sound
+            # solid is already in hand. Anything unexpected falls through to
+            # the pipeline rather than failing the run.
+            routed = None
+            if job.options.use_catalog:
+                try:
+                    routed = catalog_run.find(job.prompt)
+                except Exception as error:
+                    sink.emit(PHASE_JOB, STATUS_INFO,
+                              i18n.t("job.catalogskipped", lang, error=error))
+            if routed is not None:
+                try:
+                    catalog_run.serve(ctx, routed, job.directory / "work")
+                    # The job itself is catalogue-sourced, not just its
+                    # version - otherwise History shows it as an ordinary
+                    # converged run and the provenance is lost.
+                    job.source = "catalog"
+                    job.converged = True
+                    job.design_plan = {}
+                    job.llm_calls = 0
+                    job.tokens = agents.get_token_usage()
+                    job.versions = list(ctx.versions)
+                    job.status = STATUS_DONE
+                    job.finished_at = time.time()
+                    self._write_meta(job)
+                    sink.emit(PHASE_JOB, STATUS_OK,
+                              i18n.t("job.catalogserved", lang),
+                              converged=True, tokens=job.tokens,
+                              llm_calls=0, source="catalog")
+                    return
+                except Exception as error:
+                    sink.emit(
+                        PHASE_JOB, STATUS_INFO,
+                        i18n.t("job.catalogunbuildable", lang, error=error))
+                    ctx.source = "pipeline"
+
             pipeline = InstrumentedPipeline(
                 output_dir=str(job.directory / "work"),
                 max_error_retries=job.options.max_error_retries,
@@ -265,13 +324,22 @@ class JobManager:
                 iterations=len(result.iterations),
                 llm_calls=result.total_llm_calls,
                 tokens=job.tokens,
+                spend=budget_mod.summary(job.tokens, ctx.budget),
                 total_ms=result.total_time_ms,
             )
         except Exception as exc:  # surfaced to the client, never swallowed
             job.status = STATUS_ERROR
-            job.error = f"{type(exc).__name__}: {exc}"
+            # A run stopped at its ceiling explains itself; anything else is
+            # an error whose type the person needs to see.
+            job.error = (
+                str(exc)
+                if isinstance(exc, (PipelineMessage, budget_mod.BudgetExceeded))
+                else f"{type(exc).__name__}: {exc}")
             job.versions = list(ctx.versions)
+            job.tokens = agents.get_token_usage()
             sink.emit(PHASE_JOB, STATUS_FAILED, job.error,
+                      tokens=job.tokens,
+                      spend=budget_mod.summary(job.tokens, ctx.budget),
                       traceback=traceback.format_exc()[-4000:])
         finally:
             job.finished_at = time.time()
@@ -319,6 +387,8 @@ class JobManager:
             return
 
         ctx.llm = job.options.llm_config()
+        ctx.budget = budget_mod.Budget(limit=job.options.token_budget,
+                                       lang=lang)
         # An edit reports itself in whatever language the switch is on now,
         # which need not be the language the run was started in.
         ctx.lang = lang
@@ -426,6 +496,13 @@ class JobManager:
                              error=f"{type(exc).__name__}: {exc}"),
                       traceback=traceback.format_exc()[-4000:], edit=True)
         finally:
+            # Every terminal path of an edit lands here, including the early
+            # returns for a refused or unbuildable change. Without this the
+            # job kept reporting the *original* run's finish time, so an API
+            # client polling finished_at could not tell an edit had happened
+            # at all - the browser only got away with it because it follows
+            # the event stream instead.
+            job.finished_at = time.time()
             ctx.source, ctx.method = "pipeline", ""
             ctx.instruction, ctx.changes = "", []
             set_context(None)
@@ -458,7 +535,8 @@ class JobManager:
         )
         sink = EventSink(path=directory / "events.jsonl")
         ctx = RunContext(sink=sink, job_dir=directory,
-                         part_name=PART_NAME, lang=job.options.lang)
+                         part_name=PART_NAME, lang=job.options.lang,
+                         ground_dimensions=job.options.ground_dimensions)
 
         with self._lock:
             self._jobs[job_id] = job
@@ -548,7 +626,8 @@ class JobManager:
             sink = EventSink.from_file(directory / "events.jsonl",
                                        keep_appending=True)
             ctx = RunContext(sink=sink, job_dir=directory,
-                             part_name=PART_NAME, lang=job.options.lang)
+                             part_name=PART_NAME, lang=job.options.lang,
+                         ground_dimensions=job.options.ground_dimensions)
             ctx.versions = list(job.versions)
             if job.versions:
                 ctx.iteration = max(v.get("iteration", 0) for v in job.versions)
