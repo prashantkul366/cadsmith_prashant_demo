@@ -31,7 +31,8 @@ if [ -z "${PYTHON:-}" ] || [ ! -x "$PYTHON" ]; then
   exit 1
 fi
 
-if ! probe=$("$PYTHON" -c "import cadquery, vtk; print(cadquery.__version__)" 2>&1); then
+probe=$("$PYTHON" -c "import cadquery, vtk; print('CADSMITH_IMPORT_OK', cadquery.__version__, vtk.VTK_VERSION)" 2>&1)
+if [[ "$probe" != *CADSMITH_IMPORT_OK* ]]; then
   echo "Could not import CadQuery and VTK with $PYTHON" >&2
   echo "$probe" >&2
   echo >&2
