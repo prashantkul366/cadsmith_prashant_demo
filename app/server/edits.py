@@ -25,6 +25,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+from app.server import japanese
+
 # A top-level parametric assignment: `name = 12.5  # mm`.  Anchored to column
 # zero so locals inside functions or loops are left alone.
 _ASSIGNMENT = re.compile(
@@ -185,6 +187,16 @@ def plan_edit(code: str, instruction: str) -> EditPlan:
     available = parameters(code)
     if not available:
         return EditPlan([], "the script declares no top-level parameters")
+
+    # Every pattern below reads English words, so a Japanese instruction
+    # matches none of them and lands on the Refiner - slower, and with no
+    # model backend, refused outright. Rewriting it into the vocabulary those
+    # patterns already speak keeps the guard intact: English text never
+    # reaches the rewrite and so cannot be changed by it. The refusals are
+    # what matter most - 「補強リブを追加する」 has to still come out as a rib,
+    # or the editor patches some unrelated number and reports it as one.
+    if japanese.has_japanese(instruction):
+        instruction = japanese.to_english_instruction(instruction)
 
     text = instruction.lower().strip()
     words = _instruction_tokens(text)

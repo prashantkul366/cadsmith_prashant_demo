@@ -33,15 +33,20 @@ const S = {
   providers: [],
   provider: null,
   editing: false,
+  examples: [],    // kept so a language change can redraw them translated
+  stage: null,     // {key, detail} - the pipeline strip, redrawn from state
+  codeLines: undefined,
 };
 
 /* ── the five stages shown while a run is in flight ─────────────────── */
+/* Keys, not labels: the strip is redrawn on a language change, and it is
+   redrawn from S.stage rather than from the DOM. */
 const STAGES = [
-  { key: "plan",    label: "Planning the part" },
-  { key: "code",    label: "Writing CadQuery" },
-  { key: "execute", label: "Building the solid" },
-  { key: "judge",   label: "Validating geometry" },
-  { key: "done",    label: "Ready" },
+  { key: "plan",    label: "stage.plan" },
+  { key: "code",    label: "stage.code" },
+  { key: "execute", label: "stage.execute" },
+  { key: "judge",   label: "stage.judge" },
+  { key: "done",    label: "stage.done" },
 ];
 
 /* ═══════════════════════ helpers ═══════════════════════ */
@@ -97,8 +102,9 @@ function setCode(code, highlightKeys) {
       (_m, lead, line) => `${lead}<span class="hot">${line}</span>`);
   });
   $("#hl").innerHTML = html + "\n";
-  $("#codeStat").textContent = code
-    ? `${code.split("\n").length} LINES · PYTHON` : "— — —";
+  S.codeLines = code ? code.split("\n").length : 0;
+  $("#codeStat").textContent = S.codeLines
+    ? t("code.stat", { n: S.codeLines }) : t("code.empty");
 }
 
 /* ═══════════════════════ health ═══════════════════════ */
@@ -109,7 +115,7 @@ async function loadHealth() {
     S.health = await API.health();
   } catch (_) {
     chip.className = "health bad";
-    chip.querySelector("span").textContent = "SERVER UNREACHABLE";
+    chip.querySelector("span").textContent = t("health.unreachable");
     return;
   }
 
@@ -117,21 +123,14 @@ async function loadHealth() {
   const canGenerate = S.health.can_generate;
   chip.className = "health " + (S.health.ok ? "ok" : (canGenerate ? "warn" : "bad"));
   chip.querySelector("span").textContent =
-    S.health.ok ? "ALL SYSTEMS READY"
-    : canGenerate ? "DEGRADED" : "NOT READY";
+    S.health.ok ? t("health.ready")
+    : canGenerate ? t("health.degraded") : t("health.notready");
 
-  $("#diagRows").innerHTML = Object.entries(checks).map(([name, check]) => `
-    <div class="drow">
-      <span class="dot ${check.ok ? "ok" : "bad"}"></span>
-      <b>${esc(name.replace(/_/g, " "))}</b>
-      <span>${esc(check.detail)}</span>
-    </div>`).join("");
+  renderDiagRows(checks);
 
   if (!checks.model_backend.ok) {
     $("#keyBanner").hidden = false;
-    $("#keyBannerText").textContent =
-      "No model backend configured, so the agents cannot run. Choose a "
-      + "provider below, or replay a recorded run.";
+    $("#keyBannerText").textContent = t("banner.nobackend");
   } else {
     $("#keyBanner").hidden = true;
   }
@@ -144,16 +143,46 @@ async function loadHealth() {
   }
 }
 
+/* The check names are translated; the details are not. They quote what the
+   machine reported - a version string, a path, a library's own message - and
+   quoting is not translating. */
+function renderDiagRows(checks) {
+  $("#diagRows").innerHTML = Object.entries(checks).map(([name, check]) => `
+    <div class="drow">
+      <span class="dot ${check.ok ? "ok" : "bad"}"></span>
+      <b>${esc(I18N.has("diag." + name) ? t("diag." + name)
+                                        : name.replace(/_/g, " "))}</b>
+      <span>${esc(check.detail)}</span>
+    </div>`).join("");
+}
+
 /* ═══════════════════════ examples ═══════════════════════ */
 
 async function loadExamples() {
-  let examples = [];
-  try { examples = await API.examples(); } catch (_) { return; }
-  $("#samples").innerHTML = examples.map(e => `
-    <button class="sample" data-prompt="${esc(e.prompt)}">
-      <b>${esc(e.id.toUpperCase())} · ${esc(e.tier.toUpperCase())}</b>
-      <small>${esc(e.prompt.length > 120 ? e.prompt.slice(0, 120) + "…" : e.prompt)}</small>
-    </button>`).join("");
+  try { S.examples = await API.examples(); } catch (_) { return; }
+  renderExamples();
+}
+
+/* The Japanese prompt is what actually gets sent, not a caption over an
+   English one: someone who presses a sample has to be able to read the
+   request the pipeline receives. Every dimension and axis is carried across
+   unchanged, so the part built from either language is the same part. */
+function samplePrompt(example) {
+  const key = "sample." + example.id;
+  return I18N.has(key) ? t(key) : example.prompt;
+}
+
+function renderExamples() {
+  $("#samples").innerHTML = (S.examples || []).map(e => {
+    const prompt = samplePrompt(e);
+    const tier = String(e.tier || "").toLowerCase() === "demo"
+      ? t("tier.demo") : String(e.tier || "").toUpperCase();
+    return `
+    <button class="sample" data-prompt="${esc(prompt)}">
+      <b>${esc(e.id.toUpperCase())} · ${esc(tier)}</b>
+      <small>${esc(prompt.length > 120 ? prompt.slice(0, 120) + "…" : prompt)}</small>
+    </button>`;
+  }).join("");
   $$("#samples .sample").forEach(button => {
     button.onclick = () => {
       $("#prompt").value = button.dataset.prompt;
@@ -165,6 +194,7 @@ async function loadExamples() {
 /* ═══════════════════════ pipeline progress ═══════════════════════ */
 
 function renderStages(activeKey, detail) {
+  S.stage = { key: activeKey, detail: detail || "" };
   const activeIndex = STAGES.findIndex(s => s.key === activeKey);
   $("#pipe").innerHTML = STAGES.map((stage, i) => {
     const state = i < activeIndex ? "done" : (i === activeIndex ? "act" : "");
@@ -174,7 +204,7 @@ function renderStages(activeKey, detail) {
           <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg><i class="pspin"></i>
         </div>
         <div>
-          <div class="plabel">${stage.label}</div>
+          <div class="plabel">${esc(t(stage.label))}</div>
           ${i === activeIndex && detail
             ? `<div class="pdetail">${esc(detail)}</div>` : ""}
         </div>
@@ -210,13 +240,10 @@ const PHASE_STAGE = {
    refinement rounds stay distinguishable. Reasoning and output stream into
    separate lanes; a finished block folds itself away. */
 
-const AGENT_LABEL = {
-  plan:      ["Planner",       "decomposing the request"],
-  code:      ["Coder",         "writing CadQuery"],
-  error_fix: ["Error Refiner", "repairing the script"],
-  judge:     ["Judge",         "inspecting the part"],
-  refine:    ["Refiner",       "correcting the geometry"],
-};
+/* Keys again. The label and the caption are separate because Japanese puts
+   the qualifier in front - "writing CadQuery" is 「CadQuery を記述中」 - so
+   the pair cannot be assembled from an English word order. */
+const AGENT_KEYS = ["plan", "code", "error_fix", "judge", "refine"];
 
 const TH = { blocks: new Map(), order: 0 };
 
@@ -234,7 +261,9 @@ function thinkBlock(agent, iteration) {
   let block = TH.blocks.get(key);
   if (block) return block;
 
-  const [label, sub] = AGENT_LABEL[agent] || [agent, ""];
+  const known = AGENT_KEYS.includes(agent);
+  const label = known ? t(`think.${agent}`) : agent;
+  const sub = known ? t(`think.${agent}.sub`) : "";
   const el = document.createElement("details");
   el.className = "tblock";
   el.open = true;
@@ -308,22 +337,22 @@ function handleEvent(event) {
   }
 
   // A step that produced reasoning is finished when its own phase resolves.
-  if (AGENT_LABEL[phase] && (status === "ok" || status === "failed")) {
+  if (AGENT_KEYS.includes(phase) && (status === "ok" || status === "failed")) {
     thinkFinish(phase, data.iteration || 0, status === "ok", data.ms);
   }
 
   const stage = PHASE_STAGE[phase];
   if (stage) {
     let detail = "";
-    if (phase === "plan" && status === "started") detail = "Decomposing the request";
-    if (phase === "code" && status === "started") detail = "Retrieving CadQuery API docs";
-    if (phase === "code" && status === "ok") detail = `${data.lines} lines written`;
-    if (phase === "execute" && status === "started") detail = "Running in the OCCT kernel";
-    if (phase === "execute" && status === "failed") detail = "Execution failed — repairing";
-    if (phase === "error_fix" && status === "started") detail = "Error Refiner is fixing the script";
-    if (phase === "render" && status === "ok") detail = "Rendering three views";
-    if (phase === "judge" && status === "started") detail = "Opus is inspecting the part";
-    if (phase === "refine" && status === "started") detail = "Refiner is correcting the geometry";
+    if (phase === "plan" && status === "started") detail = t("detail.decompose");
+    if (phase === "code" && status === "started") detail = t("detail.apidocs");
+    if (phase === "code" && status === "ok") detail = t("detail.lines", { n: data.lines });
+    if (phase === "execute" && status === "started") detail = t("detail.kernel");
+    if (phase === "execute" && status === "failed") detail = t("detail.execfail");
+    if (phase === "error_fix" && status === "started") detail = t("detail.errorfix");
+    if (phase === "render" && status === "ok") detail = t("detail.render");
+    if (phase === "judge" && status === "started") detail = t("detail.judging");
+    if (phase === "refine" && status === "started") detail = t("detail.refining");
     renderStages(stage, detail);
   }
 
@@ -361,8 +390,8 @@ function renderIterations() {
   if (!S.versions.length) { $("#iters").innerHTML = ""; return; }
   const cards = S.versions.map((v, i) => {
     const kind = v.source === "edit" ? "edit" : (v.passed ? "pass" : "fail");
-    const label = v.source === "edit"
-      ? `EDIT ${v.iteration}` : `ITER ${v.iteration}`;
+    const label = t(v.source === "edit" ? "iter.edit" : "iter.iteration",
+                    { n: v.iteration });
     const thumb = v.has_render
       ? `<img src="${API.artifact(S.jobId, v.iteration, "render.png")}" alt="" />`
       : "";
@@ -372,7 +401,7 @@ function renderIterations() {
       </div>`;
   }).join("");
   const hint = S.versions.length > 1
-    ? `<span class="ihint">← ${S.versions.length} attempts · click to compare</span>` : "";
+    ? `<span class="ihint">${esc(t("iter.compare", { n: S.versions.length }))}</span>` : "";
   $("#iters").innerHTML = cards + hint;
   $$("#iters .iter").forEach(card => {
     card.onclick = () => selectVersion(+card.dataset.i);
@@ -438,10 +467,12 @@ function renderPlan(plan) {
     ${(plan.components || []).length ? `<div class="plan-tags">${
       plan.components.map(c => `<span class="tag">${esc(c)}</span>`).join("")
     }</div>` : ""}
-    ${rows ? `<div class="eyebrow" style="margin-bottom:6px">TARGET DIMENSIONS</div>${rows}` : ""}
-    ${bbox.xlen ? `<div class="dim"><span>overall bbox</span><b>${
+    ${rows ? `<div class="eyebrow" style="margin-bottom:6px">${
+      esc(t("plan.dimensions"))}</div>${rows}` : ""}
+    ${bbox.xlen ? `<div class="dim"><span>${esc(t("plan.bbox"))}</span><b>${
       fmt(bbox.xlen)} × ${fmt(bbox.ylen)} × ${fmt(bbox.zlen)}<u>mm</u></b></div>` : ""}
-    ${constraintTags ? `<div class="eyebrow" style="margin:12px 0 6px">CONSTRAINTS</div>
+    ${constraintTags ? `<div class="eyebrow" style="margin:12px 0 6px">${
+      esc(t("plan.constraints"))}</div>
       <div class="plan-tags">${constraintTags}</div>` : ""}`;
 }
 
@@ -449,15 +480,16 @@ function renderKernelFacts(version) {
   const geometry = version.geometry || {};
   const bbox = geometry.bounding_box || {};
   $("#mtitle").textContent = version.source === "edit"
-    ? "Model updated" : (version.passed ? "Validated" : "Attempt not yet validated");
+    ? t("facts.updated")
+    : t(version.passed ? "facts.validated" : "facts.unvalidated");
   $("#mfacts").innerHTML = [
-    ["bbox mm", `${fmt(bbox.xlen)}×${fmt(bbox.ylen)}×${fmt(bbox.zlen)}`],
-    ["volume mm³", fmt(Math.round(geometry.volume || 0))],
-    ["faces", geometry.num_faces],
-    ["edges", geometry.num_edges],
-    ["solid", geometry.is_valid ? "WATERTIGHT" : "INVALID"],
+    [t("facts.bbox"), `${fmt(bbox.xlen)}×${fmt(bbox.ylen)}×${fmt(bbox.zlen)}`],
+    [t("facts.volume"), fmt(Math.round(geometry.volume || 0))],
+    [t("facts.faces"), geometry.num_faces],
+    [t("facts.edges"), geometry.num_edges],
+    [t("facts.solid"), t(geometry.is_valid ? "facts.watertight" : "facts.invalid")],
   ].map(([label, value]) =>
-    `<div class="fact"><b>${esc(String(value ?? "—"))}</b><span>${label}</span></div>`
+    `<div class="fact"><b>${esc(String(value ?? "—"))}</b><span>${esc(label)}</span></div>`
   ).join("");
 
   const icon = $("#mIcon");
@@ -477,20 +509,17 @@ function renderValidation(version) {
 
   let heading, body, attribution;
   if (judged) {
-    heading = passed ? "Accepted by the Judge" : "Rejected by the Judge";
+    heading = t(passed ? "val.accepted" : "val.rejected");
+    // The Judge's own words, which are model output and stay as written.
     body = version.judge_feedback || version.feedback_text || "";
-    const judgeModel = (S.judgeModel || "").toUpperCase() || "JUDGE MODEL";
-    attribution = judgeModel + " · " + (version.has_render
-      ? "KERNEL METRICS + THREE-VIEW RENDER" : "KERNEL METRICS ONLY");
+    const judgeModel = (S.judgeModel || "").toUpperCase() || t("val.src.judge");
+    attribution = judgeModel + " · " + t(version.has_render
+      ? "val.src.render" : "val.src.metrics");
   } else {
-    heading = passed ? "Rebuilt and checked by the kernel"
-                     : "The kernel rejected this solid";
-    body = passed
-      ? "OpenCASCADE rebuilt the solid and reports it valid and watertight. "
-        + "The vision Judge was not re-run: a parameter patch changes a value "
-        + "the script already declares, not the design."
-      : (version.feedback_text || "The rebuilt solid failed the kernel's checks.");
-    attribution = "OCCT KERNEL · JUDGE NOT RE-RUN";
+    heading = t(passed ? "val.rebuilt" : "val.rebuilt.failed");
+    body = passed ? t("val.rebuilt.body")
+                  : (version.feedback_text || t("val.rebuilt.body.failed"));
+    attribution = t("val.src.kernel");
   }
 
   $("#valBody").innerHTML = `
@@ -506,9 +535,9 @@ function renderValidation(version) {
       </div>
     </div>
     ${renderUrl ? `
-      <div class="eyebrow" style="margin-bottom:6px">WHAT THE JUDGE SAW</div>
-      <img class="rthumb" id="rthumb" src="${renderUrl}" alt="Three-view render" />
-      <div class="rcap">ISOMETRIC · HIGH-ANGLE REAR · FRONT PROFILE</div>` : ""}`;
+      <div class="eyebrow" style="margin-bottom:6px">${esc(t("val.sawheading"))}</div>
+      <img class="rthumb" id="rthumb" src="${renderUrl}" alt="${esc(t("val.renderalt"))}" />
+      <div class="rcap">${esc(t("val.sawcaption"))}</div>` : ""}`;
 
   const thumb = $("#rthumb");
   if (thumb) {
@@ -523,7 +552,7 @@ function renderValidation(version) {
 
 async function generate() {
   const prompt = $("#prompt").value.trim();
-  if (!prompt) { warnToast("Describe the part first."); return; }
+  if (!prompt) { warnToast(t("run.needprompt")); return; }
   if (S.busy) return;
 
   S.busy = true;
@@ -543,15 +572,14 @@ async function generate() {
   // Everything on the right belongs to the run that is being replaced, so
   // clear it now rather than leaving the previous part's plan and verdict on
   // screen until the new ones arrive.
-  $("#planBody").innerHTML =
-    `<div class="await">Planning…</div>`;
-  $("#valBody").innerHTML = `<div class="await">Waiting for the first attempt…</div>`;
+  $("#planBody").innerHTML = `<div class="await">${esc(t("plan.planning"))}</div>`;
+  $("#valBody").innerHTML = `<div class="await">${esc(t("val.waiting"))}</div>`;
   sheetSvg = null;
   $("#drawBtn").disabled = true;
   $("#cmdIn").disabled = true;
   $("#applyBtn").disabled = true;
   showOverlay("pipe");
-  renderStages("plan", "Sending the request");
+  renderStages("plan", t("detail.sending"));
 
   const options = {
     max_iterations: +$("#optIters").value,
@@ -582,7 +610,7 @@ function follow(jobId, fromSeq) {
     onError: () => {
       S.busy = false;
       $("#genBtn").disabled = false;
-      warnToast("Lost the connection to the run.");
+      warnToast(t("run.lostconn"));
     },
   });
 }
@@ -595,21 +623,24 @@ function finishRun(data) {
   $("#genBtn").disabled = !(S.health && S.health.can_generate);
 
   if (!S.versions.length) {
-    failRun("The pipeline produced no usable geometry.");
+    failRun(t("run.nogeometry"));
     return;
   }
 
   selectVersion(S.versions.length - 1);
   const cost = data.tokens
-    ? ` · ${(data.tokens.input_tokens + data.tokens.output_tokens).toLocaleString()} tokens`
+    ? t("run.tokens", { n: (data.tokens.input_tokens
+                            + data.tokens.output_tokens).toLocaleString() })
     : "";
-  const seconds = data.total_ms ? ` in ${(data.total_ms / 1000).toFixed(1)}s` : "";
+  const seconds = data.total_ms
+    ? t("run.seconds", { s: (data.total_ms / 1000).toFixed(1) }) : "";
 
   if (S.converged) {
-    toast(`Converged after ${data.iterations} iteration${
-      data.iterations === 1 ? "" : "s"}${seconds}${cost}`);
+    // Japanese has no plural agreement, so {s} resolves to nothing there.
+    toast(t("run.converged", { n: data.iterations, seconds, cost,
+                               s: data.iterations === 1 ? "" : "s" }));
   } else {
-    warnToast(`Stopped after ${data.iterations} iterations without the Judge accepting it — showing the closest attempt.`);
+    warnToast(t("run.notconverged", { n: data.iterations }));
   }
   loadHistory();
 }
@@ -619,11 +650,10 @@ function failRun(message) {
   Viewer.building = false;
   thinkIdle();
   $("#genBtn").disabled = !(S.health && S.health.can_generate);
-  $("#errTitle").textContent = "The run could not complete";
-  $("#errMsg").textContent = message || "Unknown error.";
-  $("#errFix").textContent = S.versions.length
-    ? "An earlier attempt is still available below."
-    : "Check the environment panel in the header, then try again.";
+  $("#errTitle").textContent = t("err.title");
+  $("#errMsg").textContent = message || t("err.unknown");
+  $("#errFix").textContent = t(S.versions.length
+    ? "err.haveattempt" : "err.checkenv");
   $("#errKeep").hidden = !S.versions.length;
   showOverlay("error");
 }
@@ -638,14 +668,16 @@ async function loadHistory() {
     const when = job.created_at
       ? new Date(job.created_at * 1000).toLocaleString() : "";
     const badge = job.status === "error"
-      ? `<span class="hbadge fail">FAILED</span>`
-      : job.converged ? `<span class="hbadge pass">CONVERGED</span>`
-      : `<span class="hbadge fail">NOT CONVERGED</span>`;
+      ? `<span class="hbadge fail">${esc(t("hist.failed"))}</span>`
+      : job.converged ? `<span class="hbadge pass">${esc(t("hist.converged"))}</span>`
+      : `<span class="hbadge fail">${esc(t("hist.notconverged"))}</span>`;
     // Provenance is stated, never implied: a replay is a recording, and a
     // fixture had its agent replies scripted rather than generated.
     const origin =
-      job.source === "replay" ? `<span class="hbadge replay">REPLAY</span>`
-      : job.source === "fixture" ? `<span class="hbadge fixture">FIXTURE</span>`
+      job.source === "replay"
+        ? `<span class="hbadge replay">${esc(t("hist.replay"))}</span>`
+      : job.source === "fixture"
+        ? `<span class="hbadge fixture">${esc(t("hist.fixture"))}</span>`
       : "";
     return `
       <div class="hrow">
@@ -653,15 +685,15 @@ async function loadHistory() {
           <div class="hnote">${esc(job.prompt.slice(0, 88))}${job.prompt.length > 88 ? "…" : ""}</div>
           <div class="hmeta">
             ${badge}${origin}
-            <span class="hbadge">${job.versions.length} VER</span>
+            <span class="hbadge">${esc(t("hist.versions", { n: job.versions.length }))}</span>
             <span class="htime">${esc(when)}</span>
           </div>
         </button>
-        <button class="hreplay" data-replay="${esc(job.id)}" title="Replay this run">
+        <button class="hreplay" data-replay="${esc(job.id)}" title="${esc(t("hist.replaytip"))}">
           <svg viewBox="0 0 24 24"><path d="M6 4l13 8-13 8z"/></svg>
         </button>
       </div>`;
-  }).join("") : `<div class="await" style="padding:14px">No runs yet.</div>`;
+  }).join("") : `<div class="await" style="padding:14px">${esc(t("hist.empty"))}</div>`;
 
   $$("#hlist .hitem").forEach(item => {
     item.onclick = () => openJob(item.dataset.job);
@@ -679,7 +711,7 @@ async function openJob(jobId) {
   const job = state.job;
   S.replay = job.source === "replay";
   if (S.replay) {
-    $("#enginePill").textContent = "REPLAY · recorded run";
+    $("#enginePill").textContent = t("hist.replaypill");
     $("#enginePill").classList.add("replaying");
   } else {
     resetPill();
@@ -711,11 +743,11 @@ async function openJob(jobId) {
 
   if (S.versions.length) {
     await selectVersion(S.versions.length - 1);
-    toast(job.converged ? "Loaded a converged run" : "Loaded an unconverged run");
+    toast(t(job.converged ? "hist.loaded.converged" : "hist.loaded.unconverged"));
   } else {
     showOverlay("error");
-    $("#errTitle").textContent = "That run produced no geometry";
-    $("#errMsg").textContent = job.error || "The pipeline stopped before exporting a solid.";
+    $("#errTitle").textContent = t("hist.nogeometry");
+    $("#errMsg").textContent = job.error || t("hist.stoppedearly");
     $("#errFix").textContent = "";
   }
 }
@@ -774,12 +806,12 @@ $("#copyBtn").onclick = async () => {
   if (!version) return;
   const response = await fetch(API.artifact(S.jobId, version.iteration, "code.py"));
   await navigator.clipboard.writeText(await response.text());
-  toast("CadQuery source copied");
+  toast(t("code.copied"));
 };
 
 function download(name) {
   const version = S.versions[S.selected];
-  if (!version) { warnToast("Generate a part first."); return; }
+  if (!version) { warnToast(t("draw.needpart")); return; }
   const link = document.createElement("a");
   link.href = API.artifact(S.jobId, version.iteration, name);
   link.download = "";
@@ -832,8 +864,8 @@ async function loadProviders() {
   S.providers = payload.providers || [];
   const select = $("#optProvider");
   select.innerHTML = S.providers.map(p => {
-    const state = p.ready ? "" : " — needs setup";
-    return `<option value="${esc(p.id)}">${esc(p.label)}${state}</option>`;
+    const state = p.ready ? "" : t("prov.needssetup");
+    return `<option value="${esc(p.id)}">${esc(p.label)}${esc(state)}</option>`;
   }).join("");
 
   const preferred = S.providers.find(p => p.id === payload.default && p.ready)
@@ -866,15 +898,15 @@ function applyProvider(providerId) {
   $("#optJudgeModel").value = provider.default_judge_model
     || provider.default_generation_model || "";
   $("#optGenModel").placeholder = models.length
-    ? `model id (${models.length} available)` : "model id";
+    ? t("ph.modelid.count", { n: models.length }) : t("ph.modelid");
   $("#optJudgeModel").placeholder = $("#optGenModel").placeholder;
 
   const needsSetup = !provider.ready;
   $("#keyRow").hidden = !(needsSetup || provider.key_from_session);
   $("#providerBase").hidden = provider.id !== "custom";
   $("#providerBase").value = provider.base_url || "";
-  $("#providerKey").placeholder = provider.needs_key
-    ? "API key (memory only)" : "API key (not required)";
+  $("#providerKey").placeholder = t(provider.needs_key
+    ? "ph.apikey.memory" : "ph.apikey.none");
 
   setModelLabels($("#optGenModel").value, $("#optJudgeModel").value);
   updateProviderNote();
@@ -884,10 +916,13 @@ function applyProvider(providerId) {
 /* Name the models that actually did the work, rather than the ones the
    pipeline happens to default to. */
 function setModelLabels(generation, judge) {
+  S.genModel = generation || "";
   S.judgeModel = judge || "";
   const short = name => (name || "").split("/").pop().toUpperCase() || "—";
-  $("#genModelLabel").textContent = `PLANNER · ${short(generation)}`;
-  $("#judgeModelLabel").textContent = `JUDGE · ${short(judge)}`;
+  $("#genModelLabel").textContent =
+    t("label.planner.model", { model: short(generation) });
+  $("#judgeModelLabel").textContent =
+    t("label.judge.model", { model: short(judge) });
 }
 
 function updateProviderNote() {
@@ -900,26 +935,26 @@ function updateProviderNote() {
 
   if (!provider.ready) {
     note.className = "optnote warn";
-    note.textContent = provider.hint + ".";
+    // The server sends the same sentence as a key, so it can be shown in
+    // whatever language the switch is on; `hint` is the fallback.
+    note.textContent = (provider.hint_key && I18N.has(provider.hint_key)
+      ? t(provider.hint_key, provider.hint_params || {})
+      : provider.hint) + ".";
     return;
   }
   if (!generation || !judge) {
     note.className = "optnote warn";
-    note.textContent = "Choose a model for both roles.";
+    note.textContent = t("prov.bothroles");
     return;
   }
   if (generation === judge) {
     // The pipeline judges with a separate, stronger model on purpose.
     note.className = "optnote warn";
-    note.textContent =
-      "Both roles use the same model, so the Judge grades its own work. "
-      + "Pick a stronger judge model for an independent check.";
+    note.textContent = t("prov.samemodel");
     return;
   }
   note.className = "optnote ok";
-  note.textContent = provider.local
-    ? "Running locally — nothing leaves this machine."
-    : "Ready.";
+  note.textContent = provider.local ? t("prov.local") : t("prov.ready");
 }
 
 function updateGenerateAvailability() {
@@ -949,10 +984,10 @@ async function saveProviderKey() {
     const select = $("#optProvider");
     const option = [...select.options].find(o => o.value === provider.id);
     if (option) option.textContent =
-      provider.label + (provider.ready ? "" : " — needs setup");
+      provider.label + (provider.ready ? "" : t("prov.needssetup"));
 
-    toast(provider.ready ? `${provider.label} is ready`
-                         : `${provider.label} still needs setup`);
+    toast(t(provider.ready ? "prov.isready" : "prov.stillneeds",
+            { label: provider.label }));
     loadHealth();
   } catch (error) {
     warnToast(error.message);
@@ -980,7 +1015,7 @@ $("#providerKey").addEventListener("keydown", e => {
    that run exported. Nothing is simulated; only the pacing differs, so a
    demo does not depend on the network or on a part converging this time. */
 async function startReplay(sourceJobId) {
-  if (S.busy) { warnToast("Something is already running."); return; }
+  if (S.busy) { warnToast(t("run.busy")); return; }
 
   S.busy = true;
   S.replay = true;
@@ -996,8 +1031,8 @@ async function startReplay(sourceJobId) {
   Viewer.building = true;     // slow orbit while the pipeline works
   setCode("");
   showOverlay("pipe");
-  renderStages("plan", "Replaying a recorded run");
-  $("#enginePill").textContent = "REPLAY · recorded run";
+  renderStages("plan", t("detail.replaying"));
+  $("#enginePill").textContent = t("hist.replaypill");
   $("#enginePill").classList.add("replaying");
 
   try {
@@ -1013,7 +1048,7 @@ async function startReplay(sourceJobId) {
 }
 
 function resetPill() {
-  $("#enginePill").textContent = "Planner · Coder · Executor · Validator · Refiner";
+  $("#enginePill").textContent = t("app.engine");
   $("#enginePill").classList.remove("replaying");
 }
 
@@ -1023,11 +1058,11 @@ function resetPill() {
    it changes a number the script already declares, so the kernel alone can
    confirm it. The Refiner writes new code, so the full check is worth it. */
 const EDIT_STEPS = [
-  { key: "read",     label: "Reading the request" },
-  { key: "apply",    label: "Applying the change" },
-  { key: "rebuild",  label: "Rebuilding in the kernel" },
-  { key: "validate", label: "Validating" },
-  { key: "done",     label: "Updated" },
+  { key: "read",     label: "edit.step.read" },
+  { key: "apply",    label: "edit.step.apply" },
+  { key: "rebuild",  label: "edit.step.rebuild" },
+  { key: "validate", label: "edit.step.validate" },
+  { key: "done",     label: "edit.step.done" },
 ];
 
 function renderEditSteps(activeKey, skipValidate) {
@@ -1036,7 +1071,7 @@ function renderEditSteps(activeKey, skipValidate) {
   const activeIndex = steps.findIndex(s => s.key === activeKey);
   $("#actSteps").innerHTML = steps.map((step, i) => {
     const state = i < activeIndex ? "done" : (i === activeIndex ? "act" : "");
-    return `<div class="ast ${state}"><i></i>${step.label}</div>`
+    return `<div class="ast ${state}"><i></i>${esc(t(step.label))}</div>`
       + (i < steps.length - 1 ? `<span class="arrow">→</span>` : "");
   }).join("");
 }
@@ -1054,7 +1089,7 @@ function handleEditEvent(event) {
            <span class="strike">${fmt(c.old)}</span>${fmt(c.new)}</span>`).join("");
     } else {
       $("#actDiff").innerHTML =
-        `<span class="diffpill">REFINER AGENT</span>`;
+        `<span class="diffpill">${esc(t("edit.refineragent"))}</span>`;
     }
     return;
   }
@@ -1093,20 +1128,20 @@ function finishEdit(ok, data, message) {
   $("#cmdIn").disabled = false;
 
   if (!ok) {
-    warnToast(message || "The edit could not be applied.");
+    warnToast(message || t("edit.failed"));
     return;
   }
   $("#cmdIn").value = "";
-  const method = data.method === "parameter patch"
-    ? "parameter patch, rebuilt by the kernel"
-    : "Refiner agent";
-  const seconds = data.total_ms ? ` in ${(data.total_ms / 1000).toFixed(1)}s` : "";
-  toast(`Model updated · ${method}${seconds}`);
+  const method = t(data.method === "parameter patch"
+    ? "edit.method.patch" : "edit.method.agent");
+  const seconds = data.total_ms
+    ? t("run.seconds", { s: (data.total_ms / 1000).toFixed(1) }) : "";
+  toast(t("edit.done", { method, seconds }));
 }
 
 async function applyEdit() {
   const instruction = $("#cmdIn").value.trim();
-  if (!instruction) { warnToast("Describe the change first."); return; }
+  if (!instruction) { warnToast(t("edit.needinstruction")); return; }
   if (S.busy || !S.jobId || !S.versions.length) return;
 
   S.busy = true;
@@ -1140,15 +1175,18 @@ let sheetSvg = null;
 
 async function openDrawing() {
   const version = S.versions[S.selected];
-  if (!version) { warnToast("Generate a part first."); return; }
+  if (!version) { warnToast(t("draw.needpart")); return; }
 
   const button = $("#drawBtn");
   button.disabled = true;
-  $("#paper").innerHTML = `<div style="padding:60px;color:#666;font-family:monospace;font-size:12px">Projecting the solid…</div>`;
+  $("#paper").innerHTML = `<div style="padding:60px;color:#666;font-family:monospace;font-size:12px">${esc(t("draw.projecting"))}</div>`;
   $("#sheet").classList.add("on");
 
   try {
-    const url = API.artifact(S.jobId, version.iteration, "drawing.svg");
+    // Fetched directly rather than through API.json(), so it has to ask for
+    // its language itself: the server explains a failed projection.
+    const url = API.artifact(S.jobId, version.iteration, "drawing.svg")
+                + `?lang=${encodeURIComponent(I18N.current)}`;
     const response = await fetch(url);
     if (!response.ok) {
       let detail = `HTTP ${response.status}`;
@@ -1161,7 +1199,7 @@ async function openDrawing() {
     sheetSvg = null;
     $("#paper").innerHTML =
       `<div style="padding:60px;color:#B00;font-family:monospace;font-size:12px;max-width:640px">`
-      + `Could not build the drawing.<br><br>${esc(error.message)}</div>`;
+      + `${esc(t("draw.failed"))}<br><br>${esc(error.message)}</div>`;
   } finally {
     button.disabled = false;
   }
@@ -1170,7 +1208,7 @@ async function openDrawing() {
 /* Rasterise the sheet in the browser. The SVG is self-contained - no external
    references - so it can be drawn straight onto a canvas. */
 function exportDrawingPng() {
-  if (!sheetSvg) { warnToast("Open a drawing first."); return; }
+  if (!sheetSvg) { warnToast(t("draw.needdrawing")); return; }
   const svg = $("#paper").querySelector("svg");
   const width = +svg.getAttribute("width") || 1120;
   const height = +svg.getAttribute("height") || 780;
@@ -1196,12 +1234,12 @@ function exportDrawingPng() {
       link.download = `${S.jobId}_drawing.png`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-      toast("Drawing exported as PNG");
+      toast(t("draw.exported"));
     }, "image/png");
   };
   image.onerror = () => {
     URL.revokeObjectURL(url);
-    warnToast("Could not rasterise the drawing.");
+    warnToast(t("draw.rasterfail"));
   };
   image.src = url;
 }
@@ -1210,9 +1248,73 @@ $("#drawBtn").onclick = openDrawing;
 $("#back3d").onclick = () => $("#sheet").classList.remove("on");
 $("#expPng").onclick = exportDrawingPng;
 
+/* ═══════════════════════ interface language ═══════════════════════ */
+
+/* Two buttons, each written in its own language, so someone who cannot read
+   the current interface can still find their way out of it. */
+function buildLangSwitch() {
+  const box = $("#langSw");
+  box.setAttribute("aria-label", t("app.language"));
+  box.innerHTML = I18N.LANGS.map(l =>
+    `<button class="lang${l.code === I18N.current ? " on" : ""}" `
+    + `data-lang="${esc(l.code)}" lang="${esc(l.code)}" `
+    + `aria-pressed="${l.code === I18N.current}">${esc(l.label)}</button>`
+  ).join("");
+  $$("#langSw .lang").forEach(button => {
+    button.onclick = () => I18N.set(button.dataset.lang);
+  });
+}
+
+/* Everything on screen that JavaScript wrote rather than the markup.
+   I18N.apply() has already redrawn the static text by the time this runs;
+   these panels hold state, and each is redrawn from that state rather than
+   from the DOM, so nothing is translated twice. */
+function relocalise() {
+  buildLangSwitch();
+
+  const chip = $("#healthChip").querySelector("span");
+  if (!S.health) chip.textContent = t("health.unreachable");
+  else chip.textContent = S.health.ok ? t("health.ready")
+    : S.health.can_generate ? t("health.degraded") : t("health.notready");
+  if (S.health && S.health.checks && !S.health.checks.model_backend.ok) {
+    $("#keyBannerText").textContent = t("banner.nobackend");
+  }
+
+  if (S.health && S.health.checks) renderDiagRows(S.health.checks);
+  renderExamples();
+  // Not applyProvider(): that resets the model fields to the provider's
+  // defaults and would silently discard a model id someone had typed. Only
+  // the text it writes is redrawn.
+  if (S.provider) {
+    const models = S.provider.models || [];
+    $("#optGenModel").placeholder = models.length
+      ? t("ph.modelid.count", { n: models.length }) : t("ph.modelid");
+    $("#optJudgeModel").placeholder = $("#optGenModel").placeholder;
+    $("#providerKey").placeholder = t(S.provider.needs_key
+      ? "ph.apikey.memory" : "ph.apikey.none");
+    updateProviderNote();
+  }
+  if (S.genModel || S.judgeModel) setModelLabels(S.genModel, S.judgeModel);
+  if (S.codeLines !== undefined) {
+    $("#codeStat").textContent = S.codeLines
+      ? t("code.stat", { n: S.codeLines }) : t("code.empty");
+  }
+  if (S.stage) renderStages(S.stage.key, S.stage.detail);
+  if (!S.replay) resetPill();
+  renderIterations();
+  if (S.designPlan) renderPlan(S.designPlan);
+  const version = S.versions[S.selected];
+  if (version) { renderKernelFacts(version); renderValidation(version); }
+  if ($("#hist").classList.contains("open")) loadHistory();
+}
+
+I18N.onChange(relocalise);
+
 /* ═══════════════════════ boot ═══════════════════════ */
 
 (async function boot() {
+  I18N.apply();
+  buildLangSwitch();
   await loadHealth();
   await loadProviders();
   await loadExamples();

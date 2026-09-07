@@ -374,6 +374,13 @@ def status() -> list[dict]:
             "ready": ready,
             "hint": (f"Nothing is listening at {base_url}. {spec.hint}"
                      if spec.local and not ready else spec.hint),
+            # The same sentence as a key the browser can look up in whatever
+            # language it is showing. `hint` stays as it is: it is also used
+            # in the server's own refusal messages, and it is the fallback
+            # for anything the browser dictionary has not got.
+            "hint_key": ("prov.hint.unreachable" if spec.local and not ready
+                         else f"prov.hint.{spec.id}"),
+            "hint_params": {"url": base_url, "id": spec.id},
             "default_generation_model": spec.default_generation_model,
             "default_judge_model": spec.default_judge_model,
         })

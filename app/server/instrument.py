@@ -37,8 +37,8 @@ from autofab.executor import Executor, ExecutionResult
 from autofab.pipeline import Pipeline
 from autofab.validator import Validator, ValidationReport
 
+from . import i18n
 from .providers import LLMConfig, build_client
-
 from .events import (
     EventSink,
     PHASE_CODE,
@@ -87,6 +87,10 @@ class RunContext:
     #: Which agent is currently running, so streamed reasoning can be
     #: attributed to the step that produced it.
     agent: str = ""
+    #: The language the person who started this run is reading. Only the
+    #: messages meant for them are translated; what the Refiner is told stays
+    #: in English, because that is the language its instructions are in.
+    lang: str = i18n.DEFAULT_LANG
     #: Provenance stamped onto the next published version.
     source: str = "pipeline"
     method: str = ""
@@ -379,7 +383,7 @@ class InstrumentedValidator(Validator):
             ctx.emit(
                 PHASE_RENDER,
                 STATUS_FAILED,
-                "Three-view render unavailable - Judge ran without vision.",
+                i18n.t("render.novision", ctx.lang),
                 iteration=ctx.iteration,
             )
 

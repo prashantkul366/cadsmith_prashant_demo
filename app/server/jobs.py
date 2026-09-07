@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from . import i18n
 from .edits import apply_changes, describe, plan_edit
 from .events import (
     EventSink,
@@ -75,6 +76,9 @@ class JobOptions:
     provider: str = DEFAULT_PROVIDER
     generation_model: str = ""
     judge_model: str = ""
+    #: The language this run reports itself in. Model input is unaffected -
+    #: the agents' prompts stay English whatever this is set to.
+    lang: str = i18n.DEFAULT_LANG
 
     @classmethod
     def from_dict(cls, raw: Optional[dict]) -> "JobOptions":
@@ -86,6 +90,7 @@ class JobOptions:
             provider=str(raw.get("provider") or DEFAULT_PROVIDER),
             generation_model=str(raw.get("generation_model") or ""),
             judge_model=str(raw.get("judge_model") or ""),
+            lang=i18n.normalise(raw.get("lang")),
         )
 
     def llm_config(self) -> LLMConfig:
@@ -191,7 +196,8 @@ class JobManager:
 
         job = Job(id=job_id, prompt=prompt, options=options, directory=directory)
         sink = EventSink(path=directory / "events.jsonl")
-        ctx = RunContext(sink=sink, job_dir=directory, part_name=PART_NAME)
+        ctx = RunContext(sink=sink, job_dir=directory,
+                         part_name=PART_NAME, lang=options.lang)
 
         with self._lock:
             self._jobs[job_id] = job
@@ -213,16 +219,15 @@ class JobManager:
         set_context(ctx)
         job.status = STATUS_RUNNING
         job.started_at = time.time()
-        sink.emit(PHASE_JOB, STATUS_STARTED, "Pipeline started.",
+        lang = job.options.lang
+        sink.emit(PHASE_JOB, STATUS_STARTED, i18n.t("job.started", lang),
                   llm=ctx.llm.redacted())
         if ctx.llm.generation_model == ctx.llm.judge_model:
             # The pipeline judges with a stronger, separate model on purpose;
             # one model grading its own work is the bias that design avoids.
             sink.emit(
                 PHASE_JOB, STATUS_INFO,
-                f"Generation and judging both use {ctx.llm.judge_model}, so "
-                f"the Judge is grading its own work. Pick a different judge "
-                f"model for an independent check.")
+                i18n.t("job.samemodel", lang, model=ctx.llm.judge_model))
 
         try:
             from autofab import agents
@@ -254,8 +259,8 @@ class JobManager:
             sink.emit(
                 PHASE_JOB,
                 STATUS_OK,
-                "Converged." if result.converged else
-                "Finished without converging - showing the best attempt.",
+                i18n.t("job.converged" if result.converged
+                       else "job.notconverged", lang),
                 converged=result.converged,
                 iterations=len(result.iterations),
                 llm_calls=result.total_llm_calls,
@@ -286,7 +291,8 @@ class JobManager:
         """
         sink = self.sink(job.id)
         if sink is not None:
-            sink.emit(PHASE_JOB, STATUS_QUEUED, "Edit queued.",
+            sink.emit(PHASE_JOB, STATUS_QUEUED,
+                      i18n.t("edit.queued", job.options.lang),
                       instruction=instruction, base_version=base_version)
         job.status = STATUS_QUEUED
         self._pool.submit(self._run_edit, job, instruction, base_version)
@@ -300,6 +306,7 @@ class JobManager:
         The Refiner writes new code, so the full validation - vision Judge
         included - is worth its cost.
         """
+        lang = job.options.lang
         sink = self.sink(job.id)
         ctx = self.context(job.id)
         if sink is None:
@@ -308,10 +315,13 @@ class JobManager:
             # Never fail silently here: the client is waiting on the stream.
             job.status = STATUS_DONE
             sink.emit(PHASE_JOB, STATUS_FAILED,
-                      "That run cannot be edited in this session.", edit=True)
+                      i18n.t("edit.nocontext", lang), edit=True)
             return
 
         ctx.llm = job.options.llm_config()
+        # An edit reports itself in whatever language the switch is on now,
+        # which need not be the language the run was started in.
+        ctx.lang = lang
         set_context(ctx)
         job.status = STATUS_RUNNING
         started = time.time()
@@ -346,18 +356,15 @@ class JobManager:
                 job.status = STATUS_DONE
                 sink.emit(
                     PHASE_JOB, STATUS_FAILED,
-                    f"That is not a parameter change ({plan.reason}), so it "
-                    f"needs the Refiner agent - but no model backend is "
-                    f"available: {_llm_problems(job)[0]} Try naming a "
-                    f"dimension the script declares.",
+                    i18n.t("edit.needsrefiner", lang, reason=plan.reason,
+                           problem=_llm_problems(job)[0]),
                     edit=True)
                 return
             else:
                 ctx.method = "refiner agent"
                 ctx.changes = []
                 sink.emit(PHASE_EDIT, STATUS_INFO,
-                          f"Not a parameter change ({plan.reason}) - "
-                          f"asking the Refiner agent.",
+                          i18n.t("edit.askingrefiner", lang, reason=plan.reason),
                           method=ctx.method, instruction=instruction,
                           reason=plan.reason)
                 new_code = agents.refine_geometry(
@@ -385,8 +392,8 @@ class JobManager:
                 job.status = STATUS_DONE
                 sink.emit(
                     PHASE_JOB, STATUS_FAILED,
-                    f"That change could not be built: {result.error_type}. "
-                    f"The previous version is unchanged.",
+                    i18n.t("edit.unbuildable", lang,
+                           error_type=result.error_type),
                     error=(result.error or "")[-2000:], edit=True)
                 return
 
@@ -408,14 +415,15 @@ class JobManager:
             job.versions = list(ctx.versions)
             job.tokens = agents.get_token_usage()
             job.status = STATUS_DONE
-            sink.emit(PHASE_JOB, STATUS_OK, "Edit applied.",
+            sink.emit(PHASE_JOB, STATUS_OK, i18n.t("edit.applied", lang),
                       edit=True, method=ctx.method,
                       total_ms=(time.time() - started) * 1000,
                       tokens=job.tokens, iterations=len(job.versions))
         except Exception as exc:
             job.status = STATUS_DONE
             sink.emit(PHASE_JOB, STATUS_FAILED,
-                      f"The edit failed: {type(exc).__name__}: {exc}",
+                      i18n.t("edit.failed", lang,
+                             error=f"{type(exc).__name__}: {exc}"),
                       traceback=traceback.format_exc()[-4000:], edit=True)
         finally:
             ctx.source, ctx.method = "pipeline", ""
@@ -449,7 +457,8 @@ class JobManager:
             replay_of=source.id,
         )
         sink = EventSink(path=directory / "events.jsonl")
-        ctx = RunContext(sink=sink, job_dir=directory, part_name=PART_NAME)
+        ctx = RunContext(sink=sink, job_dir=directory,
+                         part_name=PART_NAME, lang=job.options.lang)
 
         with self._lock:
             self._jobs[job_id] = job
@@ -458,7 +467,7 @@ class JobManager:
 
         self._write_meta(job)
         sink.emit(PHASE_JOB, STATUS_QUEUED,
-                  f"Replaying a recorded run ({source.id}).",
+                  i18n.t("job.replaying", job.options.lang, source=source.id),
                   prompt=source.prompt, replay_of=source.id, replayed=True)
         self._pool.submit(self._run_replay, job, source.directory, speed)
         return job
@@ -470,9 +479,11 @@ class JobManager:
         job.status = STATUS_RUNNING
         job.started_at = time.time()
         try:
-            replay_into(sink, source_dir, speed=speed)
+            replay_into(sink, source_dir, speed=speed,
+                        lang=job.options.lang)
             job.status = STATUS_DONE
-            sink.emit(PHASE_JOB, STATUS_OK, "Replay finished.",
+            sink.emit(PHASE_JOB, STATUS_OK,
+                      i18n.t("job.replayfinished", job.options.lang),
                       converged=job.converged, replayed=True,
                       iterations=len(job.versions))
         except Exception as exc:
@@ -530,13 +541,14 @@ class JobManager:
             # A job interrupted by a restart can never resume; mark it honestly.
             if job.status in (STATUS_QUEUED, STATUS_RUNNING):
                 job.status = STATUS_ERROR
-                job.error = "Interrupted by a server restart."
+                job.error = i18n.t("job.interrupted", job.options.lang)
 
             # A restored run must stay editable, which needs both a writable
             # log and a context carrying the versions it already has.
             sink = EventSink.from_file(directory / "events.jsonl",
                                        keep_appending=True)
-            ctx = RunContext(sink=sink, job_dir=directory, part_name=PART_NAME)
+            ctx = RunContext(sink=sink, job_dir=directory,
+                             part_name=PART_NAME, lang=job.options.lang)
             ctx.versions = list(job.versions)
             if job.versions:
                 ctx.iteration = max(v.get("iteration", 0) for v in job.versions)

@@ -218,6 +218,42 @@ run options. See **Model backends** above.
 the model backend and the metrics stack. Click it for detail. A demo that will
 not work says so before you start.
 
+## English and Japanese
+
+The interface has a language switch in the header, and opens in Japanese by
+itself on a machine whose browser asks for it. The choice is remembered.
+
+**What is translated.** Everything a person reads: the interface, the run
+log's own lines, the reasoning panel's agent labels, the verdict, the kernel
+facts, the server's refusals, and the benchmark prompts. A Japanese prompt
+card inserts the Japanese prompt — the same benchmark entry, term for term,
+with every dimension and axis carried across, so the part built from either
+language is the same part.
+
+**What is not, deliberately.** What the model reads. The five agents in
+`autofab/agents.py` are steered by English prompts, and the Refiner is handed
+English measurements; translating either would change what the pipeline does
+rather than what it says. The reasoning that streams into the panel is the
+model's own words and is shown as written. The environment panel's details
+are left alone too — they quote the machine (a version string, a package
+name, a certificate path), and quoting is not translating.
+`app/tests/test_i18n.py` parses each module that talks to a model and fails
+the build if a Japanese string appears in one.
+
+**Editing in Japanese works without a model call.** `server/edits.py`
+recognises a parameter change by English word, so 「厚さを 5mm にする」 would
+otherwise fall through to the Refiner — slow with a backend configured, and
+refused outright without one. `server/japanese.py` rewrites the instruction
+into the vocabulary those patterns already speak, and only when the
+instruction actually contains Japanese, so English can neither reach it nor
+be changed by it. The refusals are the half that matters:
+「補強リブを追加する」 still comes out as a rib, so the editor hands it to the
+Refiner rather than patching whichever number happened to match and reporting
+a rib it never made.
+
+**Writing prompts in Japanese** is a question about the model, not about the
+app: the prompt reaches the Planner exactly as typed.
+
 ## Layout
 
 ```
@@ -231,8 +267,11 @@ app/
     providers.py   Anthropic, OpenAI, Ollama and any OpenAI-compatible backend
     drawing.py     orthographic projections composed into a sheet
     replay.py      re-emits a recorded run at presentation speed
+    i18n.py        the messages a person reads, in English and Japanese
+    japanese.py    Japanese edit instructions, in the words edits.py matches
   web/
     index.html  style.css  app.js  api.js  viewer.js  vendor/three.min.js
+    i18n.js        the interface dictionary and the language switch
   tools/
     seed_demo_run.py   record demo runs without an API key
   tests/
@@ -280,6 +319,11 @@ deterministic.
 .venv/bin/python -m app.tests.test_edit_flow        # both edit paths, real kernel
 .venv/bin/python -m app.tests.test_replay           # recorded run fidelity
 .venv/bin/python -m app.tests.test_providers        # non-Anthropic backend, real kernel
+.venv/bin/python -m app.tests.test_i18n             # both dictionaries, and what
+                                                    # must stay English
+.venv/bin/python -m app.tests.test_encoding         # UTF-8 everywhere (Windows)
+.venv/bin/python -m app.tests.test_layout           # panel geometry, real browser
+.venv/bin/python -m app.tests.test_thinking_stream  # streamed reasoning
 .venv/bin/python -m app.tests.ui_check              # real browser, needs a server
 .venv/bin/python -m app.tests.ui_generate_check     # a real run in a browser,
                                                     # plus provider failures

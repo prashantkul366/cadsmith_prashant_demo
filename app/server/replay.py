@@ -23,6 +23,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from . import i18n
 from .events import EventSink, PHASE_JOB, STATUS_INFO
 
 #: Longest pause between two replayed events, in seconds.
@@ -84,11 +85,12 @@ def replay_into(
     source_dir: Path,
     speed: float = 6.0,
     should_stop=None,
+    lang: str = i18n.DEFAULT_LANG,
 ) -> int:
     """Re-emit a recorded run's events into ``sink``. Returns the count."""
     events = recorded_events(source_dir)
     if not events:
-        sink.emit(PHASE_JOB, STATUS_INFO, "That run has no recorded events.")
+        sink.emit(PHASE_JOB, STATUS_INFO, i18n.t("replay.noevents", lang))
         return 0
 
     gaps = scaled_gaps(events, speed)
