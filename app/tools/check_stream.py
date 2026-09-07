@@ -36,25 +36,40 @@ def main() -> int:
         import anthropic
         client = anthropic.Anthropic()
 
+    # Adaptive thinking is the model's choice, so a trivial prompt proves
+    # nothing: it will simply answer. This asks for something that genuinely
+    # needs working out, so an absence of reasoning is a real signal.
+    HARD = (
+        "Write a CadQuery script for a bearing housing: a 90mm diameter "
+        "cylindrical body 40mm tall, bored 52mm through for the bearing seat, "
+        "with a 120mm square mounting flange 10mm thick at the base carrying "
+        "four M8 clearance holes on a 100mm square pattern, and a 3mm fillet "
+        "where the body meets the flange. State any assumption you make about "
+        "the bore's shoulder before writing code."
+    )
+
     kwargs = {
         "model": model,
         "max_tokens": 8192,
         "thinking": {"type": "adaptive", "display": "summarized"},
-        "messages": [{"role": "user", "content":
-                      "In one sentence, why is a box() call enough for a "
-                      "50x30x20mm block in CadQuery?"}],
+        "messages": [{"role": "user", "content": HARD}],
     }
 
     events = Counter()
     deltas = Counter()
+    starts = Counter()
     thinking_chars = 0
     text_chars = 0
 
     try:
         with client.messages.stream(**kwargs) as stream:
             for event in stream:
-                events[getattr(event, "type", "?")] += 1
-                if getattr(event, "type", "") != "content_block_delta":
+                etype = getattr(event, "type", "?")
+                events[etype] += 1
+                if etype == "content_block_start":
+                    block = getattr(event, "content_block", None)
+                    starts[getattr(block, "type", "?")] += 1
+                if etype != "content_block_delta":
                     continue
                 delta = getattr(event, "delta", None)
                 kind = getattr(delta, "type", "?")
@@ -75,8 +90,16 @@ def main() -> int:
     print("\nstream event types:")
     for name, n in events.most_common():
         print(f"  {name:<28} {n}")
+    print("\ncontent block types opened:")
+    for name, n in starts.most_common():
+        print(f"  {name:<28} {n}")
     print("\ncontent_block_delta types:")
     for name, n in deltas.most_common():
+        print(f"  {name:<28} {n}")
+
+    final_blocks = Counter(getattr(b, "type", "?") for b in final.content)
+    print("\nfinal message block types:")
+    for name, n in final_blocks.most_common():
         print(f"  {name:<28} {n}")
 
     print(f"\nthinking characters streamed : {thinking_chars}")
@@ -87,15 +110,32 @@ def main() -> int:
 
     ok_text = deltas.get("text_delta", 0) > 0
     ok_think = deltas.get("thinking_delta", 0) > 0
+    block_opened = starts.get("thinking", 0) > 0 or final_blocks.get("thinking", 0) > 0
+
     print("\n" + "=" * 58)
-    print(f"  text_delta handled by the app     : "
+    print(f"  text_delta streams to the code lane   : "
           f"{'YES' if ok_text else 'NO - the code panel would stay empty'}")
-    print(f"  thinking_delta handled by the app : "
-          f"{'YES' if ok_think else 'NO - the Reasoning panel would be empty'}")
+    print(f"  thinking_delta streams to Reasoning   : "
+          f"{'YES' if ok_think else 'NO'}")
     if ok_text and ok_think:
         print("  The app's assumptions match the live SDK.")
         return 0
-    print("  MISMATCH - send this output back so the handler can be corrected.")
+
+    # Absent reasoning has two very different causes. Telling them apart is
+    # the point of this check: one is a limitation to work around, the other
+    # is the model exercising its own judgement.
+    if not ok_think:
+        if block_opened:
+            print("\n  A thinking block WAS returned but carried no text, so"
+                  "\n  display=\"summarized\" is not honoured on this platform."
+                  "\n  The Reasoning panel will show streamed output only.")
+        else:
+            print("\n  No thinking block was produced at all. On a prompt this"
+                  "\n  involved that points to thinking being unavailable for"
+                  "\n  this model/platform rather than the model choosing not"
+                  "\n  to think. Try a different model id, or accept that the"
+                  "\n  Reasoning panel shows streamed output only.")
+    print("\n  Send this output back so the handler can be adjusted.")
     return 1
 
 
