@@ -21,6 +21,7 @@
   --r:5px;
   --hdr:52px;
   --cmd:78px;
+  --phead-h:36px;   /* every panel header, and the floor a panel may shrink to */
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -104,7 +105,7 @@ header{
 .col.left{border-right:1px solid var(--line);background:var(--panel)}
 .col.right{border-left:1px solid var(--line);background:var(--panel)}
 .phead{
-  height:36px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;
+  height:var(--phead-h);flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;
   border-bottom:1px solid var(--line-soft);
 }
 .phead h2{font-size:11.5px;font-weight:650;letter-spacing:.02em}
@@ -241,7 +242,7 @@ textarea.prompt::placeholder{color:#535E6E}
 }
 
 /* ---------- right ---------- */
-.rsplit{display:flex;flex-direction:column;height:100%;min-height:0}
+.rsplit{display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden}
 .rsec{display:flex;flex-direction:column;min-height:0}
 .rsec.ai{flex:0 0 auto;max-height:44%;border-bottom:1px solid var(--line)}
 .rsec.code{flex:1;min-height:0}
@@ -497,10 +498,34 @@ textarea.src{
 .banner[hidden]{display:none}
 .banner svg{flex:none;width:14px;height:14px}
 
-/* ---------- three right-hand sections instead of the original two ---------- */
-.rsec.ai{flex:0 0 auto;max-height:30%}
-.rsec.val{flex:0 0 auto;max-height:36%;border-top:1px solid var(--line);
-  display:flex;flex-direction:column;min-height:0}
+/* ---------- four right-hand sections instead of the original two ----------
+   Reasoning, Design Plan, Generated CadQuery, Validation share one flex
+   column. Sizing them is delicate: each section's header and button row are
+   flex:none, so a section squeezed below that chrome does not shrink -- it
+   overflows and paints on top of the section beneath it.
+
+   Two rules keep that from happening. Every section may shrink (their bodies
+   scroll, so giving way costs nothing), and every section clips itself, so
+   the worst case is a clipped panel rather than two panels drawn on top of
+   each other. */
+
+.rsec{overflow:hidden;min-height:var(--phead-h)}   /* never smaller than its own header */
+
+/* Reasoning grows with the run -- five refinement iterations of streamed
+   thinking would otherwise crowd out everything below it. */
+.rsec.think{flex:0 1 auto;max-height:32%;border-bottom:1px solid var(--line)}
+
+.rsec.ai{flex:0 1 auto;max-height:22%}
+
+/* The code panel absorbs the leftover space, and keeps enough of it to show
+   the header, a few lines, and the download row. It previously declared
+   flex:1 -- a 0% flex-basis, which made it the only thing the shrink
+   algorithm charged, so it collapsed to zero height the moment the column
+   was over-subscribed. */
+.rsec.code{flex:1 1 auto;min-height:calc(var(--phead-h) + 34px + 92px)}
+
+.rsec.val{flex:0 1 auto;max-height:24%;border-top:1px solid var(--line);
+  display:flex;flex-direction:column}
 .rsec.val .ai-body{flex:1;min-height:0}
 
 /* the pipeline steps now carry a detail line, so they need more room */
