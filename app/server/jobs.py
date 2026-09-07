@@ -246,7 +246,7 @@ class JobManager:
 
             try:
                 (job.directory / "result.json").write_text(
-                    json.dumps(result.to_dict(), indent=2)
+                    json.dumps(result.to_dict(), indent=2), encoding="utf-8"
                 )
             except OSError:
                 pass
@@ -328,7 +328,7 @@ class JobManager:
                      if v.get("iteration") == base_version),
                     job.versions[-1])
             source_dir = job.directory / f"v{previous['iteration']}"
-            code = (source_dir / "code.py").read_text()
+            code = (source_dir / "code.py").read_text(encoding="utf-8")
             next_index = max(v["iteration"] for v in job.versions) + 1
 
             plan = plan_edit(code, instruction)
@@ -487,7 +487,7 @@ class JobManager:
     def _write_meta(self, job: Job) -> None:
         try:
             (job.directory / "meta.json").write_text(
-                json.dumps(job.summary(), indent=2, default=str)
+                json.dumps(job.summary(), indent=2, default=str), encoding="utf-8"
             )
         except OSError:
             pass
@@ -505,7 +505,7 @@ class JobManager:
                 if directory.name in self._jobs:
                     continue
             try:
-                meta = json.loads(meta_file.read_text())
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
 

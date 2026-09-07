@@ -60,7 +60,7 @@ def recorded_events(source_dir: Path) -> list[dict]:
     log = source_dir / "events.jsonl"
     if not log.is_file():
         return events
-    for line in log.read_text().splitlines():
+    for line in log.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         try:

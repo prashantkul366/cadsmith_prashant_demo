@@ -339,13 +339,13 @@ class InstrumentedExecutor(Executor):
         """Copy this iteration's outputs into a stable, servable bundle."""
         vdir = ctx.version_dir()
         try:
-            (vdir / "code.py").write_text(code)
+            (vdir / "code.py").write_text(code, encoding="utf-8")
             if result.stl_path and Path(result.stl_path).exists():
                 shutil.copy2(result.stl_path, vdir / "model.stl")
             if result.step_path and Path(result.step_path).exists():
                 shutil.copy2(result.step_path, vdir / "model.step")
             (vdir / "geometry.json").write_text(
-                json.dumps(result.geometry_json, indent=2)
+                json.dumps(result.geometry_json, indent=2), encoding="utf-8"
             )
         except OSError as exc:
             ctx.emit(PHASE_EXECUTE, STATUS_INFO, f"Could not file artifacts: {exc}")
@@ -413,7 +413,7 @@ class InstrumentedValidator(Validator):
         judge = next((c for c in report.checks if c.metric == "llm_judge"), None)
         try:
             (vdir / "validation.json").write_text(
-                json.dumps(report.to_dict(), indent=2)
+                json.dumps(report.to_dict(), indent=2), encoding="utf-8"
             )
         except OSError:
             pass

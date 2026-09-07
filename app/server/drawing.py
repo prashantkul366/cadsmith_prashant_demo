@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import subprocess
 import sys
@@ -87,12 +88,14 @@ def _project(step_path: Path, timeout: int = 120) -> dict[str, str]:
     """Export one SVG per view. Returns {view name: svg body}."""
     work = Path(tempfile.mkdtemp(prefix="cadsmith_drawing_"))
     script = work / "project.py"
-    script.write_text(_PROJECT_SCRIPT)
+    script.write_text(_PROJECT_SCRIPT, encoding="utf-8")
 
     spec = {name: list(direction) for name, direction in PROJECTIONS.items()}
     result = subprocess.run(
         [sys.executable, str(script), str(step_path), str(work), json.dumps(spec)],
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=timeout,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     if "__DRAWING__" not in result.stdout:
         raise RuntimeError(
@@ -101,7 +104,7 @@ def _project(step_path: Path, timeout: int = 120) -> dict[str, str]:
     written = json.loads(result.stdout.split("__DRAWING__")[1].strip())
     bodies: dict[str, str] = {}
     for name, path in written.items():
-        match = _SVG_BODY.search(Path(path).read_text())
+        match = _SVG_BODY.search(Path(path).read_text(encoding="utf-8"))
         if match:
             bodies[name] = match.group(1)
     return bodies
@@ -268,10 +271,10 @@ def ensure_sheet(
     geometry = {}
     if geometry_file.exists():
         try:
-            geometry = json.loads(geometry_file.read_text())
+            geometry = json.loads(geometry_file.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             pass
 
     sheet = build_sheet(step, geometry, prompt, job_id, version)
-    target.write_text(sheet)
+    target.write_text(sheet, encoding="utf-8")
     return target

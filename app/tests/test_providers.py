@@ -172,7 +172,7 @@ def main() -> int:
     check("job converged", job.converged, job.error or "")
     check("real geometry was built",
           (job.directory / "v0" / "model.stl").exists())
-    geometry = json.loads((job.directory / "v0" / "geometry.json").read_text())
+    geometry = json.loads((job.directory / "v0" / "geometry.json").read_text(encoding="utf-8"))
     check("the kernel measured the washer",
           abs(geometry["bounding_box"]["xlen"] - 20.0) < 1e-6
           and geometry["is_valid"])

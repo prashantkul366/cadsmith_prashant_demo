@@ -140,7 +140,7 @@ def main() -> int:
           and versions[0].data["passed"] is False
           and versions[1].data["passed"] is True)
     check("events persisted to disk", (job_dir / "events.jsonl").exists()
-          and len((job_dir / "events.jsonl").read_text().splitlines()) == len(events))
+          and len((job_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()) == len(events))
 
     print("\nArtifact bundles")
     for n in (0, 1):

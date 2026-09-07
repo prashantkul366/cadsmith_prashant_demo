@@ -77,7 +77,7 @@ class EventSink:
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             # Truncate any log from a previous run of the same job id.
-            self.path.write_text("")
+            self.path.write_text("", encoding="utf-8")
 
     def emit(self, phase: str, status: str, message: str = "", **data: Any) -> Event:
         with self._lock:
@@ -93,7 +93,7 @@ class EventSink:
             if self.path:
                 # Best effort: a disk problem must never kill a running job.
                 try:
-                    with self.path.open("a") as f:
+                    with self.path.open("a", encoding="utf-8") as f:
                         f.write(json.dumps(event.to_dict()) + "\n")
                 except OSError:
                     pass
@@ -128,7 +128,7 @@ class EventSink:
         """
         sink = cls(path=None)
         if path.exists():
-            for line in path.read_text().splitlines():
+            for line in path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
                 try:

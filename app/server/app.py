@@ -206,7 +206,7 @@ def examples() -> JSONResponse:
         path = DATA_DIR / filename
         if not path.exists():
             continue
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             try:
@@ -478,7 +478,7 @@ def index() -> HTMLResponse:
     page = WEB_DIR / "index.html"
     if not page.exists():
         raise HTTPException(status_code=500, detail="Frontend is not built.")
-    return HTMLResponse(page.read_text())
+    return HTMLResponse(page.read_text(encoding="utf-8"))
 
 
 if WEB_DIR.exists():
