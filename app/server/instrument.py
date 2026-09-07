@@ -49,6 +49,7 @@ from .events import (
     PHASE_PLAN,
     PHASE_REFINE,
     PHASE_RENDER,
+    PHASE_THINKING,
     PHASE_VERSION,
     STATUS_FAILED,
     STATUS_INFO,
@@ -83,6 +84,9 @@ class RunContext:
     #: Which model backend this job runs against. ``None`` means the stock
     #: Anthropic client, exactly as the published pipeline uses.
     llm: Optional[LLMConfig] = None
+    #: Which agent is currently running, so streamed reasoning can be
+    #: attributed to the step that produced it.
+    agent: str = ""
     #: Provenance stamped onto the next published version.
     source: str = "pipeline"
     method: str = ""
@@ -156,6 +160,7 @@ def install_agent_hooks() -> None:
                 payload = describe_in(*args, **kwargs)
             except Exception:
                 payload = {}
+            ctx.agent = phase
             ctx.emit(phase, STATUS_STARTED, **payload)
             started = time.time()
             try:
@@ -221,6 +226,7 @@ def install_agent_hooks() -> None:
             return _orig_evaluate(*args, **kwargs)
         use_vision = bool(kwargs.get("stl_path") or (len(args) > 3 and args[3]))
         ctx.judge_error = None
+        ctx.agent = PHASE_JUDGE
         ctx.emit(PHASE_JUDGE, STATUS_STARTED, vision=use_vision)
         started = time.time()
         try:
@@ -257,9 +263,23 @@ def install_agent_hooks() -> None:
         ctx = _current.get()
         if ctx is None or ctx.llm is None:
             return _orig_get_client()
+        def _on_delta(kind: str, text: str) -> None:
+            # kind is "thinking:<role>" or "text:<role>" - see ClaudeClient.
+            stream, _, role = kind.partition(":")
+            ctx.emit(
+                PHASE_THINKING,
+                STATUS_INFO,
+                text,
+                stream=stream,
+                role=role or "generation",
+                agent=ctx.agent or "",
+                iteration=ctx.iteration,
+            )
+
         return build_client(
             ctx.llm,
             on_note=lambda message: ctx.emit(PHASE_LOG, STATUS_INFO, message),
+            on_delta=_on_delta,
         )
 
     _get_client._cadsmith_wrapped = True  # type: ignore[attr-defined]

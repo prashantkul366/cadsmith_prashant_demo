@@ -227,18 +227,43 @@ def main() -> int:
           str(notes))
     FakeOpenAIServer.reject_images = False
 
-    print("\nThe default provider is left alone")
+    print("\nThe Claude backends")
     providers.clear_session_keys()
     default = providers.resolve("anthropic")
-    check("still the models the pipeline itself uses",
-          default.generation_model == "claude-sonnet-4-5-20250929"
-          and default.judge_model == "claude-opus-4-20250514",
+    check("a weaker coder paired with a stronger judge",
+          default.generation_model == "claude-sonnet-5"
+          and default.judge_model == "claude-opus-5",
           f"{default.generation_model} / {default.judge_model}")
-    check("and still the real SDK client",
-          type(providers.build_client(
-              LLMConfig(provider="anthropic", kind="anthropic", base_url="",
-                        api_key="x", generation_model="m", judge_model="m")
-          )).__module__.startswith("anthropic"))
+
+    claude = providers.build_client(
+        LLMConfig(provider="anthropic", kind="anthropic", base_url="",
+                  api_key="x", generation_model="gen", judge_model="jud"))
+    check("wrapped in the streaming client, not the bare SDK",
+          isinstance(claude, providers.ClaudeClient))
+    check("which still presents the SDK surface",
+          hasattr(claude.messages, "create"))
+
+    # The pipeline hardcodes a model id at each call site; the wrapper must
+    # substitute the configured one, keyed on the agent's own system prompt.
+    check("generation prompts route to the generation model",
+          providers.OpenAICompatibleClient._role_for(
+              "You are the Coder Agent") == "generation")
+    check("the Judge's prompt routes to the judge model",
+          providers.OpenAICompatibleClient._role_for(
+              agents.VALIDATOR_SYSTEM) == "judge")
+
+    print("\nBedrock")
+    bedrock = providers.resolve("bedrock")
+    check("model ids carry the anthropic. prefix Bedrock requires",
+          bedrock.generation_model.startswith("anthropic.")
+          and bedrock.judge_model.startswith("anthropic."),
+          f"{bedrock.generation_model} / {bedrock.judge_model}")
+    check("needs no API key - it uses the AWS credential chain",
+          providers.BUILTIN["bedrock"].needs_key is False)
+    check("and says so plainly when credentials are absent",
+          any("AWS credentials" in p for p in providers.problems(bedrock))
+          or providers._aws_identity() != "",
+          "; ".join(providers.problems(bedrock)) or "credentials present")
 
     server.shutdown()
     shutil.rmtree(runs, ignore_errors=True)

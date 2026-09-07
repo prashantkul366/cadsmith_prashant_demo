@@ -65,11 +65,24 @@ BUILTIN: dict[str, ProviderSpec] = {
         label="Anthropic",
         kind="anthropic",
         env_key="ANTHROPIC_API_KEY",
-        # The models autofab/agents.py itself uses: Sonnet to generate,
-        # Opus to judge.
-        default_generation_model="claude-sonnet-4-5-20250929",
-        default_judge_model="claude-opus-4-20250514",
+        # A weaker coder with a stronger judge, as the pipeline intends, so
+        # the Judge is not grading its own homework.
+        default_generation_model="claude-sonnet-5",
+        default_judge_model="claude-opus-5",
         hint="Set ANTHROPIC_API_KEY in .env",
+    ),
+    "bedrock": ProviderSpec(
+        id="bedrock",
+        label="Claude on Amazon Bedrock",
+        kind="bedrock",
+        # No API key: Bedrock authenticates with the ambient AWS credential
+        # chain - an SSO profile, an instance role, or AWS_* env vars.
+        needs_key=False,
+        env_base_url="AWS_REGION",
+        default_generation_model="anthropic.claude-sonnet-5",
+        default_judge_model="anthropic.claude-opus-5",
+        hint="Sign in with `aws sso login`, or set AWS_ACCESS_KEY_ID / "
+             "AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN and AWS_REGION",
     ),
     "openai": ProviderSpec(
         id="openai",
@@ -212,11 +225,61 @@ def problems(config: LLMConfig) -> list[str]:
             f"No API key for {spec.label}. {spec.hint}, or paste one in the app.")
     if spec.kind == "openai_compatible" and not config.base_url:
         issues.append(f"No base URL for {spec.label}. {spec.hint}.")
+    if spec.kind == "bedrock" and not _aws_identity():
+        issues.append(
+            f"No usable AWS credentials for {spec.label}. {spec.hint}.")
     if not config.generation_model:
         issues.append(f"No generation model chosen for {spec.label}.")
     if not config.judge_model:
         issues.append(f"No judge model chosen for {spec.label}.")
     return issues
+
+
+_aws_cache: tuple[float, str] = (0.0, "")
+_AWS_TTL = 30.0
+
+
+def _aws_identity(timeout: float = 4.0) -> str:
+    """The caller ARN if AWS credentials resolve, else "".
+
+    Short-lived portal credentials expire mid-session, so this is checked live
+    (briefly cached) rather than assumed from the presence of env vars.
+    """
+    global _aws_cache
+    now = time.monotonic()
+    if now - _aws_cache[0] < _AWS_TTL:
+        return _aws_cache[1]
+    arn = ""
+    try:
+        import boto3
+        from botocore.config import Config
+
+        cfg = Config(connect_timeout=timeout, read_timeout=timeout,
+                     retries={"max_attempts": 1})
+        region = os.getenv("AWS_REGION") or "us-east-1"
+        arn = boto3.client("sts", region_name=region,
+                           config=cfg).get_caller_identity()["Arn"]
+    except Exception:
+        arn = ""
+    _aws_cache = (now, arn)
+    return arn
+
+
+def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
+    """Anthropic models this account can actually invoke in this region."""
+    try:
+        import boto3
+        from botocore.config import Config
+
+        cfg = Config(connect_timeout=timeout, read_timeout=timeout,
+                     retries={"max_attempts": 1})
+        region = os.getenv("AWS_REGION") or "us-east-1"
+        client = boto3.client("bedrock", region_name=region, config=cfg)
+        summaries = client.list_foundation_models().get("modelSummaries", [])
+    except Exception:
+        return []
+    return sorted({m["modelId"] for m in summaries
+                   if "anthropic" in m.get("modelId", "").lower()})
 
 
 def list_models(provider_id: str, timeout: float = 6.0) -> list[str]:
@@ -228,6 +291,8 @@ def list_models(provider_id: str, timeout: float = 6.0) -> list[str]:
     spec = BUILTIN.get(provider_id)
     if spec is None:
         return []
+    if spec.kind == "bedrock":
+        return _list_bedrock_models(timeout)
 
     base_url = _base_url_for(spec)
     api_key = _api_key_for(spec)
@@ -564,18 +629,212 @@ class OpenAICompatibleClient:
                 pass
 
 
+class _Coalescer:
+    """Batch streamed deltas so the event log stays a log, not a token dump.
+
+    A 4000-token reply would otherwise become 4000 SSE frames, all of which the
+    sink keeps in memory and mirrors to events.jsonl. Flushing on a short
+    interval or a size threshold keeps the UI smooth while bounding the stream.
+    """
+
+    def __init__(self, sink, interval: float = 0.12, max_chars: int = 240):
+        self._sink = sink
+        self._interval = interval
+        self._max_chars = max_chars
+        self._buf: dict[str, list[str]] = {}
+        self._last: dict[str, float] = {}
+
+    def add(self, kind: str, text: str) -> None:
+        if not text:
+            return
+        buf = self._buf.setdefault(kind, [])
+        buf.append(text)
+        size = sum(len(x) for x in buf)
+        now = time.time()
+        if size >= self._max_chars or now - self._last.get(kind, 0.0) >= self._interval:
+            self.flush(kind)
+
+    def flush(self, kind: str = "") -> None:
+        for k in ([kind] if kind else list(self._buf)):
+            buf = self._buf.get(k)
+            if buf:
+                self._sink(k, "".join(buf))
+                self._buf[k] = []
+                self._last[k] = time.time()
+
+
+def _build_sdk_client(config: "LLMConfig"):
+    """The Anthropic SDK client for this configuration.
+
+    Bedrock and the first-party API expose the same Messages surface, so only
+    construction differs: Bedrock authenticates with the ambient AWS credential
+    chain and takes a region, the direct API takes a key.
+    """
+    if config.kind == "bedrock":
+        from anthropic import AnthropicBedrockMantle
+
+        region = config.base_url or os.getenv("AWS_REGION") or "us-east-1"
+        kwargs: dict[str, Any] = {"aws_region": region}
+        profile = (os.getenv("AWS_PROFILE") or "").strip()
+        # A placeholder copied out of documentation is not a profile name.
+        if profile and not (profile.startswith("<") and profile.endswith(">")):
+            kwargs["aws_profile"] = profile
+        return AnthropicBedrockMantle(**kwargs)
+
+    import anthropic
+
+    return anthropic.Anthropic(api_key=config.api_key)
+
+
+class ClaudeClient:
+    """Anthropic client surface that streams, and surfaces real reasoning.
+
+    Serves both the first-party API and Bedrock, which differ only in how the
+    SDK client is constructed.
+
+    Two things it adds over handing back the raw SDK object:
+
+    * **Role routing.** ``autofab.agents`` hardcodes a model id at each call
+      site. Like ``OpenAICompatibleClient``, this picks the generation or judge
+      model from the session's configuration, keyed on the agent's own system
+      prompt, so the app's model pickers apply on this path too.
+    * **Streaming with thinking.** Current Claude models think adaptively;
+      asking for ``display="summarized"`` returns that reasoning as it happens.
+      Streaming it out through ``on_delta`` is what lets the UI show the model
+      working rather than a spinner and a stage name.
+
+    Callers see the same non-streaming ``_Response`` the rest of the app
+    expects, so nothing downstream changes.
+    """
+
+    #: Thinking shares the output budget, so a 4096 ceiling that was ample for
+    #: a bare script can truncate one that reasons first.
+    MIN_TOKENS_WITH_THINKING = int(os.getenv("CADSMITH_MIN_THINKING_TOKENS", "8192"))
+
+    def __init__(self, config: "LLMConfig", on_note=None, on_delta=None):
+        self.config = config
+        self._on_note = on_note
+        self._client = _build_sdk_client(config)
+        self._thinking_ok = True   # cleared if the model rejects the parameter
+        self._coalescer = _Coalescer(
+            lambda kind, text: on_delta and on_delta(kind, text))
+
+    @property
+    def messages(self) -> "ClaudeClient":
+        return self
+
+    def create(self, *, model: str = "", max_tokens: int = 4096,
+               system: str = "", messages: Optional[list] = None,
+               **_: Any) -> _Response:
+        role = OpenAICompatibleClient._role_for(system)
+        target = (self.config.judge_model if role == "judge"
+                  else self.config.generation_model)
+        payload = list(messages or [])
+        if role == "judge" and not self.config.judge_vision:
+            payload = _strip_anthropic_images(payload)
+
+        budget = max_tokens
+        if self._thinking_ok:
+            budget = max(budget, self.MIN_TOKENS_WITH_THINKING)
+
+        try:
+            return self._stream(target, system, payload, budget, role)
+        except Exception as exc:
+            if self._thinking_ok and _THINKING_UNSUPPORTED.search(str(exc)):
+                # Older models on Bedrock (Claude 3, some 4.x) reject the
+                # parameter outright. Fall back rather than fail the run.
+                self._thinking_ok = False
+                self._note(f"{target} does not support streamed reasoning; "
+                           f"continuing without it.")
+                return self._stream(target, system, payload, max_tokens, role)
+            raise
+
+    # -- internals ----------------------------------------------------------
+
+    def _stream(self, target: str, system: str, messages: list,
+                max_tokens: int, role: str) -> _Response:
+        kwargs: dict[str, Any] = {
+            "model": target,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        }
+        if system:
+            kwargs["system"] = system
+        if self._thinking_ok:
+            kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+
+        thinking_parts: list[str] = []
+        with self._client.messages.stream(**kwargs) as stream:
+            for event in stream:
+                if getattr(event, "type", "") != "content_block_delta":
+                    continue
+                delta = getattr(event, "delta", None)
+                kind = getattr(delta, "type", "")
+                if kind == "thinking_delta":
+                    piece = getattr(delta, "thinking", "") or ""
+                    thinking_parts.append(piece)
+                    self._coalescer.add(f"thinking:{role}", piece)
+                elif kind == "text_delta":
+                    self._coalescer.add(f"text:{role}", getattr(delta, "text", "") or "")
+            final = stream.get_final_message()
+        self._coalescer.flush()
+
+        if getattr(final, "stop_reason", None) == "refusal":
+            detail = getattr(final, "stop_details", None)
+            raise RuntimeError(
+                f"{target} declined the request "
+                f"(category={getattr(detail, 'category', None)})")
+
+        text = "".join(
+            b.text for b in final.content if getattr(b, "type", "") == "text")
+        if getattr(final, "stop_reason", None) == "max_tokens":
+            self._note(f"{target} hit max_tokens={max_tokens}; the reply is "
+                       f"truncated.")
+        if _JSON_EXPECTED in system:
+            text = repair_json(text)
+
+        usage = _Usage(
+            input_tokens=getattr(final.usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(final.usage, "output_tokens", 0) or 0,
+        )
+        return _Response(content=[_Block(text=text)], usage=usage)
+
+    def _note(self, message: str) -> None:
+        if self._on_note:
+            self._on_note(message)
+
+
+def _strip_anthropic_images(messages: list) -> list:
+    """Drop image blocks from Anthropic-shaped content."""
+    out = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, list):
+            kept = [b for b in content
+                    if not (isinstance(b, dict) and b.get("type") == "image")]
+            out.append({**m, "content": kept})
+        else:
+            out.append(m)
+    return out
+
+
+#: Model rejected the thinking parameter - the message differs by platform.
+_THINKING_UNSUPPORTED = re.compile(
+    r"thinking|extended.?thinking|budget_tokens|unsupported.*param",
+    re.IGNORECASE)
+
+
 class _VisionUnsupported(RuntimeError):
     """The model refused an image; retry without one."""
 
 
-def build_client(config: LLMConfig, on_note=None):
+def build_client(config: LLMConfig, on_note=None, on_delta=None):
     """Return a client for this configuration.
 
-    For Anthropic that is the real SDK object, so the default path behaves
-    exactly as the published pipeline does.
+    ``on_delta(kind, text)`` receives streamed fragments as they arrive, where
+    kind is "thinking:<role>" or "text:<role>". Only the Claude backends
+    produce them; the OpenAI-compatible adapter is unchanged.
     """
-    if config.kind == "anthropic":
-        import anthropic
-
-        return anthropic.Anthropic(api_key=config.api_key)
+    if config.kind in ("anthropic", "bedrock"):
+        return ClaudeClient(config, on_note=on_note, on_delta=on_delta)
     return OpenAICompatibleClient(config, on_note=on_note)
