@@ -24,7 +24,7 @@ def _probe(client, model: str, thinking) -> dict:
     """One streamed call. Returns what came back, or the error."""
     kwargs = {
         "model": model,
-        "max_tokens": 4096,
+        "max_tokens": 24000,
         "messages": [{"role": "user", "content": SWEEP_PROMPT}],
     }
     if thinking is not None:

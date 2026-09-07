@@ -707,9 +707,18 @@ class ClaudeClient:
     expects, so nothing downstream changes.
     """
 
-    #: Thinking shares the output budget, so a 4096 ceiling that was ample for
-    #: a bare script can truncate one that reasons first.
-    MIN_TOKENS_WITH_THINKING = int(os.getenv("CADSMITH_MIN_THINKING_TOKENS", "8192"))
+    #: Thinking shares the output budget with the answer, and it is not a small
+    #: share: measured on Bedrock, Opus 5 spent an entire 4096-token ceiling
+    #: reasoning and emitted no answer at all, and Sonnet 5 did the same. A
+    #: ceiling sized for the script alone does not merely truncate the reply -
+    #: it can consume the whole budget before the reply starts.
+    MIN_TOKENS_WITH_THINKING = int(os.getenv("CADSMITH_MIN_THINKING_TOKENS", "24000"))
+
+    #: Effort governs how deeply the model reasons, and therefore how much of
+    #: the budget thinking takes. Left unset the model decides; set
+    #: CADSMITH_EFFORT to low or medium to keep reasoning proportionate on
+    #: simple parts, or high/max when correctness matters more than tokens.
+    EFFORT = (os.getenv("CADSMITH_EFFORT") or "").strip().lower()
 
     def __init__(self, config: "LLMConfig", on_note=None, on_delta=None):
         self.config = config
@@ -761,7 +770,12 @@ class ClaudeClient:
         if system:
             kwargs["system"] = system
         if self._thinking_ok:
+            # display="summarized" is what makes the reasoning readable: the
+            # default ("omitted") still returns a thinking block, but with an
+            # empty string in it.
             kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+            if self.EFFORT:
+                kwargs["output_config"] = {"effort": self.EFFORT}
 
         thinking_parts: list[str] = []
         with self._client.messages.stream(**kwargs) as stream:
@@ -788,8 +802,15 @@ class ClaudeClient:
         text = "".join(
             b.text for b in final.content if getattr(b, "type", "") == "text")
         if getattr(final, "stop_reason", None) == "max_tokens":
-            self._note(f"{target} hit max_tokens={max_tokens}; the reply is "
-                       f"truncated.")
+            if self._thinking_ok and not text.strip():
+                self._note(
+                    f"{target} used the whole {max_tokens}-token budget "
+                    f"reasoning and produced no answer. Raise "
+                    f"CADSMITH_MIN_THINKING_TOKENS, or set CADSMITH_EFFORT=low "
+                    f"to make it think less.")
+            else:
+                self._note(f"{target} hit max_tokens={max_tokens}; the reply "
+                           f"is truncated.")
         if _JSON_EXPECTED in system:
             text = repair_json(text)
 
