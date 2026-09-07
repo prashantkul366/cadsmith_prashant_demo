@@ -40,9 +40,23 @@ if (-not $python) {
 }
 Write-Host "Using $python" -ForegroundColor DarkGray
 
-& $python -c "import cadquery" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "CadQuery is not installed in $python" -ForegroundColor Red
+# Probe the interpreter, and report what actually went wrong.
+#
+# `& $python -c "..." 2>$null` is not reliable here: with
+# $ErrorActionPreference = "Stop", redirecting a native command's stderr can
+# leave $LASTEXITCODE not reflecting the real result, so a perfectly good
+# install was reported as missing. Capture the output instead, and relax the
+# preference for the duration so stderr cannot become a terminating error.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$probe = & $python -c "import cadquery, vtk; print(cadquery.__version__)" 2>&1
+$probeCode = $LASTEXITCODE
+$ErrorActionPreference = $prevEAP
+
+if ($probeCode -ne 0) {
+    Write-Host "Could not import CadQuery and VTK with $python" -ForegroundColor Red
+    Write-Host ($probe | Out-String).TrimEnd()
+    Write-Host ""
     Write-Host "  .venv\Scripts\python -m pip install -r app\requirements-app.txt"
     exit 1
 }

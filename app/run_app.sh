@@ -31,8 +31,10 @@ if [ -z "${PYTHON:-}" ] || [ ! -x "$PYTHON" ]; then
   exit 1
 fi
 
-if ! "$PYTHON" -c "import cadquery" 2>/dev/null; then
-  echo "CadQuery is not installed in $PYTHON" >&2
+if ! probe=$("$PYTHON" -c "import cadquery, vtk; print(cadquery.__version__)" 2>&1); then
+  echo "Could not import CadQuery and VTK with $PYTHON" >&2
+  echo "$probe" >&2
+  echo >&2
   echo "  .venv/bin/pip install -r app/requirements-app.txt" >&2
   exit 1
 fi
