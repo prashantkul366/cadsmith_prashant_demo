@@ -216,20 +216,21 @@
 
       <div class="rsec code" id="codeSec">
         <div class="phead">
-          <h2 id="codeHeading" data-i18n="code.heading">Generated CadQuery</h2>
+          <h2 id="codeHeading" data-i18n="params.heading">Part parameters</h2>
           <div class="spacer" style="flex:1"></div>
-          <!-- Two views of the same script. Parameters is the one someone who
-               does not read Python can work in; Code is what it is doing. -->
+          <!-- Two views of the same script. Parameters opens first: it is
+               the one someone who does not read Python can work in, and the
+               source is one click away for anyone who wants it. -->
           <div class="seg" id="codeViews" role="tablist">
-            <button class="segb on" id="viewCodeBtn" role="tab"
-                    aria-selected="true" data-i18n="code.view.code">Code</button>
-            <button class="segb" id="viewParamsBtn" role="tab"
-                    aria-selected="false" data-i18n="code.view.params">Parameters</button>
+            <button class="segb" id="viewCodeBtn" role="tab"
+                    aria-selected="false" data-i18n="code.view.code">Code</button>
+            <button class="segb on" id="viewParamsBtn" role="tab"
+                    aria-selected="true" data-i18n="code.view.params">Parameters</button>
           </div>
           <span class="eyebrow" id="codeStat">— — —</span>
         </div>
 
-        <div class="codewrap" id="codeView">
+        <div class="codewrap" id="codeView" hidden>
           <div class="code-scroll" id="codeScroll">
             <div class="code-inner">
               <pre class="hl" id="hl"></pre>
@@ -237,7 +238,7 @@
           </div>
         </div>
 
-        <div class="codewrap" id="paramsView" hidden>
+        <div class="codewrap" id="paramsView">
           <div class="params-body" id="paramsBody"></div>
         </div>
 

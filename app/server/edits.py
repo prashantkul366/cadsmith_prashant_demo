@@ -352,8 +352,11 @@ def describe(changes: list[Change]) -> str:
 
 #: Names that are a count of something rather than a measurement of it.
 #: Wider than ``_COUNT_TOKENS``, which exists to disambiguate an instruction;
-#: this one only has to recognise a whole number.
-_COUNTING = _COUNT_TOKENS | {"sides", "segments", "steps", "starts", "spokes"}
+#: this one only has to recognise something that is not a length.
+_COUNTING = _COUNT_TOKENS | {
+    "sides", "segments", "steps", "starts", "spokes", "coil", "coils",
+    "turns", "flutes", "lobes",
+}
 
 #: Names measured in degrees. Anything else with a length-like name is read
 #: as millimetres, which is what the kernel reports and what every dimension
@@ -419,12 +422,12 @@ def describe_parameters(code: str) -> list[dict]:
     """
     described = []
     for parameter in parameters(code).values():
+        # What the name means and how the number is written are separate
+        # questions. A spring's `active_coils = 8.0` is a count whatever its
+        # spelling - labelling it 8 mm is simply wrong - while whether the
+        # patcher writes 12 or 12.0 stays with is_integer, which is what
+        # apply_changes honours.
         kind = _kind(parameter.name)
-        if kind == "count":
-            # A count that is written 4.0 is still a count, but rewriting it
-            # as an integer would change the line's shape; is_integer is what
-            # apply_changes honours, so the control follows it.
-            kind = "count" if parameter.is_integer else "length"
         low, high, step = _range_for(kind, parameter.value)
         # A value already outside the computed range is the range's problem,
         # not the value's: widen rather than clamp, or the slider would open

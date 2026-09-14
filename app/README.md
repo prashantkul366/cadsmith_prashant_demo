@@ -209,7 +209,9 @@ guessed — "make the thickness 12mm" against a script with both
 arbitrarily.
 
 **Adjust it without reading the code.** The code panel flips between **Code**
-and **Parameters**. Parameters puts a slider and a number field on every
+and **Parameters**, and opens on Parameters: the generated source is the more
+striking thing to open on, but it is not what most people came to change, and
+it is one click away. Parameters puts a slider and a number field on every
 dimension the script declares — read out of the source by the server, so a
 control only appears for a number the patcher can actually change. Dragging
 one rewrites the line in the Code view as it moves; letting go rebuilds the
@@ -222,10 +224,15 @@ It is not a simplified view of the part. It reads the same source the Code
 view shows, patches it with the same function a natural-language edit uses,
 and rebuilds with the same kernel — a version from a slider is a version like
 any other, and its Validation panel says the same thing an edit's does. The
-choice of view is remembered, so someone who works in the controls does not
-have to say so again for every part. Parameter labels stay in English in
-either language: they are the script's own identifiers, and the unit beside
-them is a symbol in both.
+choice of view is remembered, so someone who prefers the source does not have
+to ask for it again every visit. Parameter labels stay in English in either
+language: they are the script's own identifiers, and the unit beside them is
+a symbol in both.
+
+What each control is depends only on its name — a count, an angle, or a
+length in mm — and that is separate from how the number is written, so a
+spring's `active_coils = 8.0` is a count of coils rather than 8 mm of
+something, and the patcher still keeps it a float.
 
 **Drawing.** Front, top, right and isometric views projected from the exported
 STEP solid, with hidden lines resolved and all four at a common scale.
@@ -469,7 +476,8 @@ deterministic.
 .venv/bin/python -m app.tests.ui_lang_check         # the language switch
 .venv/bin/python -m app.tests.ui_prompts_check      # prompts nobody planned for
 .venv/bin/python -m app.tests.ui_stress_check       # clicking during a run
-.venv/bin/python -m app.tests.ui_params_check       # the parameter controls,
+.venv/bin/python -m app.tests.ui_params_check       # the parameter controls
+                                                    # over every part family,
                                                     # and the right column
 ```
 

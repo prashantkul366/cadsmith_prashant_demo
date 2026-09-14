@@ -58,8 +58,10 @@ def js_errors() -> list[str]:
 def build(page, prompt: str) -> None:
     page.fill("#prompt", prompt)
     page.click("#genBtn")
-    page.wait_for_function("() => S.busy === false", timeout=180000)
-    page.wait_for_timeout(1000)
+    page.wait_for_function(
+        "() => S.busy === false && S.paramLoading === false && S.params.length",
+        timeout=180000)
+    page.wait_for_timeout(400)
 
 
 def rows(page) -> list[dict]:
@@ -83,6 +85,48 @@ def code_line(page, name: str) -> str:
 
 def zlen(page):
     return page.evaluate("Viewer.extents ? Viewer.extents.z : null")
+
+
+# One control per family: the parameter to move, the unit it should carry,
+# and what the kernel should measure afterwards.
+#
+# `measure` is "xlen", "zlen" or "volume" - whichever the parameter actually
+# governs. A spring's coil count is the reason that is a field and not an
+# assumption: at a fixed free length, more coils is more wire, not a taller
+# spring, so the bounding box is unchanged and the volume is not.
+#
+# `becomes` computes the expected value from the part's own geometry where
+# there is a rule worth stating; None means only that it has to change.
+FAMILIES = [
+    ("a 20 tooth spur gear, module 2", "teeth_number", 28,
+     {"unit": "", "measure": "xlen", "becomes": lambda v: 2 * (v + 2)}),
+    ("an M8 flat washer", "outer_diameter", 22,
+     {"unit": "mm", "measure": "xlen", "becomes": lambda v: v}),
+    ("a 6203 bearing", "outer_diameter", 45,
+     {"unit": "mm", "measure": "xlen", "becomes": lambda v: v}),
+    ("an M8x30 socket head cap screw", "length", 45,
+     {"unit": "mm", "measure": "zlen", "becomes": None}),
+    ("a GT2 timing pulley with 20 teeth", "face_width", 12,
+     {"unit": "mm", "measure": "zlen", "becomes": lambda v: v}),
+    ("a compression spring, 2mm wire, 20mm od, 50mm long", "active_coils", 12,
+     {"unit": "", "measure": "volume", "becomes": None}),
+    ("a 4mm dowel pin, 20mm long", "length", 28,
+     {"unit": "mm", "measure": "zlen", "becomes": lambda v: v}),
+]
+
+
+def measured(page, what: str):
+    """What the kernel reported for the version on screen.
+
+    The kernel's own numbers rather than the viewer's: the mesh is a
+    triangulation of the solid, and `volume` is not on it at all.
+    """
+    return page.evaluate("""what => {
+        const v = S.versions[S.selected];
+        const g = (v && v.geometry) || {};
+        return what === 'volume' ? g.volume
+                                 : ((g.bounding_box || {})[what]);
+    }""", what)
 
 
 def main() -> int:
@@ -115,9 +159,12 @@ def main() -> int:
             page.wait_for_timeout(350)
             state = page.evaluate("""() => {
                 const split = document.querySelector('.rsplit');
+                // Whichever of the code panel's two views is showing.
+                const shown = document.getElementById('codeView').hidden
+                  ? 'paramsBody' : 'codeScroll';
                 const body = id => document.getElementById(id).clientHeight;
                 return {
-                  crushed: ['thinkBody', 'planBody', 'codeScroll', 'valBody']
+                  crushed: ['thinkBody', 'planBody', shown, 'valBody']
                     .filter(id => body(id) < 40),
                   scrolls: split.scrollHeight > split.clientHeight + 1,
                   fits: split.scrollHeight <= split.clientHeight + 1,
@@ -134,7 +181,9 @@ def main() -> int:
         # A body with more content than height must be scrollable, not clipped.
         build(page, "an M8 flat washer")
         overflow = page.evaluate("""() =>
-            ['thinkBody', 'planBody', 'codeScroll', 'valBody']
+            ['thinkBody', 'planBody',
+             document.getElementById('codeView').hidden ? 'paramsBody' : 'codeScroll',
+             'valBody']
               .filter(id => {
                 const el = document.getElementById(id);
                 return el.scrollHeight > el.clientHeight + 1
@@ -145,17 +194,23 @@ def main() -> int:
 
         # -----------------------------------------------------------------
         print("\nThe code panel flips between two views")
-        check("it opens on the code", not page.locator("#codeView").is_hidden()
-              and page.locator("#paramsView").is_hidden())
-        page.click("#viewParamsBtn")
-        page.wait_for_timeout(400)
-        check("Parameters shows the controls",
+        # Parameters first: the point of the default is that a part can be
+        # adjusted without anyone being told there is Python behind it.
+        check("it opens on the controls, not the source",
               page.locator("#codeView").is_hidden()
               and not page.locator("#paramsView").is_hidden())
-        check("and the panel renames itself",
+        check("and the panel is named for them",
               "arameter" in page.locator("#codeHeading").inner_text()
               or "パラメータ" in page.locator("#codeHeading").inner_text(),
               page.locator("#codeHeading").inner_text())
+        page.click("#viewCodeBtn")
+        page.wait_for_timeout(400)
+        check("Code shows the source, one click away",
+              not page.locator("#codeView").is_hidden()
+              and "cadquery" in page.locator("#codeScroll").inner_text().lower(),
+              page.locator("#codeScroll").inner_text().replace("\n", " ")[:50])
+        page.click("#viewParamsBtn")
+        page.wait_for_timeout(400)
 
         found = {r["name"]: r for r in rows(page)}
         check("every dimension the script declares has a control",
@@ -250,29 +305,74 @@ def main() -> int:
 
         # -----------------------------------------------------------------
         print("\nThe choice of view is remembered")
-        page.reload(wait_until="networkidle")
-        page.wait_for_timeout(1500)
-        check("a reload comes back to the Parameters view",
-              page.evaluate("S.paramView") == "params"
-              and not page.locator("#paramsView").is_hidden(),
-              page.evaluate("S.paramView"))
         page.click("#viewCodeBtn")
         page.wait_for_timeout(300)
         page.reload(wait_until="networkidle")
         page.wait_for_timeout(1500)
-        check("and switching back to Code is remembered too",
-              page.evaluate("S.paramView") == "code",
+        check("choosing Code survives a reload",
+              page.evaluate("S.paramView") == "code"
+              and not page.locator("#codeView").is_hidden(),
+              page.evaluate("S.paramView"))
+        page.click("#viewParamsBtn")
+        page.wait_for_timeout(300)
+        page.reload(wait_until="networkidle")
+        page.wait_for_timeout(1500)
+        check("and so does choosing Parameters again",
+              page.evaluate("S.paramView") == "params"
+              and not page.locator("#paramsView").is_hidden(),
               page.evaluate("S.paramView"))
 
         # -----------------------------------------------------------------
         print("\nA part with no declared dimensions says so")
         page.evaluate("() => { S.params = []; S.jobId = 'x'; "
-                      "S.versions = [{iteration: 0}]; }")
-        page.click("#viewParamsBtn")
+                      "S.versions = [{iteration: 0}]; renderParameters(); }")
         page.wait_for_timeout(300)
         check("it explains rather than showing an empty panel",
               len(page.locator("#paramsBody").inner_text().strip()) > 20,
               page.locator("#paramsBody").inner_text().replace("\n", " ")[:60])
+
+        # -----------------------------------------------------------------
+        # A shallow pass over every family, after the deep pass over one.
+        # Each part's script is written differently, and the controls are
+        # only as good as what they read out of it: this is what caught a
+        # spring's `active_coils = 8.0` being labelled "8 mm".
+        print("\nEvery family, one move each")
+        for prompt, name, target, expect in FAMILIES:
+            label = prompt[:32]
+            build(page, prompt)
+            row = page.locator(f'#paramsBody .prow[data-name="{name}"]')
+            if row.count() == 0:
+                check(f"{label}: {name} has a control", False,
+                      "controls are " + ", ".join(page.evaluate(
+                          """() => [...document.querySelectorAll('#paramsBody .prow')]
+                               .map(r => r.dataset.name)""")))
+                continue
+            unit = row.locator(".prow-unit").inner_text()
+            check(f"{label}: {name} is in {expect['unit'] or 'no unit'}",
+                  unit == expect["unit"], f"'{unit}'")
+
+            what = expect["measure"]
+            before = measured(page, what)
+            versions = page.evaluate("S.versions.length")
+            field = row.locator(".prow-num")
+            field.fill(str(target))
+            field.press("Enter")
+            page.wait_for_function(
+                "() => S.busy === false && S.paramLoading === false",
+                timeout=180000)
+            page.wait_for_timeout(600)
+            after = measured(page, what)
+            grew = page.evaluate("S.versions.length") == versions + 1
+
+            if expect["becomes"] is None:
+                ok = (grew and after is not None and before
+                      and abs(after - before) / before > 0.05)
+                detail = f"{what} {before:.1f} -> {after:.1f}"
+            else:
+                want = expect["becomes"](target)
+                ok = grew and after is not None and abs(after - want) < 0.6
+                detail = f"{what} = {after:.2f}, expected {want:g}"
+            check(f"{label}: moving {name} rebuilt it", ok, detail)
 
         print("\nConsole")
         real = js_errors()

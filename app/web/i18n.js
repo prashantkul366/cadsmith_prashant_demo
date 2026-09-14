@@ -151,6 +151,8 @@ const I18N = (function () {
       + "adjust here. The editor below can still ask for a change in words.",
       "このスクリプトは寸法を変数として宣言していないため、ここで調整できる"
       + "項目はありません。下の編集欄なら言葉で変更を依頼できます。"],
+    "params.loading": ["Reading the part\u2019s dimensions\u2026",
+                       "部品の寸法を読み込んでいます…"],
     "params.await": [
       "Generate a part and its dimensions appear here as controls.",
       "部品を生成すると、その寸法がここにコントロールとして表示されます。"],

@@ -170,6 +170,10 @@ def main() -> int:
         check("the viewer titles it a standard part",
               "Standard part" in page.locator("#mtitle").inner_text(),
               page.locator("#mtitle").inner_text())
+        # The panel opens on the parameter controls; the source is the other
+        # view of the same script.
+        page.click("#viewCodeBtn")
+        page.wait_for_timeout(300)
         code = page.locator("#codeScroll").inner_text()
         check("the code panel shows parametric source",
               "teeth_number" in code and "module" in code,

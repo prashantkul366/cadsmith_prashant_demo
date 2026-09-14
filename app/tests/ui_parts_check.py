@@ -187,6 +187,8 @@ def main() -> int:
                           abs(a - b) < 0.6 for a, b in zip(extents, bbox)),
                       f"{got} vs expected {list(bbox)}")
 
+                page.click("#viewCodeBtn")
+                page.wait_for_timeout(250)
                 code = page.locator("#codeScroll").inner_text()
                 expected = mock_parts.select(prompt)
                 check(f"{label}: routed to {part_id}",

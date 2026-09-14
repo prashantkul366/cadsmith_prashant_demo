@@ -119,6 +119,11 @@ def main() -> int:
                 if m.type == "error" else None)
         page.goto(args.url, wait_until="networkidle")
         page.wait_for_timeout(1500)
+        # The panel opens on the parameter controls. Everything below reads
+        # the source - it is how this check knows an edit reached the screen
+        # - so open that view and stay in it.
+        page.click("#viewCodeBtn")
+        page.wait_for_timeout(300)
 
         print("\nA part to work on")
         generate(page, "a 20 tooth spur gear, module 2")

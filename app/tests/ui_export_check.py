@@ -141,6 +141,8 @@ def main() -> int:
                   f"{triangles} triangles")
         if code:
             body = code.read_text(encoding="utf-8")
+            page.click("#viewCodeBtn")
+            page.wait_for_timeout(300)
             panel = page.locator("#codeScroll").inner_text()
             shown = next((line.strip() for line in panel.splitlines()
                           if line.strip().startswith("teeth_number")), "")

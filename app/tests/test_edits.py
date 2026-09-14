@@ -134,6 +134,23 @@ def main() -> int:
           described["hole_diameter"]["label"] == "Hole diameter",
           described["hole_diameter"]["label"])
 
+    # A spring writes `active_coils = 8.0`. What the name means and how the
+    # number is spelled are different questions, and reading the float as a
+    # length labelled it "8 mm".
+    floaty = {d["name"]: d for d in describe_parameters(
+        "active_coils = 8.0\nwire_diameter = 2.0\n")}
+    check("a count written as a float is still a count",
+          floaty["active_coils"]["kind"] == "count"
+          and floaty["active_coils"]["unit"] == ""
+          and floaty["active_coils"]["integer"] is False,
+          str(floaty["active_coils"]))
+    check("and the patcher keeps it a float",
+          "active_coils = 12.0" in apply_changes(
+              "active_coils = 8.0\n",
+              [Change(name="active_coils", old=8.0, new=12.0)]),
+          apply_changes("active_coils = 8.0\n",
+                        [Change(name="active_coils", old=8.0, new=12.0)]).strip())
+
     angled = {d["name"]: d for d in describe_parameters(
         "taper_angle = 12.0\npressure_angle = 20.0\n")}
     check("an angle is measured in degrees, near where it sits",

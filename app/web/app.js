@@ -39,12 +39,13 @@ const S = {
   spend: null,     // the server's own spend summary, ceiling included
   stage: null,     // {key, detail} - the pipeline strip, redrawn from state
   codeLines: undefined,
-  paramView: "code",  // which view of the script the code panel is showing
+  paramView: "params",  // which view of the script the code panel is showing
   params: [],         // the server's descriptors for the selected version
   paramDraft: {},     // name -> the value its control is holding right now
   paramBase: null,    // the version those descriptors were read from
   paramCode: "",      // and that version's source, which the drafts patch
   paramBusy: false,   // a rebuild is in flight; the controls are read-only
+  paramLoading: false,  // the source and its descriptors are still arriving
   editFromPanel: false,
 };
 
@@ -572,6 +573,12 @@ async function selectVersion(index, options) {
   S.selected = index;
   renderIterations();
 
+  // Started before the mesh rather than after it. The panel does not depend
+  // on the geometry, and a heavy STL - a swept helix runs to megabytes -
+  // otherwise holds the controls back for seconds while the part is already
+  // on screen, which reads as the panel having nothing to show.
+  const controls = loadParameters(version.iteration);
+
   try {
     const box = await Viewer.load(
       API.artifact(S.jobId, version.iteration, "model.stl"));
@@ -583,19 +590,7 @@ async function selectVersion(index, options) {
     warnToast(error.message);
   }
 
-  try {
-    const response = await fetch(
-      API.artifact(S.jobId, version.iteration, "code.py"));
-    if (response.ok) {
-      const code = await response.text();
-      // The source the parameter controls patch is this version's, so it is
-      // kept alongside what the Code view is showing rather than re-fetched.
-      S.paramCode = code;
-      setCode(code);
-    }
-  } catch (_) { /* code panel keeps its last content */ }
-
-  await loadParameters(version.iteration);
+  await controls;
 
   renderKernelFacts(version);
   renderValidation(version);
@@ -1518,6 +1513,15 @@ function renderParameters() {
       </div>`;
     return;
   }
+  if (S.paramLoading) {
+    // A part is on screen; its dimensions are on their way. Saying "generate
+    // a part" here would be telling someone to do what they just did.
+    body.innerHTML = `<div class="await">
+        <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+        <span>${esc(t("params.loading"))}</span>
+      </div>`;
+    return;
+  }
   if (!S.params.length) {
     body.innerHTML = `<div class="await"><span>${esc(t("params.none"))}</span></div>`;
     return;
@@ -1646,8 +1650,19 @@ async function loadParameters(iteration) {
   const previous = new Map(S.params.map(p => [p.name, p]));
   S.paramBase = iteration;
   S.paramDraft = {};
+  S.paramLoading = true;
+  if (S.paramView === "params") renderParameters();
+
   try {
-    const data = await API.parameters(S.jobId, iteration);
+    // Both at once, and both here: the controls patch the source, so a
+    // descriptor from one version against the code of another would write
+    // the right number onto the wrong line.
+    const [code, data] = await Promise.all([
+      fetch(API.artifact(S.jobId, iteration, "code.py"))
+        .then(r => (r.ok ? r.text() : null)),
+      API.parameters(S.jobId, iteration),
+    ]);
+    if (code !== null) { S.paramCode = code; setCode(code); }
     S.params = (data.parameters || []).map(p => {
       const before = previous.get(p.name);
       if (before && p.value >= before.min && p.value <= before.max
@@ -1660,6 +1675,8 @@ async function loadParameters(iteration) {
   } catch (_) {
     S.params = [];
   }
+
+  S.paramLoading = false;
   if (S.paramView === "params") renderParameters();
   setStat();
 }
@@ -1670,6 +1687,7 @@ function paramsReset() {
   S.paramDraft = {};
   S.paramCode = "";
   S.paramBase = null;
+  S.paramLoading = false;
   endParameterRebuild();
   if (S.paramView === "params") renderParameters();
   setStat();
@@ -1705,9 +1723,13 @@ function showParamView(which) {
   setStat();
 }
 
-/* Remembered, like the language switch. Someone who works in the controls
-   rather than the source should not have to say so again for every part, or
-   every visit. The default stays Code: that is what the app is showing. */
+/* Remembered, like the language switch, so someone who prefers one view does
+   not have to say so again for every part or every visit.
+
+   Parameters is the default. The generated source is the more striking thing
+   to open on, but it is not the thing most people came to change, and it is
+   one click away; opening on controls means a part can be adjusted without
+   ever being told there is Python behind it. */
 const PARAM_VIEW_KEY = "cadsmith.codeview";
 
 $("#viewCodeBtn").onclick = () => chooseParamView("code");
@@ -1720,7 +1742,7 @@ function chooseParamView(which) {
 
 try {
   const remembered = localStorage.getItem(PARAM_VIEW_KEY);
-  if (remembered === "params") showParamView("params");
+  if (remembered === "code") showParamView("code");
 } catch (e) { /* a private window has no storage; the default is fine */ }
 
 /* ═══════════════════════ drawing sheet ═══════════════════════ */
