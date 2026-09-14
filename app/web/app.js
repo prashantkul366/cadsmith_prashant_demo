@@ -1826,6 +1826,19 @@ $("#drawBtn").onclick = openDrawing;
 $("#back3d").onclick = () => $("#sheet").classList.remove("on");
 $("#expPng").onclick = exportDrawingPng;
 
+/* The DXF is the drawing; the SVG on screen is a picture of it. Its
+   dimensions are real DIMENSION entities, so whatever opens the file
+   re-measures the geometry rather than trusting a string. */
+$("#expDxf").onclick = () => {
+  const version = S.versions[S.selected];
+  if (!S.jobId || !version) { warnToast(t("draw.needpart")); return; }
+  const link = document.createElement("a");
+  link.href = API.artifact(S.jobId, version.iteration, "drawing.dxf");
+  link.download = `${S.jobId}_v${version.iteration}_drawing.dxf`;
+  link.click();
+  toast(t("draw.dxfstarted"));
+};
+
 /* ═══════════════════════ interface language ═══════════════════════ */
 
 /* Two buttons, each written in its own language, so someone who cannot read

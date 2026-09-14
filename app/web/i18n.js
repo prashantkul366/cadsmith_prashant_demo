@@ -370,6 +370,9 @@ const I18N = (function () {
 
     /* ── drawing sheet ──────────────────────────────────────────────── */
     "draw.heading":     ["ENGINEERING DRAWING", "製図"],
+    "draw.exportdxf":   ["Download DXF", "DXF をダウンロード"],
+    "draw.dxfstarted":  ["Downloading the drawing as DXF",
+                         "図面を DXF でダウンロードしています"],
     "draw.exportpng":   ["Export PNG", "PNG で保存"],
     "draw.back3d":      ["Back to 3D", "3D に戻る"],
     "draw.projecting":  ["Projecting the solid…", "ソリッドを投影中…"],

@@ -269,6 +269,52 @@ It carries no tolerances and no material, and says so on the sheet. Nothing
 in the pipeline has specified either, and a general tolerance note on a part
 nobody has toleranced would be a claim rather than a fact.
 
+**Download DXF** hands back the same drawing as a DXF — which is the format a
+drawing is exchanged in, and the reason the sheet is worth more than a
+picture. Its dimensions are real `DIMENSION` entities carrying the geometry
+they measure, so a CAD system opening the file re-measures the part rather
+than reading back a string this app wrote; the line work is on the layers a
+drawing office expects (`OUTLINE`, `HIDDEN`, `CENTRE`, `DIMENSIONS`,
+`FRAME`), with ISO 128-24 line weights and ISO linetypes. It is written with
+[ezdxf](https://ezdxf.mozman.at/), and the SVG on screen and the DXF are laid
+out from one plan (`drawing.plan_sheet`) rather than from two implementations
+that would drift.
+
+`app/tests/test_drawing.py` saves the DXF, reopens it with a reader that
+knows nothing of how it was written, audits it, and asserts the dimensions
+still measure the part.
+
+### Why this is written here rather than taken from a library
+
+Asked directly, because it is a fair question for a few hundred lines of
+sheet layout:
+
+* **[ezdxf](https://ezdxf.mozman.at/)** — used, for the DXF. Mature, actively
+  maintained, and the only sensible way to emit real `DIMENSION` entities,
+  DXF line types and layer line weights. Writing that format by hand would be
+  indefensible.
+* **[build123d](https://build123d.readthedocs.io/)'s `drafting` module** —
+  the closest thing to a drop-in: it has `Draft`, `DimensionLine`,
+  `ExtensionLine`, `Callout` and a `TechnicalDrawing` border with a title
+  block. Not used, for two reasons. It draws its annotations as CAD geometry
+  in a modelling framework this app does not otherwise use — a second OCCT
+  binding alongside CadQuery, for layout — and it would not do the part that
+  is actually hard here: the hidden-line projection of four views, their
+  first angle arrangement, and choosing what to dimension. Its title block is
+  also not ISO 7200. Worth revisiting if this app ever moves to build123d.
+* **FreeCAD's TechDraw workbench** — does all of this properly and is the
+  right answer for a desktop tool. It means shipping FreeCAD to draw a
+  rectangle.
+* CadQuery's own SVG exporter — what this used to use. It fits each view to
+  its own frame independently, which is the one thing a drawing may not do,
+  and it gives no way to place an annotation next to the geometry without
+  parsing the transform back out of the string it emitted.
+
+So: the projection is OpenCASCADE's, the DXF is ezdxf's, and what is written
+here is the sheet — which views go where, at what scale, and what gets
+dimensioned. That part is drawing judgement rather than a solved library
+problem.
+
 **Choose a backend.** Provider, generation model and judge model sit under the
 run options. See **Model backends** above.
 
@@ -421,7 +467,8 @@ app/
     edits.py       parameter-patch interpretation, with the Refiner as fallback
     providers.py   Anthropic, OpenAI, Ollama and any OpenAI-compatible backend
     drawing.py     the A3 drawing sheet: first angle projections, one
-                   stated scale, dimensions and an ISO 7200 title block
+                   stated scale, dimensions and an ISO 7200 title block,
+                   rendered to SVG for the screen and DXF for exchange
     replay.py      re-emits a recorded run at presentation speed
     i18n.py        the messages a person reads, in English and Japanese
     spec.py        kernel-measured checks against what the plan claimed

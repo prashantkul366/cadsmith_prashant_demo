@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import cadquery as cq  # noqa: E402
+import ezdxf  # noqa: E402
 
 from app.server import drawing  # noqa: E402
 
@@ -213,6 +214,60 @@ def main() -> int:
                       r"[ML](-?[\d.]+),", trapezoid.get("d"))),
                   "trapezoid then circles" if trapezoid is not None
                   else "no trapezoid found")
+        print("\nThe same drawing as DXF")
+        # The SVG is a picture of the drawing; the DXF is the drawing. Its
+        # dimensions carry the geometry they measure, so this asks the file
+        # what it measures rather than reading back a string.
+        doc = drawing.build_dxf(step, geometry, "a test plate", "JOB-TEST", 0)
+        model = doc.modelspace()
+        dims = [e for e in model if e.dxftype() == "DIMENSION"]
+        check("it carries real DIMENSION entities, not drawn lines",
+              len(dims) == 4, f"{len(dims)} dimension(s)")
+        measured = sorted(round(d.get_measurement(), 4) for d in dims)
+        check("and they measure the part, not the sheet",
+              measured == sorted([PLATE_X, PLATE_Y, PLATE_Z, HOLE_D]),
+              f"{measured} vs {sorted([PLATE_X, PLATE_Y, PLATE_Z, HOLE_D])}")
+
+        layers = {e.dxf.layer for e in model}
+        check("line work is separated onto drawing-office layers",
+              {"OUTLINE", "HIDDEN", "CENTRE", "DIMENSIONS", "FRAME"} <= layers,
+              ", ".join(sorted(layers)))
+        check("outlines are the thick line group and hidden detail the thin",
+              doc.layers.get("OUTLINE").dxf.lineweight == drawing._LW_THICK
+              and doc.layers.get("HIDDEN").dxf.lineweight == drawing._LW_THIN,
+              f'{doc.layers.get("OUTLINE").dxf.lineweight} / '
+              f'{doc.layers.get("HIDDEN").dxf.lineweight}')
+        check("hidden and centre layers carry the right line types",
+              doc.layers.get("HIDDEN").dxf.linetype.upper().startswith("DASHED")
+              and doc.layers.get("CENTRE").dxf.linetype.upper().startswith("CENTER"),
+              f'{doc.layers.get("HIDDEN").dxf.linetype} / '
+              f'{doc.layers.get("CENTRE").dxf.linetype}')
+
+        style = doc.dimstyles.get("ISO-129")
+        check("the dimension style follows ISO 129-1",
+              style.dxf.dimtxt == drawing.TEXT
+              and style.dxf.dimtad == 1        # value above the line
+              and style.dxf.dimtih == 0        # aligned, not forced horizontal
+              and style.dxf.dimblk == "",      # closed filled arrowhead
+              f"text {style.dxf.dimtxt}, above={style.dxf.dimtad}, "
+              f"arrow={style.dxf.dimblk!r}")
+
+        written = work / "drawing.dxf"
+        doc.saveas(written)
+        reopened = ezdxf.readfile(written)
+        audit = reopened.audit()
+        check("and it is a file another CAD system can open",
+              not audit.errors,
+              f"{written.stat().st_size} bytes, "
+              f"{len(audit.errors)} error(s), {len(audit.fixes)} fix(es)")
+        check("whose dimensions still measure the part when re-read",
+              sorted(round(e.get_measurement(), 4)
+                     for e in reopened.modelspace()
+                     if e.dxftype() == "DIMENSION")
+              == sorted([PLATE_X, PLATE_Y, PLATE_Z, HOLE_D]),
+              str(sorted(round(e.get_measurement(), 4)
+                         for e in reopened.modelspace()
+                         if e.dxftype() == "DIMENSION")))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

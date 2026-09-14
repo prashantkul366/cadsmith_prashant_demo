@@ -26,7 +26,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 
 from . import catalog_run, i18n, providers, tls
-from .drawing import ensure_sheet
+from .drawing import ensure_dxf, ensure_sheet
 from .edits import Change, describe_parameters, parameters
 from .jobs import JobManager, JobOptions, STATUS_DONE, STATUS_ERROR
 
@@ -43,6 +43,7 @@ MEDIA_TYPES = {
     ".png": "image/png",
     ".json": "application/json",
     ".svg": "image/svg+xml",
+    ".dxf": "image/vnd.dxf",
 }
 
 ALLOWED_ARTIFACTS = {
@@ -53,6 +54,7 @@ ALLOWED_ARTIFACTS = {
     "geometry.json",
     "validation.json",
     "drawing.svg",
+    "drawing.dxf",
 }
 
 # Curated starting prompts.  The tiered ones are the exact benchmark entries
@@ -653,9 +655,9 @@ def get_artifact(job_id: str, version: int, artifact: str, request: Request):
         raise HTTPException(status_code=404,
                             detail=i18n.t("http.noartifact", lang))
 
-    # The drawing sheet is derived from the STEP solid, so it is built on
+    # Both drawings are derived from the STEP solid, so they are built on
     # first request and cached beside the other artifacts.
-    if artifact == "drawing.svg":
+    if artifact in ("drawing.svg", "drawing.dxf"):
         job = manager.get(job_id)
         if job is None:
             raise HTTPException(status_code=404,
@@ -664,8 +666,9 @@ def get_artifact(job_id: str, version: int, artifact: str, request: Request):
         if not version_dir.is_dir():
             raise HTTPException(status_code=404,
                                 detail=i18n.t("http.noversion", lang))
+        build = ensure_sheet if artifact == "drawing.svg" else ensure_dxf
         try:
-            ensure_sheet(version_dir, job.prompt, job.id, int(version))
+            build(version_dir, job.prompt, job.id, int(version))
         except Exception as exc:
             raise HTTPException(
                 status_code=500,
@@ -680,7 +683,8 @@ def get_artifact(job_id: str, version: int, artifact: str, request: Request):
     return FileResponse(
         path,
         media_type=MEDIA_TYPES.get(path.suffix, "application/octet-stream"),
-        filename=filename if artifact in ("model.stl", "model.step", "code.py") else None,
+        filename=filename if artifact in ("model.stl", "model.step",
+                                          "code.py", "drawing.dxf") else None,
     )
 
 

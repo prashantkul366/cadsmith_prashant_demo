@@ -95,7 +95,14 @@ ARROW_L, ARROW_W = 3.2, 1.1            # filled arrowhead, roughly 3:1
 EXT_GAP, EXT_PAST = 1.0, 1.5           # ISO 129-1: clear of the feature, 1.5 past
 DIM_OFFSET = 10.0                      # first dimension line off the outline
 
-FONT = "font-family=\"DejaVu Sans Mono,Consolas,monospace\""
+#: ISO 3098 lettering is a technical sans. These are the faces that
+#: actually match it where a machine has them, then progressively
+#: plainer sans fallbacks - never a monospace, which reads as program
+#: output rather than as a drawing.
+FONT_STACK = ("ISOCPEUR,osifont,'Liberation Sans Narrow',"
+              "'Arial Narrow','DejaVu Sans Condensed',Helvetica,"
+              "Arial,sans-serif")
+FONT = f'font-family="{FONT_STACK}"'
 
 
 # ---------------------------------------------------------------------------
@@ -354,13 +361,17 @@ def _distinct_circles(circles: list[dict]) -> list[dict]:
     return sorted(seen.values(), key=lambda c: -c["r"])
 
 
-def _render_view(name: str, view: dict, scale: float,
-                 dimension: str) -> list[str]:
-    """One view: its linework, centre lines, label, and any dimensions.
+def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
+    """Where everything in one view goes, without drawing any of it.
+
+    Separated from the drawing so that the SVG on screen and the DXF someone
+    downloads are laid out by the same code. Two renderers of one plan can be
+    checked against each other; two implementations of one drawing drift.
 
     ``dimension`` says which overall dimensions this view carries. Each length
     is dimensioned once across the whole sheet, which is what ISO 129-1 asks
-    and what stops three views disagreeing about the same edge.
+    and what stops three views disagreeing about the same edge. All
+    coordinates are in sheet millimetres, y downwards as SVG has it.
     """
     meta = VIEWS[name]
     cx, cy = _cell_centre(meta["cell"])
@@ -370,49 +381,48 @@ def _render_view(name: str, view: dict, scale: float,
     def to_sheet(u: float, v: float) -> tuple[float, float]:
         return (cx + (u - uc) * scale, cy - (v - vc) * scale)
 
-    out: list[str] = []
+    def place(lines):
+        return [[to_sheet(u, v) for u, v in line] for line in lines]
 
-    def paths(lines, width, dash):
-        for line in lines:
-            points = " ".join(f"{x:.2f},{y:.2f}"
-                              for x, y in (to_sheet(u, v) for u, v in line))
-            stroke = f' stroke-dasharray="{dash}"' if dash else ""
-            out.append(f'<polyline points="{points}" fill="none" stroke="#000" '
-                       f'stroke-width="{width}"{stroke} '
-                       f'stroke-linecap="round" stroke-linejoin="round"{""}/>')
+    left, top = to_sheet(umin, vmax)
+    right, bottom = to_sheet(umax, vmin)
 
-    # Hidden first, so a visible edge over a hidden one wins. The pictorial
-    # view is the exception: it is there to show the shape, and dashed lines
-    # through a solid read as clutter rather than as information.
-    if name != "ISO":
-        paths(view["hidden"], W_THIN, "2.4,1.2")
-    paths(view["visible"], W_THICK, "")
-
-    corner_l, corner_t = to_sheet(umin, vmax)
-    corner_r, corner_b = to_sheet(umax, vmin)
+    # The pictorial view drops hidden detail: it is there to show the shape,
+    # and dashed lines through a solid read as clutter rather than as
+    # information.
+    plan = {
+        "name": name, "label": meta["label"], "centre": (cx, cy),
+        "box": (left, top, right, bottom),
+        "visible": place(view["visible"]),
+        "hidden": [] if name == "ISO" else place(view["hidden"]),
+        "centre_lines": [], "dimensions": [], "callouts": [],
+    }
 
     # Centre lines through every circular feature (ISO 128-2 long-dash-dot).
     circles = _distinct_circles(view["circles"])
-    drawn: set[tuple[float, float]] = set()
+    seen: set[tuple[float, float]] = set()
     for circle in circles:
         key = (round(circle["u"], 2), round(circle["v"], 2))
-        if key in drawn:
+        if key in seen:
             continue
-        drawn.add(key)
+        seen.add(key)
         biggest = max(c["r"] for c in circles
                       if (round(c["u"], 2), round(c["v"], 2)) == key)
         px, py = to_sheet(circle["u"], circle["v"])
         reach = biggest * scale + 3.0
-        dash = "6,1.2,1.2,1.2"
-        out.append(_line(px - reach, py, px + reach, py, W_THIN, dash))
-        out.append(_line(px, py - reach, px, py + reach, W_THIN, dash))
+        plan["centre_lines"].append((px - reach, py, px + reach, py))
+        plan["centre_lines"].append((px, py - reach, px, py + reach))
 
     if "width" in dimension:
-        out += _linear_dimension(corner_l, corner_b, corner_r, corner_b,
-                                 DIM_OFFSET, _num(umax - umin), vertical=False)
+        plan["dimensions"].append({
+            "p1": (left, bottom), "p2": (right, bottom),
+            "offset": DIM_OFFSET, "vertical": False,
+            "measure": umax - umin})
     if "height" in dimension:
-        out += _linear_dimension(corner_l, corner_t, corner_l, corner_b,
-                                 -DIM_OFFSET, _num(vmax - vmin), vertical=True)
+        plan["dimensions"].append({
+            "p1": (left, top), "p2": (left, bottom),
+            "offset": -DIM_OFFSET, "vertical": True,
+            "measure": vmax - vmin})
 
     # Diameters, largest first and capped: a drawing that calls out every
     # circle on a gear is unreadable, and the ones that matter are the big
@@ -426,22 +436,73 @@ def _render_view(name: str, view: dict, scale: float,
         # value sits above that shoulder. The run is long enough to clear the
         # whole view, not just its own circle: a gear's bore is small and
         # central, so a leader sized to the bore lands on the teeth.
-        run = _escape(px, py, cos_a, -sin_a,
-                      corner_l, corner_t, corner_r, corner_b) - radius + 4.0
-        run = max(run, 11.0)
-        sx, sy = px + radius * cos_a, py - radius * sin_a
-        ex, ey = px + (radius + run) * cos_a, py - (radius + run) * sin_a
-        shoulder = 6.0 if cos_a > 0 else -6.0
+        run = max(11.0, _escape(px, py, cos_a, -sin_a, left, top, right, bottom)
+                  - radius + 4.0)
+        plan["callouts"].append({
+            "centre": (px, py), "radius": radius, "angle": angle,
+            "start": (px + radius * cos_a, py - radius * sin_a),
+            "elbow": (px + (radius + run) * cos_a,
+                      py - (radius + run) * sin_a),
+            "shoulder": 6.0 if cos_a > 0 else -6.0,
+            "measure": circle["r"] * 2.0})
+
+    below = bottom + (DIM_OFFSET + 10.0 if "width" in dimension else 5.0)
+    floor = CELLS_T + (meta["cell"][1] + 1) * CELL_H - 3.0
+    plan["label_at"] = (cx, min(below + 5.0, floor))
+    return plan
+
+
+def plan_sheet(views: dict) -> dict:
+    """Everything the sheet says, before anything is drawn."""
+    scale = _choose_scale(views)
+    # Which view carries which overall dimension. Every length appears once:
+    # the front view gives width and height, the view from above gives the
+    # depth, and the remaining views repeat nothing.
+    carries = {"FRONT": "width height", "TOP": "height", "LEFT": "", "ISO": ""}
+    return {
+        "scale": scale,
+        "views": [plan_view(name, views[name], scale, carries[name])
+                  for name in ("FRONT", "LEFT", "TOP", "ISO") if name in views],
+    }
+
+
+def _render_view(plan: dict) -> list[str]:
+    """One planned view, as SVG."""
+    out: list[str] = []
+
+    def paths(lines, width, dash):
+        for line in lines:
+            points = " ".join(f"{x:.2f},{y:.2f}" for x, y in line)
+            stroke = f' stroke-dasharray="{dash}"' if dash else ""
+            out.append(f'<polyline points="{points}" fill="none" stroke="#000" '
+                       f'stroke-width="{width}"{stroke} '
+                       f'stroke-linecap="round" stroke-linejoin="round"/>')
+
+    # Hidden first, so a visible edge over a hidden one wins.
+    paths(plan["hidden"], W_THIN, "2.4,1.2")
+    paths(plan["visible"], W_THICK, "")
+
+    for x1, y1, x2, y2 in plan["centre_lines"]:
+        out.append(_line(x1, y1, x2, y2, W_THIN, "6,1.2,1.2,1.2"))
+
+    for dim in plan["dimensions"]:
+        out += _linear_dimension(dim["p1"][0], dim["p1"][1],
+                                 dim["p2"][0], dim["p2"][1],
+                                 dim["offset"], _num(dim["measure"]),
+                                 vertical=dim["vertical"])
+
+    for call in plan["callouts"]:
+        sx, sy = call["start"]
+        ex, ey = call["elbow"]
+        shoulder = call["shoulder"]
         out.append(_line(ex, ey, sx, sy))
         out.append(_line(ex, ey, ex + shoulder, ey))
-        length = math.hypot(ex - sx, ey - sy)
+        length = math.hypot(ex - sx, ey - sy) or 1.0
         out.append(_arrow(sx, sy, (sx - ex) / length, (sy - ey) / length))
-        out.append(_text(ex + shoulder, ey - 1.6, f"Ø{_num(circle['r'] * 2)}",
-                         anchor="start" if cos_a > 0 else "end"))
+        out.append(_text(ex + shoulder, ey - 1.6, f"Ø{_num(call['measure'])}",
+                         anchor="start" if shoulder > 0 else "end"))
 
-    below = corner_b + (DIM_OFFSET + 10.0 if "width" in dimension else 5.0)
-    cell_floor = CELLS_T + (meta["cell"][1] + 1) * CELL_H - 3.0
-    out.append(_text(cx, min(below + 5.0, cell_floor), meta["label"],
+    out.append(_text(plan["label_at"][0], plan["label_at"][1], plan["label"],
                      TEXT_SMALL, fill="#000"))
     return out
 
@@ -536,13 +597,17 @@ def _title_block(prompt: str, geometry: dict, job_id: str, version: int,
     return out
 
 
+#: Said once, on the sheet, rather than repeated against every dimension.
+_NOTES = [
+    "ALL DIMENSIONS IN MILLIMETRES",
+    "DIMENSIONS ARE AS MODELLED — NO TOLERANCES ARE SPECIFIED",
+    "HIDDEN DETAIL SHOWN DASHED · ALL VIEWS TO THE STATED SCALE",
+]
+
+
 def _notes(geometry: dict) -> list[str]:
-    """Said once, on the sheet, rather than repeated against every dimension."""
-    lines = [
-        "ALL DIMENSIONS IN MILLIMETRES",
-        "DIMENSIONS ARE AS MODELLED — NO TOLERANCES ARE SPECIFIED",
-        "HIDDEN DETAIL SHOWN DASHED · ALL VIEWS TO THE STATED SCALE",
-    ]
+    """The notes as SVG."""
+    lines = list(_NOTES)
     if geometry.get("is_valid"):
         lines.append("SOLID IS CLOSED AND WATERTIGHT AS PROJECTED")
     out = []
@@ -558,19 +623,12 @@ def _notes(geometry: dict) -> list[str]:
 def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
                 version: int) -> str:
     """Compose the drawing as a standalone SVG document."""
-    views = _project(step_path)
-    scale = _choose_scale(views)
+    sheet = plan_sheet(_project(step_path))
+    scale = sheet["scale"]
 
     body: list[str] = []
-    # Which view carries which overall dimension. Every length appears once:
-    # the front view gives width and height, the view from above gives the
-    # depth, and the remaining views repeat nothing.
-    carries = {"FRONT": "width height", "TOP": "height", "LEFT": "", "ISO": ""}
-    for name in ("FRONT", "LEFT", "TOP", "ISO"):
-        view = views.get(name)
-        if not view:
-            continue
-        body += _render_view(name, view, scale, carries[name])
+    for view in sheet["views"]:
+        body += _render_view(view)
 
     body += _title_block(prompt, geometry, job_id, version, scale)
     body += _notes(geometry)
@@ -608,4 +666,198 @@ def ensure_sheet(version_dir: Path, prompt: str, job_id: str,
 
     sheet = build_sheet(step, geometry, prompt, job_id, version)
     target.write_text(sheet, encoding="utf-8")
+    return target
+
+
+# ---------------------------------------------------------------------------
+# The same sheet as DXF, which is the format a drawing is exchanged in
+# ---------------------------------------------------------------------------
+
+#: ISO 128-24 line groups, as DXF line weights (hundredths of a millimetre).
+_LW_THICK, _LW_THIN = 50, 25
+
+#: Layers, named the way a drawing office names them, so the file opens in
+#: someone else's CAD looking like a drawing rather than a pile of lines.
+_LAYERS = [
+    # name,        colour, weight,     linetype
+    ("OUTLINE",         7, _LW_THICK, "Continuous"),
+    ("HIDDEN",          8, _LW_THIN,  "DASHED2"),
+    ("CENTRE",          4, _LW_THIN,  "CENTER2"),
+    ("DIMENSIONS",      3, _LW_THIN,  "Continuous"),
+    ("ANNOTATION",      7, _LW_THIN,  "Continuous"),
+    ("FRAME",           7, _LW_THICK, "Continuous"),
+]
+
+
+def _dxf_y(y: float) -> float:
+    """Sheet coordinates are planned y-down, as SVG has it; DXF is y-up."""
+    return SHEET_H - y
+
+
+def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
+              version: int):
+    """The same drawing as a DXF document, with real DIMENSION entities.
+
+    The SVG on screen is a picture of the drawing; this is the drawing. Its
+    dimensions are DIMENSION entities that carry the geometry they measure,
+    so another CAD system re-measures them rather than trusting a string -
+    which is also how the tests check that the number on the sheet is the
+    number the kernel built.
+
+    Laid out from the same plan as the SVG, so the two cannot disagree.
+    """
+    try:
+        import ezdxf
+    except ImportError as exc:  # pragma: no cover - depends on the install
+        raise RuntimeError(
+            "The DXF drawing needs ezdxf: pip install -r "
+            "app/requirements-app.txt. The sheet shown in the app is SVG and "
+            "does not need it.") from exc
+
+    sheet = plan_sheet(_project(step_path))
+    scale = sheet["scale"]
+
+    doc = ezdxf.new("R2010", setup=True)
+    doc.header["$INSUNITS"] = 4        # millimetres
+    doc.header["$MEASUREMENT"] = 1     # metric
+    for name, colour, weight, linetype in _LAYERS:
+        doc.layers.add(name, color=colour, lineweight=weight,
+                       linetype=linetype)
+
+    # A dimension style to ISO 129-1 rather than ezdxf's own defaults, which
+    # are sized for imperial architectural work.
+    style = doc.dimstyles.duplicate_entry("EZDXF", "ISO-129")
+    style.dxf.dimtxt = TEXT           # 3.5 mm text
+    style.dxf.dimasz = ARROW_L        # arrowhead length
+    style.dxf.dimexe = EXT_PAST       # extension past the dimension line
+    style.dxf.dimexo = EXT_GAP        # gap from the feature
+    style.dxf.dimgap = 0.8
+    style.dxf.dimdec = 2
+    style.dxf.dimtad = 1              # value above the dimension line
+    style.dxf.dimtih = 0              # aligned with the line, not horizontal
+    style.dxf.dimtoh = 0
+    style.dxf.dimlwd = _LW_THIN
+    style.dxf.dimlwe = _LW_THIN
+    style.dxf.dimblk = ""  # closed filled, per ISO 129-1
+    style.dxf.dimzin = 8              # no trailing zeros
+
+    msp = doc.modelspace()
+
+    def polyline(points, layer):
+        msp.add_lwpolyline([(x, _dxf_y(y)) for x, y in points],
+                           dxfattribs={"layer": layer})
+
+    def line(x1, y1, x2, y2, layer):
+        msp.add_line((x1, _dxf_y(y1)), (x2, _dxf_y(y2)),
+                     dxfattribs={"layer": layer})
+
+    def text(x, y, body, height=TEXT, align="MIDDLE_CENTER", layer="ANNOTATION"):
+        entity = msp.add_text(body, height=height,
+                              dxfattribs={"layer": layer,
+                                          "style": "OpenSansCondensed-Light"})
+        entity.set_placement((x, _dxf_y(y)), align=ezdxf.enums.TextEntityAlignment[align])
+        return entity
+
+    for view in sheet["views"]:
+        for polygon in view["hidden"]:
+            polyline(polygon, "HIDDEN")
+        for polygon in view["visible"]:
+            polyline(polygon, "OUTLINE")
+        for x1, y1, x2, y2 in view["centre_lines"]:
+            line(x1, y1, x2, y2, "CENTRE")
+
+        for dim in view["dimensions"]:
+            (x1, y1), (x2, y2) = dim["p1"], dim["p2"]
+            offset = dim["offset"]
+            base = ((x1 + offset, y1) if dim["vertical"]
+                    else (x1, y1 + offset))
+            # The dimension is given the points it measures, not a label, so
+            # the value in the file is computed from the geometry - and
+            # re-computed by whatever opens it.
+            entity = msp.add_linear_dim(
+                base=(base[0], _dxf_y(base[1])),
+                p1=(x1, _dxf_y(y1)), p2=(x2, _dxf_y(y2)),
+                angle=90.0 if dim["vertical"] else 0.0,
+                dimstyle="ISO-129",
+                dxfattribs={"layer": "DIMENSIONS"},
+                # The views are drawn at the sheet's scale, so a dimension
+                # measuring them has to divide it back out to report the part.
+                override={"dimlfac": 1.0 / scale},
+            )
+            entity.render()
+
+        for call in view["callouts"]:
+            cx, cy = call["centre"]
+            entity = msp.add_diameter_dim(
+                center=(cx, _dxf_y(cy)),
+                radius=call["radius"],
+                angle=math.degrees(call["angle"]),
+                dimstyle="ISO-129",
+                dxfattribs={"layer": "DIMENSIONS"},
+                override={"dimlfac": 1.0 / scale},
+            )
+            entity.render()
+
+        text(view["label_at"][0], view["label_at"][1], view["label"],
+             TEXT_SMALL)
+
+    # Frame and title block. The fields are the same ones the SVG carries.
+    frame = [(FRAME_L, FRAME_T), (FRAME_R, FRAME_T),
+             (FRAME_R, FRAME_B), (FRAME_L, FRAME_B), (FRAME_L, FRAME_T)]
+    polyline(frame, "FRAME")
+    block = [(TITLE_L, TITLE_T), (FRAME_R, TITLE_T),
+             (FRAME_R, FRAME_B), (TITLE_L, FRAME_B), (TITLE_L, TITLE_T)]
+    polyline(block, "FRAME")
+
+    bbox = geometry.get("bounding_box", {})
+    rows = [
+        ("LEGAL OWNER", "CADSmith"),
+        ("TITLE", " ".join(prompt.split()).rstrip(".")),
+        ("DRAWING No.", f"{job_id}-{version:02d}"),
+        ("DATE OF ISSUE", time.strftime("%Y-%m-%d")),
+        ("SCALE", _scale_label(scale)),
+        ("UNITS", "mm"),
+        ("PROJECTION", "FIRST ANGLE"),
+        ("SHEET", "1 / 1  A3"),
+        ("OVERALL", "{:g} x {:g} x {:g}".format(
+            round(bbox.get("xlen", 0), 2), round(bbox.get("ylen", 0), 2),
+            round(bbox.get("zlen", 0), 2))),
+    ]
+    row_h = TITLE_H / len(rows)
+    for index, (label, value) in enumerate(rows):
+        y = TITLE_T + (index + 0.5) * row_h
+        if index:
+            line(TITLE_L, TITLE_T + index * row_h,
+                 FRAME_R, TITLE_T + index * row_h, "FRAME")
+        text(TITLE_L + 2.0, y, label, TEXT_SMALL, "MIDDLE_LEFT")
+        text(TITLE_L + 52.0, y, value, TEXT_SMALL, "MIDDLE_LEFT")
+
+    for index, note in enumerate(_NOTES):
+        text(FRAME_L + 2.0, TITLE_T + 6.0 + index * 5.0, note, TEXT_SMALL,
+             "MIDDLE_LEFT")
+
+    return doc
+
+
+def ensure_dxf(version_dir: Path, prompt: str, job_id: str,
+               version: int) -> Optional[Path]:
+    """Return the DXF for a version, building and caching it on first use."""
+    target = version_dir / "drawing.dxf"
+    if target.exists() and target.stat().st_size > 0:
+        return target
+
+    step = version_dir / "model.step"
+    if not step.exists():
+        return None
+
+    geometry = {}
+    geometry_file = version_dir / "geometry.json"
+    if geometry_file.exists():
+        try:
+            geometry = json.loads(geometry_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
+
+    doc = build_dxf(step, geometry, prompt, job_id, version)
+    doc.saveas(target)
     return target

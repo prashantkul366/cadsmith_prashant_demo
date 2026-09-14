@@ -69,7 +69,8 @@ def main() -> int:
             executable_path=executable,
             args=["--use-gl=swiftshader", "--enable-unsafe-swiftshader"],
         )
-        page = browser.new_page(viewport={"width": 1600, "height": 950})
+        page = browser.new_page(viewport={"width": 1600, "height": 950},
+                                accept_downloads=True)
         page.on("console", lambda m: console_errors.append(m.text)
                 if m.type == "error" else None)
         page.on("pageerror", lambda e: console_errors.append(str(e)))
@@ -299,6 +300,19 @@ def main() -> int:
         check("projection geometry present",
               page.locator("#paper svg polyline").count() > 8,
               f'{page.locator("#paper svg polyline").count()} polylines')
+        # The DXF is the drawing rather than a picture of it, so the button
+        # has to be there and has to hand back a file a CAD can open.
+        with page.expect_download(timeout=120000) as caught:
+            page.click("#expDxf")
+        download = caught.value
+        saved = out / "sheet.dxf"
+        download.save_as(str(saved))
+        body = saved.read_text(encoding="utf-8", errors="replace")
+        check("the sheet downloads as DXF",
+              saved.stat().st_size > 10000 and "DIMENSION" in body,
+              f"{saved.stat().st_size} bytes, "
+              f"{body.count('DIMENSION')} dimension record(s)")
+
         check("the whole sheet fits the panel",
               page.evaluate("""() => {
                   const s = document.querySelector('.sheet-scroll');

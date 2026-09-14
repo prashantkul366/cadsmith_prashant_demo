@@ -32,3 +32,11 @@ httpx
 # Required on corporate networks that inspect TLS, where every HTTPS
 # connection is re-signed by a company CA the OS trusts and certifi does not.
 truststore
+
+# Writes the engineering drawing as DXF, which is the format a drawing is
+# exchanged in. Its DIMENSION entities carry the geometry they measure, so a
+# CAD system opening the file re-measures the part rather than reading back a
+# string this app wrote; that is worth a dependency rather than hand-rolling.
+# The sheet shown in the browser is SVG and does not need this - a missing
+# ezdxf costs the DXF download and nothing else.
+ezdxf
