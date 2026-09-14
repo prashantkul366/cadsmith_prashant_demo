@@ -230,6 +230,28 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Instruction is too long.",
         "ja": "変更内容が長すぎます。",
     },
+    # The parameter panel posts names and numbers rather than a sentence, so
+    # it is refused on the same terms: by name, and before anything is queued.
+    "http.needchanges": {
+        "en": "No parameter changes were given.",
+        "ja": "変更するパラメータが指定されていません。",
+    },
+    "http.noparameter": {
+        "en": "This script has no parameter called {name}.",
+        "ja": "このスクリプトに {name} というパラメータはありません。",
+    },
+    "http.badvalue": {
+        "en": "{name} needs a number, not {value!r}.",
+        "ja": "{name} には数値が必要です（{value!r} は使えません）。",
+    },
+    "http.notpositive": {
+        "en": "{name} must be greater than zero.",
+        "ja": "{name} は 0 より大きい値にしてください。",
+    },
+    "http.nochange": {
+        "en": "Every value given is the one the script already has.",
+        "ja": "指定された値はすべて現在の値と同じです。",
+    },
     "http.norebuild": {
         "en": "CadQuery is not available, so nothing can be rebuilt.",
         "ja": "CadQuery が利用できないため、再構築できません。",

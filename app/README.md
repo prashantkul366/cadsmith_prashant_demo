@@ -208,6 +208,25 @@ guessed — "make the thickness 12mm" against a script with both
 `base_thickness` and `support_thickness` is refused rather than resolved
 arbitrarily.
 
+**Adjust it without reading the code.** The code panel flips between **Code**
+and **Parameters**. Parameters puts a slider and a number field on every
+dimension the script declares — read out of the source by the server, so a
+control only appears for a number the patcher can actually change. Dragging
+one rewrites the line in the Code view as it moves; letting go rebuilds the
+part in the kernel, which is one rebuild per gesture rather than one per
+frame. Values are refused on the same terms an edit is: an unknown name, a
+value that is not a number, and zero or less all come back as a refusal
+before anything is queued, and the part on screen is left alone.
+
+It is not a simplified view of the part. It reads the same source the Code
+view shows, patches it with the same function a natural-language edit uses,
+and rebuilds with the same kernel — a version from a slider is a version like
+any other, and its Validation panel says the same thing an edit's does. The
+choice of view is remembered, so someone who works in the controls does not
+have to say so again for every part. Parameter labels stay in English in
+either language: they are the script's own identifiers, and the unit beside
+them is a symbol in both.
+
 **Drawing.** Front, top, right and isometric views projected from the exported
 STEP solid, with hidden lines resolved and all four at a common scale.
 
@@ -217,6 +236,14 @@ run options. See **Model backends** above.
 **Diagnostics.** The chip in the header reports CadQuery, offscreen rendering,
 the model backend and the metrics stack. Click it for detail. A demo that will
 not work says so before you start.
+
+**The right column holds four panels** — Reasoning, Design Plan, the code, and
+Validation — and each keeps enough height to show something. When the window
+is too short for all four, the column scrolls instead of crushing one of them
+to its header, which is what it used to do: a panel reduced to its title bar
+hides its content without looking like it is hiding anything. A panel with
+more below the fold fades at that edge, so a truncated plan or verdict reads
+as truncated rather than as finished.
 
 ## Standard parts, measured checks, and a spend ceiling
 
@@ -442,6 +469,8 @@ deterministic.
 .venv/bin/python -m app.tests.ui_lang_check         # the language switch
 .venv/bin/python -m app.tests.ui_prompts_check      # prompts nobody planned for
 .venv/bin/python -m app.tests.ui_stress_check       # clicking during a run
+.venv/bin/python -m app.tests.ui_params_check       # the parameter controls,
+                                                    # and the right column
 ```
 
 `app/tests/ui_parts_check.py` is known to fail: it expects the mock provider

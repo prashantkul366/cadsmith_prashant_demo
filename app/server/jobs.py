@@ -27,7 +27,7 @@ from typing import Any, Optional
 from . import budget as budget_mod
 from . import catalog_run
 from . import i18n
-from .edits import apply_changes, describe, plan_edit
+from .edits import Change, apply_changes, describe, plan_edit
 from .events import (
     EventSink,
     PHASE_EDIT,
@@ -365,14 +365,35 @@ class JobManager:
         job.status = STATUS_QUEUED
         self._pool.submit(self._run_edit, job, instruction, base_version)
 
+    def submit_parameters(self, job: Job, changes: list[Change],
+                          base_version: Optional[int] = None) -> None:
+        """Queue a rebuild from values a person set directly.
+
+        The same work as an edit that maps onto a parameter, minus the part
+        that has to guess which parameter was meant: the panel names them.
+        """
+        sink = self.sink(job.id)
+        summary = describe(changes)
+        if sink is not None:
+            sink.emit(PHASE_JOB, STATUS_QUEUED,
+                      i18n.t("edit.queued", job.options.lang),
+                      instruction=summary, base_version=base_version)
+        job.status = STATUS_QUEUED
+        self._pool.submit(self._run_edit, job, summary, base_version, changes)
+
     def _run_edit(self, job: Job, instruction: str,
-                  base_version: Optional[int] = None) -> None:
+                  base_version: Optional[int] = None,
+                  changes: Optional[list[Change]] = None) -> None:
         """Apply an edit, by parameter patch where possible or the Refiner.
 
         The two paths differ in more than speed.  A patch changes a number the
         script already declares, so the kernel alone can confirm the result.
         The Refiner writes new code, so the full validation - vision Judge
         included - is worth its cost.
+
+        ``changes`` skips the interpretation entirely: the parameter panel
+        already knows which numbers it is setting, so there is nothing to
+        infer and nothing that could be inferred wrongly.
         """
         lang = job.options.lang
         sink = self.sink(job.id)
@@ -411,12 +432,13 @@ class JobManager:
             code = (source_dir / "code.py").read_text(encoding="utf-8")
             next_index = max(v["iteration"] for v in job.versions) + 1
 
-            plan = plan_edit(code, instruction)
-            if plan.possible:
-                new_code = apply_changes(code, plan.changes)
+            plan = plan_edit(code, instruction) if changes is None else None
+            if changes is not None or plan.possible:
+                applied = changes if changes is not None else plan.changes
+                new_code = apply_changes(code, applied)
                 ctx.method = "parameter patch"
-                ctx.changes = [c.to_dict() for c in plan.changes]
-                sink.emit(PHASE_EDIT, STATUS_OK, describe(plan.changes),
+                ctx.changes = [c.to_dict() for c in applied]
+                sink.emit(PHASE_EDIT, STATUS_OK, describe(applied),
                           method=ctx.method, instruction=instruction,
                           changes=ctx.changes,
                           base_version=previous["iteration"])

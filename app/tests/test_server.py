@@ -165,6 +165,77 @@ def main() -> int:
         check("geometry.json is valid and watertight",
               geometry.status_code == 200 and geometry.json()["is_valid"])
 
+        print("\nParameters, read and set")
+        described = client.get(f"/api/jobs/{job_id}/parameters")
+        check("the version's parameters are served",
+              described.status_code == 200,
+              f"status {described.status_code}")
+        by_name = {p["name"]: p
+                   for p in described.json().get("parameters", [])}
+        check("the washer's own dimensions are among them",
+              {"outer_dia", "bore", "thickness"} == set(by_name),
+              ", ".join(sorted(by_name)))
+        check("each carries what a control needs",
+              all({"value", "min", "max", "step", "unit", "kind"} <= set(p)
+                  for p in by_name.values()),
+              str(by_name.get("thickness")))
+
+        for body, why in [
+            ({"changes": {}}, "nothing to change"),
+            ({"changes": {"flange_diameter": 12}}, "no such parameter"),
+            ({"changes": {"thickness": "thick"}}, "not a number"),
+            ({"changes": {"thickness": -2}}, "not positive"),
+            ({"changes": {"thickness": None}}, "no value at all"),
+            ({"changes": {"thickness": 2.0}}, "already that value"),
+        ]:
+            refused = client.post(f"/api/jobs/{job_id}/parameters", json=body)
+            check(f"refused: {why}", refused.status_code == 400,
+                  f"status {refused.status_code}: "
+                  f"{refused.json().get('detail', '')[:60]}")
+
+        # Python's json module emits bare NaN and Infinity, and json.loads
+        # reads them back, so a non-browser client can post one. NaN compares
+        # false against every bound, so without its own check it would sail
+        # through as a dimension.
+        for literal in ("NaN", "Infinity"):
+            refused = client.post(
+                f"/api/jobs/{job_id}/parameters",
+                content=('{"changes":{"thickness":%s}}' % literal).encode(),
+                headers={"Content-Type": "application/json"})
+            check(f"refused: {literal} is not a dimension",
+                  refused.status_code == 400,
+                  f"status {refused.status_code}: "
+                  f"{refused.json().get('detail', '')[:60]}")
+
+        # The real thing: no model call, and the kernel measures the result.
+        before_calls = len(fake.calls)
+        set_response = client.post(f"/api/jobs/{job_id}/parameters",
+                                   json={"changes": {"thickness": 5.0}})
+        check("a real change is accepted", set_response.status_code == 202,
+              f"status {set_response.status_code}")
+        with client.stream("GET",
+                           f"/api/jobs/{job_id}/events?from_seq=0") as stream:
+            for line in stream.iter_lines():
+                if line.startswith("event: end"):
+                    break
+        after = client.get(f"/api/jobs/{job_id}").json()["job"]
+        check("it produced a new version", len(after["versions"]) == 2,
+              f"{len(after['versions'])} version(s)")
+        newest = after["versions"][-1]
+        check("the kernel rebuilt to the value that was set",
+              abs((newest.get("geometry") or {})
+                  .get("bounding_box", {}).get("zlen", 0) - 5.0) < 1e-6,
+              str((newest.get("geometry") or {}).get("bounding_box")))
+        check("and it cost no model call",
+              len(fake.calls) == before_calls,
+              ", ".join(fake.calls[before_calls:]) or "none")
+        rebuilt = client.get(f"/api/jobs/{job_id}/v/"
+                             f"{newest['iteration']}/code.py").text
+        check("the script itself carries the new value",
+              "thickness = 5.0" in rebuilt,
+              next((l for l in rebuilt.splitlines()
+                    if l.startswith("thickness")), "?"))
+
         print("\nSafety")
         missing = client.get(f"/api/jobs/{job_id}/v/9/model.stl")
         check("unknown version is 404", missing.status_code == 404)

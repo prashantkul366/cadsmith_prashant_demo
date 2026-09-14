@@ -64,6 +64,25 @@ const API = (() => {
       });
     },
 
+    /* The numbers a version's script declares, described well enough to put
+       a control on each. Read from the code by the server, so the browser
+       never has to decide for itself what counts as a parameter. */
+    parameters(jobId, version) {
+      const at = version === undefined || version === null
+        ? "" : `?version=${encodeURIComponent(version)}`;
+      return json(`/api/jobs/${encodeURIComponent(jobId)}/parameters${at}`);
+    },
+
+    /* Set them. No model call and no interpretation - the caller names the
+       parameters, so there is nothing to infer and nothing to infer wrongly. */
+    setParameters(jobId, changes, version) {
+      return json(`/api/jobs/${encodeURIComponent(jobId)}/parameters`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ changes, version }),
+      });
+    },
+
     replay(jobId, speed) {
       return json(`/api/jobs/${encodeURIComponent(jobId)}/replay`, {
         method: "POST",

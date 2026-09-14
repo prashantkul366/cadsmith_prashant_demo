@@ -344,3 +344,103 @@ def apply_changes(code: str, changes: list[Change]) -> str:
 
 def describe(changes: list[Change]) -> str:
     return ", ".join(f"{c.name} {c.old:g} → {c.new:g}" for c in changes)
+
+
+# ---------------------------------------------------------------------------
+# The same parameters, described well enough to put a control on each
+# ---------------------------------------------------------------------------
+
+#: Names that are a count of something rather than a measurement of it.
+#: Wider than ``_COUNT_TOKENS``, which exists to disambiguate an instruction;
+#: this one only has to recognise a whole number.
+_COUNTING = _COUNT_TOKENS | {"sides", "segments", "steps", "starts", "spokes"}
+
+#: Names measured in degrees. Anything else with a length-like name is read
+#: as millimetres, which is what the kernel reports and what every dimension
+#: in this app is quoted in.
+_ANGULAR = {"angle", "angles", "deg", "degrees", "taper", "helix", "twist"}
+
+
+def _kind(name: str) -> str:
+    tokens = _tokens(name)
+    if tokens & _ANGULAR:
+        return "angle"
+    if tokens & _COUNTING:
+        return "count"
+    return "length"
+
+
+def _step_for(span: float) -> float:
+    """A step fine enough to be useful and coarse enough to be usable."""
+    for ceiling, step in ((2.0, 0.01), (20.0, 0.1), (200.0, 0.5), (2000.0, 1.0)):
+        if span <= ceiling:
+            return step
+    return 5.0
+
+
+def _range_for(kind: str, value: float) -> tuple[float, float, float]:
+    """A slider range around the value the script currently declares.
+
+    Anchored to that value rather than to a table of part types, because
+    there is no such table: the scripts are written by a model. Three times
+    the current value covers the changes people actually make, and the number
+    field beside the slider takes anything the kernel will build, so the
+    range bounds the *slider*, never the parameter.
+    """
+    if kind == "count":
+        return 1.0, max(12.0, round(value * 3)), 1.0
+    if kind == "angle":
+        # Bounded by the half-turn, but still anchored: a gear's 20 degree
+        # pressure angle on a 1-179 slider is a sliver, and the useful moves
+        # are all within a few degrees of where it already is.
+        return 1.0, min(180.0, max(45.0, round(value * 2))), 0.5
+    high = max(10.0, round(value * 3, 6)) if value > 0 else 10.0
+    step = _step_for(high)
+    return step, high, step
+
+
+def _label(name: str) -> str:
+    """``hole_diameter`` -> ``Hole diameter``.
+
+    Not translated: these are the script's own identifiers, and a person
+    editing a value needs to see the name the code uses. The unit beside it
+    is what carries the meaning, and that is a symbol in either language.
+    """
+    words = name.replace("_", " ").strip()
+    return words[:1].upper() + words[1:] if words else name
+
+
+def describe_parameters(code: str) -> list[dict]:
+    """Every top-level parameter, with enough about it to draw a control.
+
+    Read from the same assignments ``apply_changes`` rewrites, so a control
+    that appears here is one the patcher can actually change - the browser
+    never decides for itself what counts as a parameter.
+    """
+    described = []
+    for parameter in parameters(code).values():
+        kind = _kind(parameter.name)
+        if kind == "count":
+            # A count that is written 4.0 is still a count, but rewriting it
+            # as an integer would change the line's shape; is_integer is what
+            # apply_changes honours, so the control follows it.
+            kind = "count" if parameter.is_integer else "length"
+        low, high, step = _range_for(kind, parameter.value)
+        # A value already outside the computed range is the range's problem,
+        # not the value's: widen rather than clamp, or the slider would open
+        # holding a number the script does not have.
+        low = min(low, parameter.value)
+        high = max(high, parameter.value)
+        described.append({
+            "name": parameter.name,
+            "label": _label(parameter.name),
+            "value": parameter.value,
+            "line": parameter.line,
+            "kind": kind,
+            "unit": {"angle": "°", "count": "", "length": "mm"}[kind],
+            "integer": parameter.is_integer,
+            "min": low,
+            "max": high,
+            "step": step,
+        })
+    return described

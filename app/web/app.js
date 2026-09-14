@@ -39,6 +39,13 @@ const S = {
   spend: null,     // the server's own spend summary, ceiling included
   stage: null,     // {key, detail} - the pipeline strip, redrawn from state
   codeLines: undefined,
+  paramView: "code",  // which view of the script the code panel is showing
+  params: [],         // the server's descriptors for the selected version
+  paramDraft: {},     // name -> the value its control is holding right now
+  paramBase: null,    // the version those descriptors were read from
+  paramCode: "",      // and that version's source, which the drafts patch
+  paramBusy: false,   // a rebuild is in flight; the controls are read-only
+  editFromPanel: false,
 };
 
 /* ── the five stages shown while a run is in flight ─────────────────── */
@@ -579,8 +586,16 @@ async function selectVersion(index, options) {
   try {
     const response = await fetch(
       API.artifact(S.jobId, version.iteration, "code.py"));
-    if (response.ok) setCode(await response.text());
+    if (response.ok) {
+      const code = await response.text();
+      // The source the parameter controls patch is this version's, so it is
+      // kept alongside what the Code view is showing rather than re-fetched.
+      S.paramCode = code;
+      setCode(code);
+    }
   } catch (_) { /* code panel keeps its last content */ }
+
+  await loadParameters(version.iteration);
 
   renderKernelFacts(version);
   renderValidation(version);
@@ -785,6 +800,7 @@ async function generate() {
   S.catalog = null;
   Viewer.building = true;     // slow orbit while the pipeline works
   setCode("");
+  paramsReset();
   // Everything on the right belongs to the run that is being replaced, so
   // clear it now rather than leaving the previous part's plan and verdict on
   // screen until the new ones arrive.
@@ -1277,6 +1293,7 @@ async function startReplay(sourceJobId) {
   S.catalog = null;
   Viewer.building = true;     // slow orbit while the pipeline works
   setCode("");
+  paramsReset();
   showOverlay("pipe");
   renderStages("plan", t("detail.replaying"));
   $("#enginePill").textContent = t("hist.replaypill");
@@ -1369,16 +1386,20 @@ function handleEditEvent(event) {
 }
 
 function finishEdit(ok, data, message) {
+  const fromPanel = S.editFromPanel;
   S.editing = false;
   S.busy = false;
   $("#applyBtn").disabled = false;
   $("#cmdIn").disabled = false;
+  endParameterRebuild();
 
   if (!ok) {
     warnToast(message || t("edit.failed"));
     return;
   }
-  $("#cmdIn").value = "";
+  // A parameter the panel set did not come from the instruction box, so
+  // whatever is half-typed in there is still the person's.
+  if (!fromPanel) $("#cmdIn").value = "";
   const method = t(data.method === "parameter patch"
     ? "edit.method.patch" : "edit.method.agent");
   const seconds = data.total_ms
@@ -1415,6 +1436,292 @@ $("#applyBtn").onclick = applyEdit;
 $("#cmdIn").addEventListener("keydown", e => {
   if (e.key === "Enter") applyEdit();
 });
+
+/* ═══════════════════════ the parameters view ═══════════════════════
+   The same script the Code view shows, as one control per dimension it
+   declares. Not a simplified model of the part: the controls are read from
+   the source by the server, patched by the same function a natural-language
+   edit uses, and rebuilt by the same kernel. Someone who never opens the
+   Code view is doing exactly what someone who does would be doing. */
+
+/* Python's `f"{value:g}"`, closely enough. The server rewrites the line for
+   real when it rebuilds; this is only so the Code view reads correctly while
+   a slider is moving, and the two agree on every value a control can send. */
+function pyNumber(value, isInteger) {
+  if (isInteger && Number.isInteger(value)) return String(value);
+  let text = String(Number(value.toPrecision(6)));
+  if (!text.includes(".") && !text.includes("e")) text += ".0";
+  return text;
+}
+
+const ASSIGNMENT = /^([A-Za-z_]\w*)(\s*=\s*)(-?\d+(?:\.\d+)?)(\s*(?:#.*)?)$/;
+
+/* The base source with every draft value written in. Always rebuilt from the
+   base rather than from the last patch, so dragging a slider back and forth
+   cannot accumulate rounding. */
+function codeWithDrafts() {
+  const lines = S.paramCode.split("\n");
+  S.params.forEach(p => {
+    const value = S.paramDraft[p.name];
+    if (value === undefined || lines[p.line] === undefined) return;
+    const match = ASSIGNMENT.exec(lines[p.line]);
+    if (!match || match[1] !== p.name) return;
+    lines[p.line] = match[1] + match[2] + pyNumber(value, p.integer) + match[4];
+  });
+  return lines.join("\n");
+}
+
+function draftedNames() {
+  return S.params
+    .filter(p => Math.abs((S.paramDraft[p.name] ?? p.value) - p.value) > 1e-9)
+    .map(p => p.name);
+}
+
+/* Show the moved values in the Code view as they move, with the changed
+   lines marked - the two views are of one script, so they never disagree. */
+function refreshDraftCode() {
+  const changed = draftedNames();
+  setCode(codeWithDrafts(), changed);
+  $$("#paramsBody .prow").forEach(row => {
+    row.classList.toggle("dirty", changed.includes(row.dataset.name));
+  });
+  const reset = $("#paramsReset");
+  if (reset) reset.hidden = !changed.length || S.paramBusy;
+}
+
+function paramRow(p) {
+  const value = S.paramDraft[p.name] ?? p.value;
+  const step = p.step || (p.integer ? 1 : 0.1);
+  return `<div class="prow" data-name="${esc(p.name)}">
+      <div class="prow-top">
+        <span class="prow-name" title="${esc(p.name)}">${esc(p.label)}</span>
+        <span class="prow-val">
+          <input class="prow-num" type="number" inputmode="decimal"
+                 data-name="${esc(p.name)}" value="${fmt(value)}"
+                 min="0" step="${step}"
+                 aria-label="${esc(p.label)}" />
+          <span class="prow-unit">${esc(p.unit)}</span>
+        </span>
+      </div>
+      <input type="range" data-name="${esc(p.name)}"
+             min="${p.min}" max="${p.max}" step="${step}" value="${value}"
+             aria-label="${esc(p.label)}" />
+    </div>`;
+}
+
+function renderParameters() {
+  const body = $("#paramsBody");
+  if (!S.jobId || !S.versions.length) {
+    body.innerHTML = `<div class="await">
+        <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+        <span>${esc(t("params.await"))}</span>
+      </div>`;
+    return;
+  }
+  if (!S.params.length) {
+    body.innerHTML = `<div class="await"><span>${esc(t("params.none"))}</span></div>`;
+    return;
+  }
+
+  body.innerHTML =
+    `<div class="params-hint">${esc(t("params.hint"))}</div>`
+    + S.params.map(paramRow).join("")
+    + `<div class="params-foot">
+         <span class="params-note" id="paramsNote"></span>
+         <button class="btn sm" id="paramsReset" hidden>${esc(t("params.reset"))}</button>
+       </div>`;
+
+  $$("#paramsBody input[type=range]").forEach(slider => {
+    // `input` fires all the way through a drag and only moves numbers;
+    // `change` fires when the person lets go, and that is what costs a
+    // rebuild. Rebuilding on every frame of a drag would queue dozens of
+    // kernel runs to show one result.
+    slider.addEventListener("input", () => {
+      setDraft(slider.dataset.name, parseFloat(slider.value));
+    });
+    slider.addEventListener("change", () => commitParameters());
+  });
+
+  $$("#paramsBody .prow-num").forEach(field => {
+    field.addEventListener("input", () => {
+      const typed = parseFloat(field.value);
+      if (Number.isFinite(typed) && typed > 0) {
+        setDraft(field.dataset.name, typed, { from: "number" });
+      }
+    });
+    field.addEventListener("change", () => commitParameters());
+    field.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); field.blur(); }
+    });
+  });
+
+  const reset = $("#paramsReset");
+  if (reset) reset.onclick = () => {
+    S.paramDraft = {};
+    renderParameters();
+    refreshDraftCode();
+  };
+
+  refreshDraftCode();
+  setStat();
+}
+
+/* One value moved. The slider and the number field show the same number, so
+   whichever was used updates the other. */
+function setDraft(name, value, options) {
+  if (!Number.isFinite(value)) return;
+  S.paramDraft[name] = value;
+  const row = $(`#paramsBody .prow[data-name="${CSS.escape(name)}"]`);
+  if (row) {
+    const slider = row.querySelector("input[type=range]");
+    const field = row.querySelector(".prow-num");
+    // A typed value may sit outside the slider's range; widen rather than
+    // snap, so the field is never overruled by its own slider.
+    if (slider) {
+      if (value < parseFloat(slider.min)) slider.min = value;
+      if (value > parseFloat(slider.max)) slider.max = value;
+      slider.value = value;
+    }
+    if (field && (!options || options.from !== "number")) field.value = fmt(value);
+  }
+  refreshDraftCode();
+}
+
+/* Send every moved value at once: one rebuild, one version, whether the
+   person moved one slider or typed into four fields. */
+async function commitParameters() {
+  if (S.paramBusy || S.busy || !S.jobId || !S.params.length) return;
+  const changes = {};
+  S.params.forEach(p => {
+    const value = S.paramDraft[p.name];
+    if (value !== undefined && Math.abs(value - p.value) > 1e-9) {
+      changes[p.name] = value;
+    }
+  });
+  if (!Object.keys(changes).length) return;
+
+  S.paramBusy = true;
+  S.busy = true;
+  S.editing = true;
+  S.editFromPanel = true;
+  S.editSkipValidate = true;
+  $("#paramsBody").classList.add("busy");
+  const note = $("#paramsNote");
+  if (note) { note.textContent = t("params.rebuilding"); note.classList.add("work"); }
+  const reset = $("#paramsReset");
+  if (reset) reset.hidden = true;
+  $("#actDiff").innerHTML = "";
+  $("#act").hidden = false;
+  renderEditSteps("read", true);
+
+  try {
+    await API.setParameters(S.jobId, changes, S.paramBase);
+    follow(S.jobId, S.seq);
+  } catch (error) {
+    $("#act").hidden = true;
+    endParameterRebuild();
+    finishEdit(false, {}, error.message);
+    // The part on screen is still the one the kernel built, so put the
+    // controls back to it rather than leaving them showing a value that
+    // was refused.
+    S.paramDraft = {};
+    renderParameters();
+    refreshDraftCode();
+  }
+}
+
+function endParameterRebuild() {
+  S.paramBusy = false;
+  S.editFromPanel = false;
+  $("#paramsBody").classList.remove("busy");
+  const note = $("#paramsNote");
+  if (note) { note.textContent = ""; note.classList.remove("work"); }
+}
+
+/* Read the controls for a version. The ranges the server computes are
+   anchored to the value it read, so a rebuilt part would otherwise re-centre
+   every slider under the hand that just moved it; a range that still holds
+   the new value is kept. */
+async function loadParameters(iteration) {
+  const previous = new Map(S.params.map(p => [p.name, p]));
+  S.paramBase = iteration;
+  S.paramDraft = {};
+  try {
+    const data = await API.parameters(S.jobId, iteration);
+    S.params = (data.parameters || []).map(p => {
+      const before = previous.get(p.name);
+      if (before && p.value >= before.min && p.value <= before.max
+          && before.kind === p.kind) {
+        return Object.assign({}, p,
+                             { min: before.min, max: before.max, step: before.step });
+      }
+      return p;
+    });
+  } catch (_) {
+    S.params = [];
+  }
+  if (S.paramView === "params") renderParameters();
+  setStat();
+}
+
+/* No part on screen, so nothing to put a control on. */
+function paramsReset() {
+  S.params = [];
+  S.paramDraft = {};
+  S.paramCode = "";
+  S.paramBase = null;
+  endParameterRebuild();
+  if (S.paramView === "params") renderParameters();
+  setStat();
+}
+
+/* ── the toggle ─────────────────────────────────────────────────────── */
+
+function setStat() {
+  // Hidden rather than emptied in the Parameters view: the controls are
+  // their own count, and the header is only 36px tall with a toggle in it.
+  const stat = $("#codeStat");
+  stat.hidden = S.paramView === "params";
+  stat.textContent = S.codeLines
+    ? t("code.stat", { n: S.codeLines }) : t("code.empty");
+}
+
+function showParamView(which) {
+  S.paramView = which === "params" ? "params" : "code";
+  const params = S.paramView === "params";
+  $("#codeView").hidden = params;
+  $("#paramsView").hidden = !params;
+  // The download row belongs to both: a .py, a STEP and an STL are of the
+  // part, not of the view. Only Copy is about the source.
+  $("#copyBtn").hidden = params;
+  $("#viewCodeBtn").classList.toggle("on", !params);
+  $("#viewParamsBtn").classList.toggle("on", params);
+  $("#viewCodeBtn").setAttribute("aria-selected", String(!params));
+  $("#viewParamsBtn").setAttribute("aria-selected", String(params));
+  $("#codeHeading").textContent = t(params ? "params.heading" : "code.heading");
+  $("#codeHeading").setAttribute("data-i18n",
+                                 params ? "params.heading" : "code.heading");
+  if (params) renderParameters();
+  setStat();
+}
+
+/* Remembered, like the language switch. Someone who works in the controls
+   rather than the source should not have to say so again for every part, or
+   every visit. The default stays Code: that is what the app is showing. */
+const PARAM_VIEW_KEY = "cadsmith.codeview";
+
+$("#viewCodeBtn").onclick = () => chooseParamView("code");
+$("#viewParamsBtn").onclick = () => chooseParamView("params");
+
+function chooseParamView(which) {
+  showParamView(which);
+  try { localStorage.setItem(PARAM_VIEW_KEY, S.paramView); } catch (e) { /* fine */ }
+}
+
+try {
+  const remembered = localStorage.getItem(PARAM_VIEW_KEY);
+  if (remembered === "params") showParamView("params");
+} catch (e) { /* a private window has no storage; the default is fine */ }
 
 /* ═══════════════════════ drawing sheet ═══════════════════════ */
 
@@ -1553,10 +1860,8 @@ function relocalise() {
   } else if (S.genModel || S.judgeModel) {
     setModelLabels(S.genModel, S.judgeModel);
   }
-  if (S.codeLines !== undefined) {
-    $("#codeStat").textContent = S.codeLines
-      ? t("code.stat", { n: S.codeLines }) : t("code.empty");
-  }
+  if (S.paramView === "params") renderParameters();
+  if (S.codeLines !== undefined || S.paramView === "params") setStat();
   if (S.stage) renderStages(S.stage.key, S.stage.detail);
   renderUsage();
   if (!S.replay) resetPill();
@@ -1580,5 +1885,6 @@ I18N.onChange(relocalise);
   await loadExamples();
   await loadHistory();
   setCode("");
+  paramsReset();
   Viewer.fit(false);
 })();

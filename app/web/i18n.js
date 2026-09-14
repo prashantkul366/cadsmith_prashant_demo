@@ -137,10 +137,30 @@ const I18N = (function () {
 
     /* ── code panel ─────────────────────────────────────────────────── */
     "code.heading":     ["Generated CadQuery", "生成された CadQuery"],
-    "code.stat":        ["{n} LINES · PYTHON", "{n} 行 · PYTHON"],
+    "code.stat":        ["{n} LINES", "{n} 行"],
     "code.empty":       ["— — —", "— — —"],
     "code.copy":        ["Copy", "コピー"],
     "code.copied":      ["CadQuery source copied", "CadQuery のソースをコピーしました"],
+
+    /* ── the two views of the script ────────────────────────────────── */
+    "code.view.code":   ["Code", "コード"],
+    "code.view.params": ["Parameters", "パラメータ"],
+    "params.heading":   ["Part parameters", "部品のパラメータ"],
+    "params.none": [
+      "This script declares no dimensions of its own, so there is nothing to "
+      + "adjust here. The editor below can still ask for a change in words.",
+      "このスクリプトは寸法を変数として宣言していないため、ここで調整できる"
+      + "項目はありません。下の編集欄なら言葉で変更を依頼できます。"],
+    "params.await": [
+      "Generate a part and its dimensions appear here as controls.",
+      "部品を生成すると、その寸法がここにコントロールとして表示されます。"],
+    /* Said once above the controls, because "the model rebuilds when you let
+       go" is not guessable and the alternative is wondering if it is stuck. */
+    "params.hint": [
+      "Drag to set a value. The kernel rebuilds the part when you let go.",
+      "ドラッグして値を設定します。指を離すとカーネルが部品を作り直します。"],
+    "params.rebuilding": ["Rebuilding…", "再構築中…"],
+    "params.reset":     ["Reset", "元に戻す"],
 
     /* ── kernel facts ───────────────────────────────────────────────── */
     "facts.updated":    ["Model updated", "モデルを更新しました"],

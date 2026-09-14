@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import catalog_run, i18n, providers, tls
 from .drawing import ensure_sheet
+from .edits import Change, describe_parameters, parameters
 from .jobs import JobManager, JobOptions, STATUS_DONE, STATUS_ERROR
 
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -369,6 +370,140 @@ async def edit_job(job_id: str, request: Request) -> JSONResponse:
 
     manager.submit_edit(job, instruction, base_version=base_version)
     return JSONResponse({"job": job.summary()}, status_code=202)
+
+
+def _version_code(job, version: Optional[int], lang: str) -> tuple[int, str]:
+    """The code of the version being worked on, and which one that is.
+
+    Defaults to the newest rather than the one on screen, because a caller
+    that does not say means "the current part"; the panel always says.
+    """
+    if version is None:
+        chosen = job.versions[-1].get("iteration")
+    else:
+        try:
+            chosen = int(version)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400,
+                                detail=i18n.t("http.badversion", lang))
+        if not any(v.get("iteration") == chosen for v in job.versions):
+            raise HTTPException(status_code=404,
+                                detail=i18n.t("http.noversion", lang))
+    path = manager.artifact_path(job.id, chosen, "code.py")
+    if path is None:
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("http.artifactmissing", lang))
+    return chosen, path.read_text(encoding="utf-8")
+
+
+@app.get("/api/jobs/{job_id}/parameters")
+def job_parameters(job_id: str, request: Request,
+                   version: Optional[int] = None) -> JSONResponse:
+    """The numbers this version's script declares, ready to put a control on.
+
+    Derived rather than stored: the code is the source of truth, and reading
+    it here is what stops the browser from deciding for itself what counts
+    as a parameter.
+
+    Read from disk rather than from the job's version list, which is only
+    filled in when a run finishes: the browser asks for these the moment a
+    version is announced on the event stream, and "none yet" is an answer to
+    that question rather than an error.
+    """
+    lang = _lang(request)
+    job = manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=i18n.t("http.nojob", lang))
+
+    if version is None:
+        chosen = job.versions[-1].get("iteration") if job.versions else None
+    else:
+        try:
+            chosen = int(version)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400,
+                                detail=i18n.t("http.badversion", lang))
+
+    path = (manager.artifact_path(job.id, chosen, "code.py")
+            if chosen is not None else None)
+    if path is None:
+        return JSONResponse({"version": chosen, "parameters": []})
+    return JSONResponse({
+        "version": chosen,
+        "parameters": describe_parameters(path.read_text(encoding="utf-8")),
+    })
+
+
+@app.post("/api/jobs/{job_id}/parameters")
+async def set_job_parameters(job_id: str, request: Request) -> JSONResponse:
+    """Rebuild this part with the values given, and nothing else changed.
+
+    No model call and no interpretation: the caller names the parameters, so
+    the only questions left are whether they exist and whether the numbers
+    are numbers. Both are answered here, so a bad value is a refusal the
+    caller can read rather than a run that fails on the event stream.
+    """
+    lang = _lang(request)
+    job = manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=i18n.t("http.nojob", lang))
+    if not job.versions:
+        raise HTTPException(status_code=409,
+                            detail=i18n.t("http.nothingtoedit", lang))
+    if job.status in ("queued", "running"):
+        raise HTTPException(status_code=409,
+                            detail=i18n.t("http.stillworking", lang))
+
+    status = _health()
+    if not status["checks"]["cadquery"]["ok"]:
+        raise HTTPException(status_code=503,
+                            detail=i18n.t("http.norebuild", lang))
+
+    body = await _json_body(request)
+    wanted = body.get("changes")
+    if not isinstance(wanted, dict) or not wanted:
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.needchanges", lang))
+
+    base_version, code = _version_code(job, body.get("version"), lang)
+    available = parameters(code)
+
+    changes: list[Change] = []
+    for name, value in wanted.items():
+        parameter = available.get(str(name))
+        if parameter is None:
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.noparameter", lang, name=name))
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.badvalue", lang, name=name, value=value))
+        # NaN compares false against everything, so it would slip past a
+        # range check and reach the kernel as a dimension.
+        if number != number or number in (float("inf"), float("-inf")):
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.badvalue", lang, name=name, value=value))
+        if number <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.notpositive", lang, name=name))
+        if abs(number - parameter.value) > 1e-9:
+            changes.append(Change(name=parameter.name,
+                                  old=parameter.value, new=number))
+
+    if not changes:
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.nochange", lang))
+
+    job.options.lang = lang
+    manager.submit_parameters(job, changes, base_version=base_version)
+    return JSONResponse({"job": job.summary(),
+                         "changes": [c.to_dict() for c in changes]},
+                        status_code=202)
 
 
 @app.post("/api/jobs/{job_id}/replay")

@@ -214,20 +214,34 @@
         </div>
       </div>
 
-      <div class="rsec code">
+      <div class="rsec code" id="codeSec">
         <div class="phead">
-          <h2 data-i18n="code.heading">Generated CadQuery</h2>
+          <h2 id="codeHeading" data-i18n="code.heading">Generated CadQuery</h2>
           <div class="spacer" style="flex:1"></div>
+          <!-- Two views of the same script. Parameters is the one someone who
+               does not read Python can work in; Code is what it is doing. -->
+          <div class="seg" id="codeViews" role="tablist">
+            <button class="segb on" id="viewCodeBtn" role="tab"
+                    aria-selected="true" data-i18n="code.view.code">Code</button>
+            <button class="segb" id="viewParamsBtn" role="tab"
+                    aria-selected="false" data-i18n="code.view.params">Parameters</button>
+          </div>
           <span class="eyebrow" id="codeStat">— — —</span>
         </div>
-        <div class="codewrap">
+
+        <div class="codewrap" id="codeView">
           <div class="code-scroll" id="codeScroll">
             <div class="code-inner">
               <pre class="hl" id="hl"></pre>
             </div>
           </div>
         </div>
-        <div class="coderow">
+
+        <div class="codewrap" id="paramsView" hidden>
+          <div class="params-body" id="paramsBody"></div>
+        </div>
+
+        <div class="coderow" id="codeRow">
           <button class="btn sm" id="copyBtn"><svg class="icn" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><span data-i18n="code.copy">Copy</span></button>
           <button class="btn sm" id="dlPy"><svg class="icn" viewBox="0 0 24 24"><path d="M12 3v12M7 11l5 5 5-5M4 20h16"/></svg>.py</button>
           <button class="btn sm" id="dlStep">STEP</button>

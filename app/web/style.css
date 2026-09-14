@@ -115,7 +115,8 @@ header{
   height:var(--phead-h);flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;
   border-bottom:1px solid var(--line-soft);
 }
-.phead h2{font-size:11.5px;font-weight:650;letter-spacing:.02em}
+.phead h2{font-size:11.5px;font-weight:650;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.phead .eyebrow{white-space:nowrap;flex:none}
 .pbody{flex:1;overflow-y:auto;overflow-x:hidden;padding:12px}
 
 /* ---------- left ---------- */
@@ -516,24 +517,66 @@ textarea.src{
    the worst case is a clipped panel rather than two panels drawn on top of
    each other. */
 
-.rsec{overflow:hidden;min-height:var(--phead-h)}   /* never smaller than its own header */
+.rsec{overflow:hidden}
 
-/* Reasoning grows with the run -- five refinement iterations of streamed
-   thinking would otherwise crowd out everything below it. */
-.rsec.think{flex:0 1 auto;max-height:32%;border-bottom:1px solid var(--line)}
+/* Every section keeps enough height to be worth looking at: its header plus
+   a few lines of what it holds. Squeezing one to its header alone -- which
+   is what a bare min-height of --phead-h allowed -- hides the content
+   without hiding the panel, so the column looks complete while the
+   Reasoning it is reporting is a 16px slot.
 
-.rsec.ai{flex:0 1 auto;max-height:22%}
+   When the four minimums will not fit, the column scrolls rather than
+   crushing them. That is the guarantee: whatever the window height, every
+   panel is either open or one scroll away, never silently clipped. */
+.rsplit{overflow-y:auto;overscroll-behavior:contain}
 
-/* The code panel absorbs the leftover space, and keeps enough of it to show
-   the header, a few lines, and the download row. It previously declared
-   flex:1 -- a 0% flex-basis, which made it the only thing the shrink
-   algorithm charged, so it collapsed to zero height the moment the column
-   was over-subscribed. */
-.rsec.code{flex:1 1 auto;min-height:calc(var(--phead-h) + 34px + 92px)}
+.rsec.think{flex:1 1 auto;min-height:112px;max-height:24%;
+  border-bottom:1px solid var(--line)}
+.rsec.ai{flex:1 1 auto;min-height:118px;max-height:23%}
 
-.rsec.val{flex:0 1 auto;max-height:24%;border-top:1px solid var(--line);
-  display:flex;flex-direction:column}
+/* The code panel takes twice the share of what is left, and keeps enough to
+   show the header, several lines and the download row. It previously
+   declared flex:1 -- a 0% flex-basis, which made it the only thing the
+   shrink algorithm charged, so it collapsed to zero height the moment the
+   column was over-subscribed. */
+.rsec.code{flex:3 1 auto;min-height:calc(var(--phead-h) + 34px + 170px)}
+
+.rsec.val{flex:1 1 auto;min-height:120px;max-height:23%;
+  border-top:1px solid var(--line);display:flex;flex-direction:column}
 .rsec.val .ai-body{flex:1;min-height:0}
+
+/* A body that scrolls says so. The two `local` gradients are painted in the
+   panel colour and scroll with the content, so they cover the two `scroll`
+   shadows at the very top and very bottom -- which means a shadow shows
+   exactly when there is something past that edge. No script, no resize
+   observer, and correct while content is still streaming in. */
+.ai-body,.think-body,.code-scroll,.params-body{
+  /* --fade is the body's own background, so the cover layers match it
+     exactly; the code panel sits on the darker void. */
+  --fade:#12161D;--fade-0:rgba(18,22,29,0);
+  background-color:var(--fade);
+  background-image:
+    linear-gradient(var(--fade) 34%, var(--fade-0)),
+    linear-gradient(var(--fade-0), var(--fade) 66%),
+    radial-gradient(farthest-side at 50% 0,   rgba(0,0,0,.6), rgba(0,0,0,0)),
+    radial-gradient(farthest-side at 50% 100%, rgba(0,0,0,.6), rgba(0,0,0,0));
+  background-position:top, bottom, top, bottom;
+  background-size:100% 22px, 100% 22px, 100% 10px, 100% 10px;
+  background-repeat:no-repeat;
+  background-attachment:local, local, scroll, scroll;
+  scrollbar-width:thin;scrollbar-color:var(--line) transparent;
+}
+.code-scroll{--fade:#0B0E13;--fade-0:rgba(11,14,19,0)}
+.ai-body::-webkit-scrollbar,.code-scroll::-webkit-scrollbar,
+.params-body::-webkit-scrollbar{width:8px;height:8px}
+.ai-body::-webkit-scrollbar-thumb,.code-scroll::-webkit-scrollbar-thumb,
+.params-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+.ai-body::-webkit-scrollbar-thumb:hover,.code-scroll::-webkit-scrollbar-thumb:hover,
+.params-body::-webkit-scrollbar-thumb:hover{background:var(--line)}
+
+/* The bodies that were only as tall as their content could not scroll at
+   all inside a clamped section -- they overflowed it and were clipped. */
+.rsec.ai .ai-body,.rsec.think .think-body{flex:1 1 auto;min-height:0}
 
 /* the pipeline steps now carry a detail line, so they need more room */
 .pipe{width:320px}
@@ -584,7 +627,7 @@ textarea.src{
    block folds itself away when the step finishes so the column does not grow
    without bound over five refinement iterations. */
 
-.rsec.think{min-height:0;display:flex;flex-direction:column}
+.rsec.think{display:flex;flex-direction:column}
 .think-body{
   flex:1;min-height:0;overflow-y:auto;padding:8px 10px;
   scrollbar-width:thin;scrollbar-color:var(--line) transparent;
@@ -712,3 +755,64 @@ html[lang="ja"] .speclabel,html[lang="ja"] .specwant{letter-spacing:0}
 .hbadge.catalog{color:var(--accent);border-color:var(--accent-dim);
   background:rgba(77,141,246,.08)}
 .iter .ilabel i.catalog{background:var(--accent)}
+
+
+/* ══════════ The code panel's two views ══════════
+   Same script, two ways in: the source for anyone who reads Python, and a
+   control per declared dimension for everyone else. The second is not a
+   simplified view of the first - it edits the same numbers, through the same
+   patcher, and the kernel rebuilds the part either way. */
+
+.seg{display:flex;gap:2px;background:var(--void);border:1px solid var(--line);
+  border-radius:var(--r);padding:2px;flex:none}
+.segb{padding:3px 9px;border-radius:3px;font-size:10.5px;font-weight:600;
+  letter-spacing:.02em;color:var(--ink-dim);transition:.13s;white-space:nowrap}
+.segb:hover{color:var(--ink-2)}
+.segb.on{background:var(--raise);color:var(--ink)}
+.segb:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+.params-body{
+  position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;
+  padding:10px 14px 16px 12px;
+}
+
+.params-hint{font-size:10.5px;line-height:1.45;color:var(--ink-dim);
+  padding:0 0 9px;border-bottom:1px solid var(--line-soft);margin-bottom:9px}
+
+.prow{padding:8px 0 9px;border-bottom:1px solid var(--line-soft)}
+.prow:last-child{border-bottom:none}
+.prow-top{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+.prow-name{font-size:11.5px;color:var(--ink-2);flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prow-val{display:flex;align-items:baseline;gap:3px;flex:none}
+/* The number is the thing being set, so it is typed into directly. Sized to
+   hold six digits without growing the row. */
+.prow-num{
+  width:58px;text-align:right;background:var(--panel-2);border:1px solid var(--line);
+  border-radius:3px;color:var(--ink);font-family:var(--mono);font-size:11.5px;
+  font-variant-numeric:tabular-nums;padding:3px 5px;transition:.13s;
+}
+.prow-num:hover{border-color:var(--line)}
+.prow-num:focus{border-color:var(--accent);outline:none;
+  box-shadow:0 0 0 3px rgba(77,141,246,.12)}
+.prow-unit{font-family:var(--mono);font-size:10px;color:var(--ink-dim);width:20px;padding-left:3px;flex:none}
+
+.prow input[type=range]{width:100%;display:block;accent-color:var(--accent);cursor:grab}
+.prow input[type=range]:active{cursor:grabbing}
+.prow input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:2px}
+
+/* Changed from what the built part declares, and not yet rebuilt. */
+.prow.dirty .prow-name{color:var(--accent)}
+.prow.dirty .prow-num{border-color:var(--accent-dim)}
+.prow-was{font-family:var(--mono);font-size:10px;color:var(--ink-dim);
+  margin-left:6px;flex:none}
+
+.params-foot{display:flex;align-items:center;gap:8px;padding-top:10px}
+.params-note{flex:1;min-width:0;font-size:10.5px;color:var(--ink-dim)}
+.params-note.work{color:var(--accent)}
+
+/* While the kernel is rebuilding, the controls are not lying about the part:
+   they are showing what was asked for, and cannot be moved again until it
+   answers. */
+.params-body.busy .prow input,.params-body.busy .prow-num{
+  opacity:.55;pointer-events:none}
