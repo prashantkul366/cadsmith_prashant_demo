@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -282,14 +283,27 @@ def main() -> int:
         # SVG <text> has no innerText; read textContent from the DOM instead.
         labels = page.evaluate(
             "[...document.querySelectorAll('#paper svg text')].map(t => t.textContent)")
-        for view in ("FRONT VIEW", "TOP VIEW", "RIGHT VIEW", "ISOMETRIC"):
+        for view in ("FRONT", "VIEW FROM ABOVE", "VIEW FROM LEFT", "ISOMETRIC"):
             check(f"{view} projected", view in labels)
-        check("title block carries kernel dimensions",
-              any("100.0 x 60.0 x 55.0 mm" in t for t in labels),
+        check("title block carries the measured size",
+              any("100 x 60 x 55" in t for t in labels),
               next((t for t in labels if " x " in t), ""))
+        check("the sheet states its scale",
+              any(re.fullmatch(r"\d+:\d+", t or "") for t in labels),
+              next((t for t in labels
+                    if re.fullmatch(r"\d+:\d+", t or "")), "none"))
+        check("and which projection it is drawn in",
+              "PROJECTION" in labels
+              and page.locator("#paper svg circle").count() == 2,
+              f'{page.locator("#paper svg circle").count()} symbol circle(s)')
         check("projection geometry present",
-              page.locator("#paper svg path").count() > 40,
-              f"{page.locator('#paper svg path').count()} paths")
+              page.locator("#paper svg polyline").count() > 8,
+              f'{page.locator("#paper svg polyline").count()} polylines')
+        check("the whole sheet fits the panel",
+              page.evaluate("""() => {
+                  const s = document.querySelector('.sheet-scroll');
+                  return s.scrollHeight <= s.clientHeight + 1;
+              }"""))
         page.screenshot(path=str(out / "08-drawing.png"))
         page.click("#back3d")
         page.wait_for_timeout(400)

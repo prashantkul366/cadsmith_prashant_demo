@@ -1786,9 +1786,11 @@ async function openDrawing() {
 function exportDrawingPng() {
   if (!sheetSvg) { warnToast(t("draw.needdrawing")); return; }
   const svg = $("#paper").querySelector("svg");
-  const width = +svg.getAttribute("width") || 1120;
-  const height = +svg.getAttribute("height") || 780;
-  const scale = 2;
+  const box = (svg.getAttribute("viewBox") || "").split(/[\s,]+/).map(Number);
+  const width = box.length === 4 && box[2] ? box[2] : 420;
+  const height = box.length === 4 && box[3] ? box[3] : 297;
+  // 8 px per mm is about 200 dpi: enough to read a 2.5mm note when printed.
+  const scale = 8;
 
   const blob = new Blob([sheetSvg], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);

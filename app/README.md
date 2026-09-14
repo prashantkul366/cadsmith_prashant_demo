@@ -229,13 +229,45 @@ to ask for it again every visit. Parameter labels stay in English in either
 language: they are the script's own identifiers, and the unit beside them is
 a symbol in both.
 
+A generated script's header comment names the part and the standard it
+follows, and never restates a size. A comment that repeats the number on the
+line below it is redundant while the script is untouched and wrong the moment
+a control moves — `# M8 x 30.0 socket head cap screw` still said 30.0 after
+you dragged the length to 45. The sizes live on the assignments, which are
+what the kernel reads and what the drawing dimensions.
+
 What each control is depends only on its name — a count, an angle, or a
 length in mm — and that is separate from how the number is written, so a
 spring's `active_coils = 8.0` is a count of coils rather than 8 mm of
 something, and the patcher still keeps it a float.
 
-**Drawing.** Front, top, right and isometric views projected from the exported
-STEP solid, with hidden lines resolved and all four at a common scale.
+**Drawing.** A proper engineering drawing of the built part, on an A3 sheet,
+projected from the exported STEP solid through OpenCASCADE's hidden-line
+algorithm — so any part the pipeline can build gets a correct drawing rather
+than a picture of one. What makes it a drawing rather than four pictures:
+
+* **First angle**, per ISO 128-30:2001 A.2 — "the view from above is placed
+  underneath", "the view from the left is placed on the right" — with the two
+  pairs sharing their centre lines, and the first angle symbol in the title
+  block so nobody has to guess which system it is drawn in.
+* **A stated preferred scale** (ISO 5455). A sheet fitted to its frame cannot
+  be measured; one drawn at 2:1 can, and `app/tests/test_drawing.py` measures
+  the front view on the sheet to confirm it really is the part times the
+  ratio the title block claims.
+* **Dimensions** (ISO 129-1) with extension lines, arrowheads and values that
+  come from the kernel, each overall length given once across the sheet
+  rather than repeated on every view that happens to show it. Circular
+  features get a centre line and a diameter, on a leader long enough to clear
+  the view it points into.
+* **Line types** (ISO 128-2): two widths in a 2:1 ratio, hidden detail
+  dashed, centre lines long-dash-dotted. The pictorial view drops hidden
+  detail, which is clutter rather than information there.
+* **An ISO 7200 title block** — owner, title, drawing number, date, scale,
+  units, projection, sheet — plus the size and volume the kernel measured.
+
+It carries no tolerances and no material, and says so on the sheet. Nothing
+in the pipeline has specified either, and a general tolerance note on a part
+nobody has toleranced would be a claim rather than a fact.
 
 **Choose a backend.** Provider, generation model and judge model sit under the
 run options. See **Model backends** above.
@@ -388,7 +420,8 @@ app/
     instrument.py  makes the stock pipeline observable, without editing it
     edits.py       parameter-patch interpretation, with the Refiner as fallback
     providers.py   Anthropic, OpenAI, Ollama and any OpenAI-compatible backend
-    drawing.py     orthographic projections composed into a sheet
+    drawing.py     the A3 drawing sheet: first angle projections, one
+                   stated scale, dimensions and an ISO 7200 title block
     replay.py      re-emits a recorded run at presentation speed
     i18n.py        the messages a person reads, in English and Japanese
     spec.py        kernel-measured checks against what the plan claimed
@@ -462,6 +495,8 @@ deterministic.
 .venv/bin/python -m app.tests.test_catalog_library  # every family builds and routes
 .venv/bin/python -m app.tests.test_grounding        # published dimensions retrieved
 .venv/bin/python -m app.tests.test_spec             # measurement over opinion
+.venv/bin/python -m app.tests.test_drawing          # the drawing sheet against
+                                                    # the standards it cites
 .venv/bin/python -m app.tests.test_budget           # the spend ceiling
 .venv/bin/python -m app.tests.test_edit_chain       # chained edits, real kernel
 .venv/bin/python -m app.tests.test_encoding         # UTF-8 everywhere (Windows)

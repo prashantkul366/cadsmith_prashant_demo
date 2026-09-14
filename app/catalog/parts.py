@@ -78,7 +78,7 @@ def socket_head_cap_screw(size: str = "M8", length: float = 30.0,
 
     core = f"""import cadquery as cq
 
-# {key} x {_n(length)} socket head cap screw, ISO 4762
+# Socket head cap screw to ISO 4762
 # The bearing face under the head sits at z = 0, so translating this to a
 # hole position drops the screw straight into place.
 thread_diameter = {_n(thread.diameter)}
@@ -127,7 +127,7 @@ def hex_bolt(size: str = "M8", length: float = 30.0) -> CatalogPart:
 
     code = f"""import cadquery as cq
 
-# {key} x {_n(length)} hex head bolt, ISO 4014
+# Hex head bolt to ISO 4014
 # Bearing face under the head at z = 0.
 thread_diameter = {_n(thread.diameter)}
 length = {_n(length)}
@@ -169,7 +169,7 @@ def hex_nut(size: str = "M8") -> CatalogPart:
 
     code = f"""import cadquery as cq
 
-# {key} hex nut, ISO 4032
+# Hex nut to ISO 4032
 across_flats = {_n(spec.across_flats)}
 thickness = {_n(spec.height)}
 bore_diameter = {_n(thread.diameter)}
@@ -205,7 +205,7 @@ def flat_washer(size: str = "M8") -> CatalogPart:
 
     code = f"""import cadquery as cq
 
-# {key} plain washer, ISO 7089
+# Plain washer to ISO 7089
 inner_diameter = {_n(spec.inner_diameter)}
 outer_diameter = {_n(spec.outer_diameter)}
 thickness = {_n(spec.thickness)}
@@ -244,7 +244,7 @@ def ball_bearing(designation: str = "6203") -> CatalogPart:
 
     code = f"""import cadquery as cq
 
-# {key} deep groove ball bearing (simplified envelope), ISO 15
+# Deep groove ball bearing, simplified envelope to ISO 15
 bore = {_n(spec.bore)}
 outer_diameter = {_n(spec.outer_diameter)}
 width = {_n(spec.width)}
@@ -290,7 +290,7 @@ def o_ring(inner_diameter: float = 20.0, cord: float = 2.5) -> CatalogPart:
 
     code = f"""import cadquery as cq
 
-# O-ring, {_n(inner_diameter)} ID x {_n(cord)} cord
+# O-ring, round cord section
 inner_diameter = {_n(inner_diameter)}
 cord_diameter = {_n(cord)}
 mean_diameter = {_n(mean)}    # ID + cord: the circle the cord centre follows
@@ -315,7 +315,7 @@ def dowel_pin(diameter: float = 6.0, length: float = 20.0) -> CatalogPart:
 
     code = f"""import cadquery as cq
 
-# Parallel dowel pin, {_n(diameter)} x {_n(length)}, ISO 2338
+# Parallel dowel pin to ISO 2338, m6 tolerance class
 diameter = {_n(diameter)}
 length = {_n(length)}
 end_chamfer = {_n(chamfer)}
@@ -471,7 +471,7 @@ def timing_pulley(teeth: int = 20, belt: str = "GT2",
     head = f"""import cadquery as cq
 from math import pi, tan, radians
 
-# {key} timing pulley, {teeth} teeth on a {profile.pitch:g} mm belt pitch
+# Timing pulley, {key} tooth profile
 teeth = {teeth}
 belt_pitch = {_n(profile.pitch)}
 face_width = {_n(face_width)}
@@ -566,7 +566,7 @@ def spur_gear(teeth: int = 20, module: float = 2.0, face_width: float = 8.0,
     head = f"""import cadquery as cq
 from math import acos, cos, sin, tan, pi, radians
 
-# Involute spur gear, {teeth} teeth, module {_n(module)}
+# Involute spur gear, ISO 53 basic rack
 module = {_n(module)}
 teeth_number = {teeth}
 pressure_angle = {_n(pressure_angle)}

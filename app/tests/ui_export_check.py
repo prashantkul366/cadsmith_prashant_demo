@@ -158,11 +158,12 @@ def main() -> int:
         generate(page, "an M8x30 socket head cap screw")
         step2 = grab(page, "#dlStep", out)
         code2 = grab(page, "#dlPy", out)
+        body2 = code2.read_text(encoding="utf-8") if code2 else ""
         check("the new part exports, not the old one",
-              code2 is not None
-              and "teeth_number" not in code2.read_text(encoding="utf-8")
-              and "M8" in code2.read_text(encoding="utf-8"),
-              code2.name if code2 else "no file")
+              code2 is not None and "teeth_number" not in body2
+              and "socket head cap screw" in body2.lower(),
+              next((l for l in body2.splitlines() if l.startswith("# ")),
+                   code2.name if code2 else "no file"))
         check("and it is a different file from the first",
               step2 is not None and step is not None
               and step2.name != step.name,
