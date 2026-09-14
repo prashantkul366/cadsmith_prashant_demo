@@ -25,7 +25,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-from . import i18n, providers, tls
+from . import catalog_run, i18n, providers, tls
 from .drawing import ensure_sheet
 from .jobs import JobManager, JobOptions, STATUS_DONE, STATUS_ERROR
 
@@ -131,12 +131,15 @@ def _probe_offscreen_render() -> dict:
         ok = dims[0] > 0 and dims[1] > 0
         _render_capability = {
             "ok": ok,
+            "code": "ready" if ok else "nopixels",
             "detail": "offscreen rendering available" if ok else
                       "render window produced no pixels",
         }
     except Exception as exc:
         _render_capability = {
             "ok": False,
+            "code": "error",
+            "data": {"reason": f"{type(exc).__name__}: {exc}"},
             "detail": (
                 f"{type(exc).__name__}: {exc}. On headless Linux install a "
                 "software GL backend (apt-get install libosmesa6)."
@@ -153,7 +156,9 @@ def _health() -> dict:
     try:
         import cadquery
 
-        checks["cadquery"] = {"ok": True, "detail": f"version {cadquery.__version__}"}
+        checks["cadquery"] = {"ok": True, "code": "version",
+                              "data": {"v": cadquery.__version__},
+                              "detail": f"version {cadquery.__version__}"}
     except Exception as exc:
         checks["cadquery"] = {"ok": False, "detail": str(exc)}
 
@@ -162,6 +167,8 @@ def _health() -> dict:
     ready = [p for p in providers.status() if p["ready"]]
     checks["model_backend"] = {
         "ok": bool(ready),
+        "code": "ready" if ready else "none",
+        "data": {"names": ", ".join(p["label"] for p in ready)},
         "detail": ("ready: " + ", ".join(p["label"] for p in ready)) if ready
                   else "No model backend configured - set a provider key in "
                        ".env or paste one in the app. Recorded runs still "
@@ -172,12 +179,20 @@ def _health() -> dict:
         import trimesh  # noqa: F401
         import scipy  # noqa: F401
 
-        checks["metrics"] = {"ok": True, "detail": "trimesh and scipy available"}
+        checks["metrics"] = {"ok": True, "code": "ready",
+                             "detail": "trimesh and scipy available"}
     except Exception as exc:
         checks["metrics"] = {"ok": False, "detail": str(exc)}
 
+    # `detail` stays the English sentence, so anything reading the API keeps
+    # working and a check with no translation still says something. `code`
+    # and `data` are what let the browser say it in the reader's language.
     trust = tls.status()
     checks["tls_trust"] = {"ok": trust["ok"], "detail": trust["detail"]}
+    if trust.get("code"):
+        checks["tls_trust"]["code"] = trust["code"]
+    if trust.get("data"):
+        checks["tls_trust"]["data"] = trust["data"]
 
     # The catalogue reports ok whether or not the optional gear and fastener
     # libraries are installed - without them it simply covers less - and says
@@ -195,10 +210,16 @@ def _health() -> dict:
         if missing:
             # Actionable rather than merely factual: the usual reason these
             # are absent is a machine without git, and the fix is one line.
-            detail += (f" - {', '.join(missing)} not installed; add gears and "
-                       f"the wider fastener range with "
-                       f"'pip install -r app/requirements-catalog.txt'")
-        checks["catalog"] = {"ok": True, "detail": detail}
+            detail += (f" - {', '.join(missing)} not installed; helical, "
+                       f"bevel and rack gears and the wider fastener range "
+                       f"need 'pip install -r app/requirements-catalog.txt'")
+        # The counts and the library names are machine facts, so the browser
+        # can say this in the reader's own language instead of quoting our
+        # English at them. Every other check's detail really is a quote - a
+        # version string, a path, a library's own error - and stays as it is.
+        checks["catalog"] = {"ok": True, "detail": detail, "code": "families",
+                             "families": len(described["families"]),
+                             "live": live, "missing": missing}
     except Exception as exc:
         checks["catalog"] = {"ok": True,
                              "detail": f"catalogue unavailable: {exc}"}
@@ -281,7 +302,20 @@ async def create_job(request: Request) -> JSONResponse:
     options = JobOptions.from_dict({**raw_options, "lang": lang})
     issues = providers.problems(options.llm_config())
     if issues:
-        raise HTTPException(status_code=503, detail=" ".join(issues))
+        # A standard part is answered from the catalogue with no model call at
+        # all, so refusing it for want of a provider key contradicts both the
+        # health check, which reports can_generate on the strength of the
+        # catalogue alone, and the banner, which tells the reader in as many
+        # words that standard parts still work. Ask the catalogue first and
+        # only refuse what actually needs an agent.
+        served_by_catalogue = False
+        if options.use_catalog:
+            try:
+                served_by_catalogue = catalog_run.find(prompt) is not None
+            except Exception:
+                served_by_catalogue = False
+        if not served_by_catalogue:
+            raise HTTPException(status_code=503, detail=" ".join(issues))
     if options.use_vision and not status["checks"]["vision_render"]["ok"]:
         options.use_vision = False  # degrade rather than fail mid-run
 

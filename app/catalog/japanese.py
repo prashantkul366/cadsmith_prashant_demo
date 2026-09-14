@@ -124,6 +124,12 @@ MEASURES = (
 #: label in front because that is the form ``router._MODULE`` reads.
 COUNTS = (
     ("歯数", "{n} teeth"),
+    # 「歯数20」is the drawing-office phrasing; 「20歯」and 「20枚歯」are how
+    # people actually ask, and without these a Japanese request for a gear
+    # reached the agents instead of the catalogue. The lookahead keeps 歯 from
+    # eating the 歯 in 歯車, which would turn 「20歯車」into "20 teeth 車".
+    ("枚歯", "{n} teeth"),
+    ("歯(?!車|数|幅)", "{n} teeth"),
     ("モジュール", "module {n}"),
     ("有効巻数", "{n} coils"),
     ("巻数", "{n} coils"),
@@ -185,6 +191,19 @@ TERMS = (
     ("ラック", "rack"),
     ("ピニオン", "pinion"),
     ("歯車", "gear"),
+    # A box that holds gears is not a gear. English already declined "a
+    # gearbox for a 20 tooth gear" on the word "gearbox"; the Japanese for it
+    # is one word, so the rewriter has to produce that word for the existing
+    # guard to see it. These belong here rather than in CUSTOM_CONTEXT, which
+    # is scanned *after* this table has run: by then ギヤボックス has already
+    # become "gear ボックス" and could never match, and
+    # 「20歯の歯車を入れるギヤボックス」 was served as a bare 20-tooth gear -
+    # the wrong hardware, silently. Longer entries come first: this table is
+    # applied in order, so ギヤ below would otherwise consume them.
+    ("ギヤボックス", "gearbox"),
+    ("ギアボックス", "gearbox"),
+    ("減速機", "gearbox"),
+    ("変速機", "gearbox"),
     ("ギヤ", "gear"),
     ("ギア", "gear"),
     ("スプロケット", "sprocket"),

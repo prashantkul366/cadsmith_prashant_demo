@@ -12,6 +12,7 @@ deterministic.
     python -m app.tools.mock_provider --fail novision     # refuses images
     python -m app.tools.mock_provider --fail empty        # reasoning-only reply
     python -m app.tools.mock_provider --fail hang         # never answers
+    python -m app.tools.mock_provider --fail refusal      # declines to plan
     python -m app.tools.mock_provider --delay 5           # slow but working
 
 Then in the app: Provider = Custom (OpenAI-compatible), base URL
@@ -153,6 +154,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _reply_for(self, system: str, user: str = "") -> str:
         if "Planner Agent" in system:
+            if Handler.fail == "refusal":
+                # What a real model does with "write me a poem": it answers
+                # the question instead of planning a part. Prose where JSON
+                # was asked for is the whole failure, so this returns prose.
+                return ("I can't help with that as a CAD request - it isn't "
+                        "a description of a physical part. Tell me what to "
+                        "make and I'll plan it.")
             # A Planner call starts a run, so reset here: otherwise the
             # counter carries over and the second run is accepted on its
             # first attempt, skipping the refinement loop.
@@ -200,7 +208,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8123)
     parser.add_argument("--fail", default="none",
                         choices=["none", "429", "500", "novision", "badjson",
-                                 "empty", "hang"],
+                                 "empty", "hang", "refusal"],
                         help="Misbehave in a specific way, to test handling.")
     parser.add_argument("--delay", type=float, default=0.0,
                         help="Seconds to wait before each reply.")

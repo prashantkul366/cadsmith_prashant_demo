@@ -108,8 +108,10 @@ def main() -> int:
         note = page.locator("#providerNote").inner_text()
         check("an unreachable local provider is reported honestly",
               "Nothing is listening" in note, note[:70])
-        check("generate is blocked with no usable backend",
-              page.locator("#genBtn").is_disabled())
+        check("generate stays available - the catalogue needs no backend",
+              not page.locator("#genBtn").is_disabled())
+        check("and the note says why it is still available",
+              "catalogue" in note.lower(), note[:120])
         check("the key field appears when setup is needed",
               page.locator("#keyRow").is_visible())
 

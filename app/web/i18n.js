@@ -276,6 +276,15 @@ const I18N = (function () {
     "prov.local":       ["Running locally — nothing leaves this machine.",
                          "ローカル実行です。この端末の外にデータは出ません。"],
     "prov.ready":       ["Ready.", "準備完了。"],
+    /* Said alongside the setup hint, because Generate stays available with
+       no key at all: a standard part is served from the catalogue with no
+       model call, and greying the button out would deny something that
+       works. */
+    "prov.catalogonly": [
+      "Standard parts still work with no key — ask for a fastener, bearing, "
+      + "gear, pulley or spring and it comes from the catalogue.",
+      "キーがなくても標準部品は使えます。ねじ・軸受・歯車・プーリー・ばね"
+      + "はカタログから提供されます。"],
     "prov.isready":     ["{label} is ready", "{label} の準備ができました"],
     /* What a provider that is not ready needs. The server sends the same
        sentence in English as a fallback; these are looked up by the key it
@@ -372,6 +381,70 @@ const I18N = (function () {
        A part no agent produced must not be shown as evidence that the agents
        work, so every one of these says where it came from. */
     "diag.catalog":     ["catalogue", "カタログ"],
+
+    /* The catalogue row is the one health detail the app writes itself
+       rather than quoting from a tool, so it is the one that has to be
+       translated. The library names stay as they are - they are package
+       names, not words. */
+    "diag.catalog.families": ["{n} part families", "部品ファミリー {n} 種類"],
+    "diag.catalog.missing": [
+      "{names} not installed; helical, bevel and rack gears and the wider "
+      + "fastener range need 'pip install -r app/requirements-catalog.txt'",
+      "{names} は未インストールです。はすば歯車・かさ歯車・ラック、および"
+      + "締結部品の拡張には 'pip install -r app/requirements-catalog.txt' "
+      + "が必要です"],
+    "diag.catalog.unavailable": ["catalogue unavailable: {reason}",
+                                 "カタログを利用できません: {reason}"],
+
+    /* Each check reports which outcome it hit, and these are the sentences
+       for them. Anything not listed here keeps the English the server sent,
+       which is correct where that text is a quote rather than our prose. */
+    "diag.cadquery.version":   ["version {v}", "バージョン {v}"],
+    "diag.vision_render.ready": ["offscreen rendering available",
+                                 "オフスクリーンレンダリングが利用可能です"],
+    "diag.vision_render.nopixels": ["render window produced no pixels",
+                                    "レンダーウィンドウが画像を生成しませんでした"],
+    "diag.vision_render.error": [
+      "{reason}. On headless Linux install a software GL backend "
+      + "(apt-get install libosmesa6).",
+      "{reason}。ヘッドレスの Linux では、ソフトウェア GL バックエンドを"
+      + "インストールしてください（apt-get install libosmesa6）。"],
+    "diag.model_backend.ready": ["ready: {names}", "利用可能: {names}"],
+    "diag.model_backend.none": [
+      "No model backend configured - set a provider key in .env or paste one "
+      + "in the app. Recorded runs still replay, and parameter edits still "
+      + "rebuild.",
+      "モデルのバックエンドが設定されていません。.env にプロバイダーの"
+      + "キーを設定するか、アプリに貼り付けてください。記録済みの実行の"
+      + "再生と、パラメータ編集による再ビルドは引き続き利用できます。"],
+    "diag.metrics.ready": ["trimesh and scipy available",
+                           "trimesh と scipy が利用可能です"],
+    "diag.tls_trust.bundle": ["using the CA bundle at {path}",
+                              "CA バンドルを使用中: {path}"],
+    "diag.tls_trust.bundle_undone": [
+      "using the CA bundle at {path} (startup truststore injection undone)",
+      "CA バンドルを使用中: {path}"
+      + "（起動時の truststore の注入を取り消しました）"],
+    "diag.tls_trust.certifi_env": [
+      "using certifi (CADSMITH_TRUST_STORE=certifi)",
+      "certifi を使用中（CADSMITH_TRUST_STORE=certifi）"],
+    "diag.tls_trust.system": ["using the operating system certificate store",
+                              "OS の証明書ストアを使用中"],
+    "diag.tls_trust.system_already": [
+      "using the operating system certificate store (already injected by the "
+      + "Python installation)",
+      "OS の証明書ストアを使用中"
+      + "（Python のインストール時に既に注入済み）"],
+    "diag.tls_trust.certifi_fallback": [
+      "using certifi; the OS certificate store is not in use. On a network "
+      + "that inspects TLS, install truststore: pip install truststore",
+      "certifi を使用中で、OS の証明書ストアは使われていません。TLS を"
+      + "検査するネットワークでは truststore をインストールしてください: "
+      + "pip install truststore"],
+    "diag.tls_trust.system_error": [
+      "could not use the OS certificate store ({reason}); falling back to certifi",
+      "OS の証明書ストアを使用できませんでした（{reason}）。"
+      + "certifi にフォールバックします"],
     "opt.grounding":    ["Standard dimensions", "標準寸法の参照"],
     "opt.grounding.tip": [
       "Give the Planner the published dimensions for any standard part the "
@@ -528,10 +601,25 @@ const I18N = (function () {
     try { return localStorage.getItem(STORE_KEY); } catch (e) { return null; }
   }
 
-  /* The browser's own preference decides the first visit, so a Japanese
-     machine opens in Japanese without anyone being told there is a switch.
-     An explicit choice, once made, outranks it. */
+  /* ?lang= wins, then a choice made here before, then the browser's own
+     preference - so a Japanese machine opens in Japanese without anyone
+     being told there is a switch.
+
+     The URL has to come first because the server already reads it that way:
+     without this, /?lang=ja returned Japanese server messages inside an
+     English page, and a link shared with a colleague was half translated. */
+  function fromUrl() {
+    try {
+      const asked = new URLSearchParams(location.search).get("lang");
+      if (!asked) return null;
+      const code = String(asked).toLowerCase().split("-")[0];
+      return INDEX[code] !== undefined ? code : null;
+    } catch (e) { return null; }
+  }
+
   function initial() {
+    const asked = fromUrl();
+    if (asked) return asked;
     const saved = stored();
     if (saved && INDEX[saved] !== undefined) return saved;
     const wanted = (navigator.languages || [navigator.language || "en"]);
@@ -543,6 +631,11 @@ const I18N = (function () {
   }
 
   let lang = initial();
+  if (fromUrl() === lang) {
+    // Asking for a language in the URL is as deliberate as clicking the
+    // switch, so it is remembered the same way.
+    try { localStorage.setItem(STORE_KEY, lang); } catch (e) { /* fine */ }
+  }
   const listeners = [];
 
   /* Missing keys fall back to English rather than showing the key: a gap in

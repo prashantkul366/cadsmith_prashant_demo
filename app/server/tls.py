@@ -73,12 +73,14 @@ def configure() -> dict:
         undone = _undo_injection()
         _state.update(
             source="bundle", ok=True,
+            code="bundle_undone" if undone else "bundle",
+            data={"path": str(bundle)},
             detail=f"using the CA bundle at {bundle}"
                    + (" (startup truststore injection undone)" if undone else ""))
         return _state
 
     if preference == "certifi":
-        _state.update(source="certifi", ok=True,
+        _state.update(source="certifi", ok=True, code="certifi_env",
                       detail="using certifi (CADSMITH_TRUST_STORE=certifi)")
         return _state
 
@@ -93,23 +95,24 @@ def configure() -> dict:
             # fails as "Connection error" - which reads like a network fault
             # and is not one. One injection is enough.
             _state.update(
-                source="system", ok=True,
+                source="system", ok=True, code="system_already",
                 detail="using the operating system certificate store "
                        "(already injected by the Python installation)")
             return _state
 
         truststore.inject_into_ssl()
-        _state.update(source="system", ok=True,
+        _state.update(source="system", ok=True, code="system",
                       detail="using the operating system certificate store")
     except ImportError:
         _state.update(
-            source="certifi", ok=True,
+            source="certifi", ok=True, code="certifi_fallback",
             detail=("using certifi; the OS certificate store is not in use. "
                     "On a network that inspects TLS, install truststore: "
                     "pip install truststore"))
     except Exception as exc:
         _state.update(
-            source="certifi", ok=False,
+            source="certifi", ok=False, code="system_error",
+            data={"reason": str(exc)},
             detail=f"could not use the OS certificate store ({exc}); "
                    f"falling back to certifi")
     return _state

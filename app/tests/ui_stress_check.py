@@ -241,6 +241,13 @@ def main() -> int:
 
             # ---------------------------------------------------------
             print("\nReloading at an awkward moment")
+            # Switching provider above cleared the model roles: Custom has no
+            # defaults to fall back on. Put them back, exactly as a person
+            # would have to before generating again - otherwise this is a
+            # test of the "no model chosen" message, which is elsewhere.
+            page.fill("#optGenModel", "mock-coder")
+            page.fill("#optJudgeModel", "mock-judge")
+            page.wait_for_timeout(300)
             page.fill("#prompt", "a pillow block bearing housing")
             page.click("#genBtn")
             page.wait_for_selector("#ovPipe:not([hidden])", timeout=20000)

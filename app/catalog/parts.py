@@ -541,6 +541,120 @@ result = (
 
 
 
+def spur_gear(teeth: int = 20, module: float = 2.0, face_width: float = 8.0,
+              bore: float = 6.0, pressure_angle: float = 20.0) -> CatalogPart:
+    """An involute spur gear, built here rather than fetched from a library.
+
+    Gears are the standard part people ask for most, and until now they were
+    the one family that needed an optional git dependency: without cq_gears
+    the router refused every gear request outright. A spur gear is also the
+    easiest of them to get exactly right, because the involute is closed-form
+    - so this family stops depending on anything.
+
+    Proportions follow the ISO 53 basic rack: addendum one module, dedendum
+    1.25 modules, so tip diameter is module x (teeth + 2) and the circular
+    tooth thickness at the pitch circle is pi x module / 2. The flank is a
+    true involute, not the star polygon a language model reaches for.
+
+    cq_gears is still the better answer for helical, herringbone, bevel, rack
+    and ring gears, and the router prefers it for spur gears too when it is
+    installed - it carries a trochoidal root fillet this does not.
+    """
+    if teeth < 5:
+        raise ValueError(f"A spur gear needs at least 5 teeth, not {teeth}.")
+
+    head = f"""import cadquery as cq
+from math import acos, cos, sin, tan, pi, radians
+
+# Involute spur gear, {teeth} teeth, module {_n(module)}
+module = {_n(module)}
+teeth_number = {teeth}
+pressure_angle = {_n(pressure_angle)}
+face_width = {_n(face_width)}
+
+# ISO 53 basic rack proportions: addendum one module, dedendum 1.25.
+pitch_radius = module * teeth_number / 2.0
+base_radius = pitch_radius * cos(radians(pressure_angle))
+tip_radius = pitch_radius + module
+root_radius = pitch_radius - 1.25 * module
+
+# An involute exists only outside the base circle. Below about 41 teeth the
+# base circle sits above the root, so the flank starts there and the profile
+# drops radially to the root from its lowest involute point.
+flank_start = max(base_radius, root_radius)
+inv_pitch = tan(radians(pressure_angle)) - radians(pressure_angle)
+
+
+def half_width(radius):
+    \"\"\"Half the tooth's angular width at this radius, about its centreline.
+
+    At the pitch radius this is pi / (2 * teeth_number), which makes the circular
+    tooth thickness there exactly pi * module / 2 - the definition the whole
+    involute system is built on.
+    \"\"\"
+    alpha = acos(min(1.0, base_radius / radius))
+    return pi / (2.0 * teeth_number) + inv_pitch - (tan(alpha) - alpha)
+
+
+def at(radius, angle):
+    return (radius * cos(angle), radius * sin(angle))
+
+
+pitch_angle = 2.0 * pi / teeth_number
+root_half = half_width(flank_start)
+# Eight points per flank. The involute is gentle enough over one tooth that
+# a spline through them holds the profile to well under a micron.
+radii = [flank_start + (tip_radius - flank_start) * i / 8.0
+         for i in range(9)]
+
+# Each flank is one spline through the involute; tip and root are straight.
+# Splines rather than a dense polyline: chording every flank costs five times
+# the faces for a worse surface, and each one lands in the STEP export.
+profile = cq.Workplane('XY').moveTo(*at(root_radius, -root_half))
+for tooth in range(teeth_number):
+    centre = tooth * pitch_angle
+    if flank_start > root_radius:
+        profile = profile.lineTo(*at(flank_start, centre - root_half))
+    profile = profile.spline([at(r, centre - half_width(r)) for r in radii[1:]],
+                             includeCurrent=True)
+    # The tip is two straight segments through a vertex on the centreline, so
+    # the measured tip diameter is exactly module x (teeth_number + 2).
+    profile = profile.lineTo(*at(tip_radius, centre))
+    profile = profile.lineTo(*at(tip_radius, centre + half_width(tip_radius)))
+    profile = profile.spline([at(r, centre + half_width(r))
+                              for r in reversed(radii[:-1])],
+                             includeCurrent=True)
+    if flank_start > root_radius:
+        profile = profile.lineTo(*at(root_radius, centre + root_half))
+    # The next tooth opens with its own root point, closing this gap.
+    profile = profile.lineTo(*at(root_radius, centre + pitch_angle - root_half))
+
+result = profile.close().extrude(face_width)
+"""
+
+    tail = ""
+    if bore:
+        tail = f"""
+bore_diameter = {_n(bore)}
+result = (
+    result.faces('>Z').workplane(centerOption='CenterOfBoundBox')
+    .circle(bore_diameter / 2.0)
+    .cutThruAll()
+)
+"""
+    return CatalogPart(
+        id=f"spur_gear_{teeth}t_m{_n(module).replace('.', 'p')}",
+        title=f"Spur gear, {teeth} teeth, module {module:g}",
+        standard="ISO 53 basic rack, 20\u00b0 involute",
+        code=head + tail,
+        parameters={"teeth": teeth, "module": module,
+                    "face_width": face_width, "bore": bore,
+                    "pressure_angle": pressure_angle,
+                    "pitch_diameter": module * teeth,
+                    "tip_diameter": module * (teeth + 2)},
+    )
+
+
 def select(text: str) -> CatalogPart | None:
     """The standard part someone asked for, or None if this is a custom part.
 

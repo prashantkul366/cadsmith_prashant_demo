@@ -152,14 +152,41 @@ async function loadHealth() {
 
 /* The check names are translated; the details are not. They quote what the
    machine reported - a version string, a path, a library's own message - and
-   quoting is not translating. */
+   quoting is not translating.
+
+   The catalogue is the exception, because its detail is not a quote: the
+   server counts the families and names the missing libraries, and the
+   sentence around those facts is ours. So the server sends the facts and
+   this composes the sentence, which means a Japanese reader gets Japanese
+   rather than our English. */
+function catalogDetail(check) {
+  if (typeof check.families !== "number") return check.detail;
+  let text = t("diag.catalog.families", { n: check.families });
+  if (check.live && check.live.length) text += ` (${check.live.join(", ")})`;
+  if (check.missing && check.missing.length) {
+    text += " - " + t("diag.catalog.missing", { names: check.missing.join(", ") });
+  }
+  return text;
+}
+
+/* Each check names its own outcome, so a sentence the server wrote can be
+   said in the reader's language instead. A check with no name, or one this
+   dictionary has no phrasing for, falls back to the English the server
+   sent - which for most of them is the right answer anyway, because it is a
+   quote: a version string, a path, a library's own error. */
+function checkDetail(name, check) {
+  if (name === "catalog") return catalogDetail(check);
+  const key = check.code ? `diag.${name}.${check.code}` : null;
+  return key && I18N.has(key) ? t(key, check.data || {}) : check.detail;
+}
+
 function renderDiagRows(checks) {
   $("#diagRows").innerHTML = Object.entries(checks).map(([name, check]) => `
     <div class="drow">
       <span class="dot ${check.ok ? "ok" : "bad"}"></span>
       <b>${esc(I18N.has("diag." + name) ? t("diag." + name)
                                         : name.replace(/_/g, " "))}</b>
-      <span>${esc(check.detail)}</span>
+      <span>${esc(checkDetail(name, check))}</span>
     </div>`).join("");
 }
 
@@ -1039,6 +1066,7 @@ addEventListener("keydown", e => {
     $("#lightbox").hidden = true;
     $("#diag").hidden = true;
     $("#sheet").classList.remove("on");
+    $("#hist").classList.remove("open");
   }
   if (key === "d") $("#drawBtn").click();
 });
@@ -1122,6 +1150,14 @@ function setModelLabels(generation, judge) {
     t("label.judge.model", { model: short(judge) });
 }
 
+/* Whether the catalogue can serve a part right now. Two callers depend on
+   it agreeing: the Generate button stays live because of it, and the note
+   under the provider picker has to say why. */
+function catalogueLive() {
+  return !!(S.health && S.health.checks && S.health.checks.catalog
+            && S.health.checks.catalog.ok);
+}
+
 function updateProviderNote() {
   const provider = S.provider;
   const note = $("#providerNote");
@@ -1134,9 +1170,17 @@ function updateProviderNote() {
     note.className = "optnote warn";
     // The server sends the same sentence as a key, so it can be shown in
     // whatever language the switch is on; `hint` is the fallback.
-    note.textContent = (provider.hint_key && I18N.has(provider.hint_key)
+    let text = (provider.hint_key && I18N.has(provider.hint_key)
       ? t(provider.hint_key, provider.hint_params || {})
-      : provider.hint) + ".";
+      : provider.hint) || "";
+    // Some hints are sentences and some are fragments; only the fragments
+    // need the full stop.
+    if (!/[.。！!？?]$/.test(text)) text += ".";
+    // Generate is not greyed out in this state, because the catalogue can
+    // still answer. Saying so here is what makes the live button honest -
+    // otherwise it looks like the setup warning is being ignored.
+    if (catalogueLive()) text += " " + t("prov.catalogonly");
+    note.textContent = text;
     return;
   }
   if (!generation || !judge) {
@@ -1161,7 +1205,11 @@ function updateGenerateAvailability() {
   const ready = !!(provider && provider.ready
                    && $("#optGenModel").value.trim()
                    && $("#optJudgeModel").value.trim());
-  $("#genBtn").disabled = !(kernelOk && ready);
+  // The catalogue answers a standard part with no model call, so a missing
+  // provider key is not a reason to grey this out - the note right above it
+  // says standard parts still work, and it is telling the truth. Ask for
+  // something the catalogue cannot serve and the server says so.
+  $("#genBtn").disabled = !(kernelOk && (ready || catalogueLive()));
 }
 
 async function saveProviderKey() {

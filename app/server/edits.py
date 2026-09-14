@@ -73,6 +73,16 @@ _SHAPE_ONLY = re.compile(
 _MAYBE_STRUCTURAL = re.compile(r"\b(add|remove|delete|cut|drill|move)\b")
 
 _COUNT_TOKENS = {"count", "num", "number", "qty", "teeth"}
+
+# The half of a compound parameter name that says *what is measured*, as
+# opposed to the half that says *of what*: bore_diameter is the diameter of
+# the bore, teeth_number the number of the teeth.  Anything not in here is
+# read as the feature half.
+_MEASUREMENTS = {
+    "diameter", "dia", "radius", "rad", "thickness", "depth", "height",
+    "length", "width", "angle", "size", "count", "num", "number", "qty",
+    "spacing", "gap", "clearance", "distance", "offset",
+}
 _LENGTH_UNIT = re.compile(r"\b(mm|millimet(?:er|re)s?|cm|degrees?|deg)\b|°|⌀")
 
 
@@ -162,14 +172,29 @@ def _score(parameter: Parameter, words: set[str], counting: bool) -> int:
     hits = parts & words
     if not hits:
         return 0
+
+    # A compound name identifies a feature as well as a dimension, and the
+    # feature half is the one that has to be named.  "set the diameter to
+    # 50mm" on a gear otherwise lands on bore_diameter - the one diameter
+    # nobody meant, and one that would swallow the whole part.  A name that
+    # is a bare dimension (thickness, length) has no feature half to insist
+    # on, so those still take an unqualified instruction.
+    feature = parts - _MEASUREMENTS
+    if feature and not (feature & words):
+        return 0
+
     # Every word of the name being present is a much stronger signal than one
     # of several ("hole diameter" beating "diameter" when both could match).
     score = len(hits) * 2 + (3 if parts <= words else 0)
 
     is_count = bool(parts & _COUNT_TOKENS)
-    if counting and is_count:
+    # The penalty is for an instruction that is plainly *measuring* - "8mm
+    # holes" must not change hole_count.  An instruction that says a counting
+    # word itself is not measuring, whether or not it asks for a delta:
+    # "make it 40 teeth" is as much a count as "four more teeth".
+    if is_count and (counting or hits & _COUNT_TOKENS):
         score += 3
-    elif not counting and is_count:
+    elif is_count:
         score -= 3
     return score
 
@@ -209,6 +234,17 @@ def plan_edit(code: str, instruction: str) -> EditPlan:
     if not values:
         return EditPlan([], "no target value was given")
 
+    # A qualifier the script does not know about means the instruction is
+    # about a feature that does not exist here - "the flange diameter" on a
+    # script with only hole_diameter must not quietly resize the holes.
+    # Checked before the scoring because it explains the refusal better than
+    # any score can, and because it holds whatever the scores turn out to be.
+    known = set().union(*(_tokens(p.name) for p in available.values()))
+    stray = _domain_words(text) - known
+    if stray:
+        return EditPlan(
+            [], f"the script has no {' or '.join(sorted(stray))} parameter")
+
     delta = bool(_INCREASE.search(text) or _DECREASE.search(text))
     # "two more holes" counts; "8mm holes" measures.
     counting = delta and not _LENGTH_UNIT.search(text)
@@ -219,21 +255,24 @@ def plan_edit(code: str, instruction: str) -> EditPlan:
     )
     best, best_score = scored[0]
     if best_score <= 0:
+        # A dimension the script measures of something in particular, asked
+        # for without saying of what: "the thickness" where there is a base
+        # and a support one, or "the diameter" of a gear that declares only a
+        # bore. Naming the candidates is far more use than "no parameter
+        # matches", which is true only when nothing was recognised at all.
+        near = sorted(p.name for p in available.values()
+                      if _tokens(p.name) & words)
+        if len(near) > 1:
+            return EditPlan([], f"ambiguous between {' and '.join(near)}")
+        if near:
+            return EditPlan(
+                [], f"say which one - the script declares only {near[0]}")
         return EditPlan([], "no parameter matches the words used")
 
     runner_up = scored[1][1] if len(scored) > 1 else 0
     if runner_up == best_score:
         tied = [p.name for p, s in scored if s == best_score]
         return EditPlan([], f"ambiguous between {' and '.join(tied)}")
-
-    # A qualifier the script does not know about means the instruction is
-    # about a feature that does not exist here - "the flange diameter" on a
-    # script with only hole_diameter must not quietly resize the holes.
-    known = set().union(*(_tokens(p.name) for p in available.values()))
-    stray = _domain_words(text) - known
-    if stray:
-        return EditPlan(
-            [], f"the script has no {' or '.join(sorted(stray))} parameter")
 
     # Adding or removing usually means new geometry, unless it is plainly
     # more of something the script already counts.

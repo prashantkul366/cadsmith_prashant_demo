@@ -9,13 +9,24 @@
 #
 # These install over git, so Git must be on PATH. On Windows that means
 # Git for Windows (https://git-scm.com/download/win). Without this file
-# the app still runs - app/catalog degrades to the families it builds
+# the app still runs - app/catalog degrades to the nine families it builds
 # itself, and app/tests/test_catalog_library.py covers that path.
 #
+# Both build through a legacy setup.py, which fails on a Debian or Ubuntu
+# system Python with "AttributeError: install_layout" - the distribution's
+# patched setuptools. Install into a virtualenv whose build tools are
+# current, which is the fix rather than a workaround:
+#
+#     python3 -m venv .venv
+#     .venv/bin/pip install --upgrade pip setuptools wheel
+#     .venv/bin/pip install -r app/requirements-catalog.txt
+#
 # What each adds:
-#   cq_gears      involute spur, helical, herringbone, ring, rack and
-#                 bevel gears. Tip diameters verified against
-#                 module x teeth + 2 modules.
+#   cq_gears      helical, herringbone, ring, rack and bevel gears, and a
+#                 spur gear with a trochoidal root fillet. Spur gears do
+#                 not need it - app/catalog/parts.py builds those - so
+#                 this is for the other five kinds. Tip diameters verified
+#                 against module x teeth + 2 modules.
 #   cq_warehouse  12 screw head types and 7 nut types across M1.6-M64,
 #                 plus sprockets, roller chain and ISO threads.
 #

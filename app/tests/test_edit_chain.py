@@ -129,17 +129,10 @@ def main() -> int:
 
     # Every step below names a gear's parameters, because a gear is the part
     # with enough independent dimensions to prove that edits compose rather
-    # than rebase on the original. Without cq_gears there is no gear to chain,
-    # and a partly-restated version of this would prove less than it appears
-    # to. app/tests/test_edit_flow.py covers both edit paths on a part this
-    # app builds itself.
-    from app.catalog import library
-
-    if not library.HAVE_GEARS:
-        print("\nSKIP  the chained-edit test needs a gear, and cq_gears is not")
-        print("      installed. Add it with:")
-        print("        pip install -r app/requirements-catalog.txt")
-        return 0
+    # than rebase on the original. This used to skip without cq_gears, which
+    # was the whole family's only source; the app now builds spur gears
+    # itself, so the chain runs either way - and both backends name the
+    # emitted parameters the same, which is what lets it.
 
     print("\nStarting part: a spur gear from the catalogue (no model needed)")
     job = post("/api/jobs", {

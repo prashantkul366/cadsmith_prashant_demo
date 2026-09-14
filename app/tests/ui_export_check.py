@@ -141,9 +141,12 @@ def main() -> int:
                   f"{triangles} triangles")
         if code:
             body = code.read_text(encoding="utf-8")
+            panel = page.locator("#codeScroll").inner_text()
+            shown = next((line.strip() for line in panel.splitlines()
+                          if line.strip().startswith("teeth_number")), "")
             check("the .py is the source on screen",
-                  "teeth_number = 20" in body and "SpurGear" in body,
-                  first_line(body, "teeth_number"))
+                  "teeth_number = 20" in body and bool(shown) and shown in body,
+                  shown or "no parameter line on screen")
         check("filenames identify the run and version",
               all(f and "_v" in f.name for f in (step, stl, code)),
               ", ".join(f.name for f in (step, stl, code) if f)[:70])
@@ -154,7 +157,8 @@ def main() -> int:
         step2 = grab(page, "#dlStep", out)
         code2 = grab(page, "#dlPy", out)
         check("the new part exports, not the old one",
-              code2 is not None and "SpurGear" not in code2.read_text(encoding="utf-8")
+              code2 is not None
+              and "teeth_number" not in code2.read_text(encoding="utf-8")
               and "M8" in code2.read_text(encoding="utf-8"),
               code2.name if code2 else "no file")
         check("and it is a different file from the first",

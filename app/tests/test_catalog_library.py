@@ -289,8 +289,17 @@ def test_degrades_without_the_libraries() -> None:
     real_gears, real_warehouse = library.HAVE_GEARS, library.HAVE_WAREHOUSE
     try:
         library.HAVE_GEARS = library.HAVE_WAREHOUSE = False
-        check("a gear request falls through when cq_gears is absent",
-              router.select("a 20 tooth spur gear, module 2") is None)
+        # A plain spur gear is built by parts.py, so the commonest gear
+        # request survives the library being absent. The kinds that genuinely
+        # need cq_gears are still declined rather than quietly answered with
+        # a spur gear, which would be the wrong part at the right tooth count.
+        spur = router.select("a 20 tooth spur gear, module 2")
+        check("a spur gear is still served without cq_gears",
+              spur is not None and spur.report.ok and spur.source == "cadsmith",
+              spur.source if spur else "declined")
+        for kind in ("helical", "bevel", "herringbone"):
+            check(f"a {kind} gear is declined without cq_gears",
+                  router.select(f"a 20 tooth {kind} gear, module 2") is None)
         fallback = router.select("an M8x30 socket head cap screw")
         check("screws still come from parts.py",
               fallback is not None and fallback.report.ok,

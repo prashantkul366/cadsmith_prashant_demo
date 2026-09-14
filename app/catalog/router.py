@@ -68,13 +68,29 @@ def _number(pattern, text, default=None, cast=float):
     return cast(found.group(1)) if found else default
 
 
+#: Gear kinds that only cq_gears can build. Anything naming one of these is
+#: declined without it rather than quietly served as a plain spur gear, which
+#: would be the wrong part with the right tooth count.
+_LIBRARY_ONLY_GEARS = ("helical", "herringbone", "bevel", "rack",
+                       "ring gear", "internal gear", "annulus", "sprocket",
+                       "worm", "hypoid")
+
+
+def _is_plain_spur(lowered: str) -> bool:
+    return not any(word in lowered for word in _LIBRARY_ONLY_GEARS)
+
+
 def _gear(text: str) -> Optional[CatalogPart]:
     """A gear, if the request names one specifically enough."""
     lowered = text.lower()
     if not any(word in lowered for word in _GEAR_WORDS):
         return None
+    # Spur gears are built here (app/catalog/parts.py) when cq_gears is
+    # absent, so the commonest gear request is always answerable. The other
+    # gear types genuinely need the library and are declined without it.
     if not library.HAVE_GEARS and "sprocket" not in lowered:
-        return None
+        if not _is_plain_spur(lowered):
+            return None
 
     teeth = _number(_TEETH, text, cast=int)
     module = _number(_MODULE, text)
@@ -111,9 +127,13 @@ def _gear(text: str) -> Optional[CatalogPart]:
                                  face_width=face_width or 12.0,
                                  bore=bore or 8.0, helix_angle=angle)
     if "spur" in lowered or "gear" in lowered or "pinion" in lowered:
-        return library.spur_gear(module=module or 2.0, teeth=teeth,
-                                 face_width=face_width or 10.0,
-                                 bore=bore or 8.0)
+        if library.HAVE_GEARS:
+            return library.spur_gear(module=module or 2.0, teeth=teeth,
+                                     face_width=face_width or 10.0,
+                                     bore=bore or 8.0)
+        return parts.spur_gear(teeth=teeth, module=module or 2.0,
+                               face_width=face_width or 10.0,
+                               bore=bore or 8.0)
     return None
 
 
@@ -280,10 +300,9 @@ def describe() -> dict:
     """What the catalogue can serve right now, for the health panel."""
     backends = library.available()
     families = ["washers", "o-rings", "dowel pins", "bearings",
-                "compression springs", "timing pulleys"]
+                "compression springs", "timing pulleys", "spur gears"]
     if backends["cq_gears"]:
-        families += ["spur/helical gears", "herringbone", "ring", "rack",
-                     "bevel"]
+        families += ["helical", "herringbone", "ring", "rack", "bevel"]
     if backends["cq_warehouse"]:
         families += ["screws (12 heads)", "nuts (5 types)", "sprockets"]
     else:

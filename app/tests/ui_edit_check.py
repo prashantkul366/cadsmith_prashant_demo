@@ -182,7 +182,7 @@ def main() -> int:
         for instruction, expect in [
             ("make it nicer", "value"),
             ("make the flange diameter 90mm", "flange"),
-            ("set the diameter to 50mm", "module"),
+            ("set the diameter to 50mm", "bore_diameter"),
         ]:
             before = page.evaluate("S.versions.length")
             page.fill("#cmdIn", instruction)

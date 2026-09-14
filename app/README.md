@@ -265,22 +265,38 @@ model — set `CADSMITH_INPUT_PER_MTOK` and `CADSMITH_OUTPUT_PER_MTOK` from
 your own pricing page if you want a cost estimate, and nothing is guessed
 without them.
 
-The gear and wider fastener families need two optional libraries:
+**A standard part needs no API key at all**, and the app no longer pretends
+otherwise: Generate stays available with no provider configured, the note
+under the provider picker says why, and a request the catalogue cannot serve
+comes back with the key it needs named. Greying the button out denied the one
+thing that was still working.
+
+Spur gears are built here, from the ISO 53 basic rack: the flank is a true
+involute, tip diameter is module × (teeth + 2) and the circular tooth
+thickness at the pitch circle is π × module / 2, all measured in the kernel.
+Gears are the standard part people ask for most and used to be the one family
+that needed an optional git dependency, so that family now stands on its own.
+
+The remaining gear kinds — helical, herringbone, bevel, rack, ring — and the
+wider fastener range need two optional libraries:
 
 ```bash
 .venv/bin/pip install -r app/requirements-catalog.txt
 ```
 
-Without them the catalogue degrades to the families it builds itself —
-washers, bearings, springs, pulleys, pins and ISO 4762/4014/4032 screws — and
-the health chip says which are missing. `app/tests/test_catalog_library.py`
-covers that path and reports the library-dependent checks as skipped rather
-than failed.
+Without them the catalogue degrades to the nine families it builds itself —
+spur gears, washers, bearings, springs, pulleys, pins and ISO 4762/4014/4032
+screws — and the health chip says which are missing.
+`app/tests/test_catalog_library.py` covers that path and reports the
+library-dependent checks as skipped rather than failed, as do the browser
+checks that ask for a part only those libraries can build.
 
 ## English and Japanese
 
 The interface has a language switch in the header, and opens in Japanese by
 itself on a machine whose browser asks for it. The choice is remembered.
+`?lang=ja` in the URL wins over both, and is remembered too, so a link can be
+handed to someone in the language they read.
 
 **What is translated.** Everything a person reads: the interface, the run
 log's own lines, the reasoning panel's agent labels, the verdict, the kernel
@@ -293,11 +309,15 @@ language is the same part.
 `autofab/agents.py` are steered by English prompts, and the Refiner is handed
 English measurements; translating either would change what the pipeline does
 rather than what it says. The reasoning that streams into the panel is the
-model's own words and is shown as written. The environment panel's details
-are left alone too — they quote the machine (a version string, a package
-name, a certificate path), and quoting is not translating.
-`app/tests/test_i18n.py` parses each module that talks to a model and fails
-the build if a Japanese string appears in one.
+model's own words and is shown as written. Most of the environment panel's
+details are left alone for the same reason — they quote the machine (a
+version string, a package name, a library's own error), and quoting is not
+translating. Where a detail is not a quote but a sentence this app wrote, the
+server sends a short code and the facts instead of the English, and the
+browser composes the sentence: the catalogue's family count, the certificate
+store in use, why a backend is missing. `app/tests/test_i18n.py` parses each
+module that talks to a model and fails the build if a Japanese string appears
+in one.
 
 **Editing in Japanese works without a model call.** `server/edits.py`
 recognises a parameter change by English word, so 「厚さを 5mm にする」 would
@@ -310,8 +330,18 @@ be changed by it. The refusals are the half that matters:
 Refiner rather than patching whichever number happened to match and reporting
 a rib it never made.
 
-**Writing prompts in Japanese** is a question about the model, not about the
-app: the prompt reaches the Planner exactly as typed.
+**Asking for a standard part in Japanese reaches the catalogue.** Same idea,
+different table: `catalog/japanese.py` reads 「20歯 モジュール2 の平歯車」
+into the words `catalog/router.py` matches on, so it is served from the
+catalogue with no model call rather than sent to the Planner. Counts come in
+several shapes — 20歯, 20枚歯, 歯数20 — and all three land on the same
+20-tooth gear. Here too the refusals are the half that matters:
+「20歯の歯車を入れるギヤボックス」 is a gearbox, not a gear, and the rewriter
+has to produce the English word the router already declines on, or a request
+for a housing is answered with the gear that goes inside it.
+
+**Writing a custom prompt in Japanese** is a question about the model, not
+about the app: the prompt reaches the Planner exactly as typed.
 
 ## Layout
 
@@ -333,9 +363,11 @@ app/
   catalog/
     standards.py   dimensions from ISO 4762/4014/4032/7089/273/2338, ISO 15,
                    and NEMA ICS 16 motor frames
-    parts.py       the families this app builds itself, parametrically
+    parts.py       the families this app builds itself, parametrically,
+                   involute spur gears among them
     grounding.py   published dimensions handed to the Planner
-    library.py     gears, fasteners and sprockets from cq_gears/cq_warehouse
+    library.py     the other gear kinds, wider fasteners and sprockets,
+                   from cq_gears/cq_warehouse
     router.py      is this request a standard part, and which one
     verify.py      build it and check it before anyone relies on it
     japanese.py    Japanese read with the English vocabulary both the router
@@ -404,7 +436,19 @@ deterministic.
 .venv/bin/python -m app.tests.ui_check              # real browser, needs a server
 .venv/bin/python -m app.tests.ui_generate_check     # a real run in a browser,
                                                     # plus provider failures
+.venv/bin/python -m app.tests.ui_catalog_check      # the catalogue in a browser
+.venv/bin/python -m app.tests.ui_edit_check         # editing in a browser
+.venv/bin/python -m app.tests.ui_export_check       # STEP, STL and .py downloads
+.venv/bin/python -m app.tests.ui_lang_check         # the language switch
+.venv/bin/python -m app.tests.ui_prompts_check      # prompts nobody planned for
+.venv/bin/python -m app.tests.ui_stress_check       # clicking during a run
 ```
+
+`app/tests/ui_parts_check.py` is known to fail: it expects the mock provider
+to answer from `app/tools/mock_parts.py`, and `app/tools/mock_provider.py`
+never consults it, so every prompt gets the same 40 x 30 x 10 placeholder.
+Wiring the two together would change the canned replies every other browser
+check is written against, so it is left as it is.
 
 Only the Anthropic HTTP call is faked, by patching `agents._get_client`. The
 real agent bodies run, including prompt assembly and RAG retrieval from KB1 and

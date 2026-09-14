@@ -25,12 +25,15 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from app.catalog import library  # noqa: E402
+
 _CANDIDATE_BROWSERS = [
     "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
     "/opt/pw-browsers/chromium/chrome-linux/chrome",
 ]
 
 failures: list[str] = []
+skipped: list[str] = []
 timings: list[tuple[str, float]] = []
 
 
@@ -38,6 +41,12 @@ def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'PASS' if ok else 'FAIL'}  {label}{(' - ' + detail) if detail else ''}")
     if not ok:
         failures.append(label)
+
+
+def skip(label: str, why: str) -> None:
+    """Not checked here, which is not the same as broken."""
+    print(f"  SKIP  {label} - {why}")
+    skipped.append(label)
 
 
 def executable() -> str | None:
@@ -56,16 +65,25 @@ def run(page, prompt: str, timeout_ms: int = 180000) -> float:
     return time.time() - started
 
 
+# Which part comes back, and under which id, depends on what is installed:
+# cq_gears and cq_warehouse carry families this app cannot build itself and
+# name their parts differently. A prompt only they can answer is skipped
+# here rather than failed - that the app degrades instead of breaking is
+# asserted in app/tests/test_catalog_library.py, not in a browser.
 CATALOG_PROMPTS = [
-    ("an M8x30 socket head cap screw", "iso4762_socket_head_m8x30"),
-    ("a 20 tooth spur gear, module 2", "gear_spur_m2_z20"),
-    ("a module 1.5 helical gear with 30 teeth", "gear_helical_m1.5_z30"),
+    ("an M8x30 socket head cap screw",
+     "iso4762_socket_head_m8x30" if library.HAVE_WAREHOUSE else "iso4762_m8x30.0"),
+    ("a 20 tooth spur gear, module 2",
+     "gear_spur_m2_z20" if library.HAVE_GEARS else "spur_gear_20t_m2p0"),
+    ("a module 1.5 helical gear with 30 teeth",
+     "gear_helical_m1.5_z30" if library.HAVE_GEARS else None),
     ("a 6203 bearing", "bearing_6203"),
     ("an M8 flat washer", "iso7089_m8"),
     ("a GT2 timing pulley with 20 teeth", "pulley_gt2_20t"),
     ("a compression spring, 2mm wire, 20mm od, 50mm long", "spring_d2_od20_l50"),
     ("a T5 timing pulley with 18 teeth", "pulley_t5_18t"),
-    ("a 16 tooth sprocket", "sprocket_16t_p12.7"),
+    ("a 16 tooth sprocket",
+     "sprocket_16t_p12.7" if library.HAVE_WAREHOUSE else None),
 ]
 
 
@@ -113,6 +131,10 @@ def main() -> int:
         # -----------------------------------------------------------------
         print("\nStandard parts, served without a key")
         for prompt, part_id in CATALOG_PROMPTS:
+            if part_id is None:
+                skip(f"'{prompt[:40]}'",
+                     "only cq_gears or cq_warehouse builds this family")
+                continue
             elapsed = run(page, prompt)
             timings.append((part_id, elapsed))
             versions = page.evaluate("S.versions")
@@ -142,8 +164,8 @@ def main() -> int:
               "Accepted by the Judge" not in verdict
               and "Rejected by the Judge" not in verdict,
               verdict.replace("\n", " ")[:80])
-        check("the attempt card is badged CATALOG",
-              "CATALOG" in page.locator("#iters").inner_text(),
+        check("the attempt card is badged as a standard part",
+              "STANDARD" in page.locator("#iters").inner_text(),
               page.locator("#iters").inner_text().replace("\n", " ")[:40])
         check("the viewer titles it a standard part",
               "Standard part" in page.locator("#mtitle").inner_text(),
@@ -239,6 +261,10 @@ def main() -> int:
 
     print(f"\nScreenshots in {out}")
     print("=" * 60)
+    if skipped:
+        print(f"{len(skipped)} check(s) skipped: an optional library is not "
+              f"installed here. Add them with "
+              f"'pip install -r app/requirements-catalog.txt'.")
     if failures:
         print(f"{len(failures)} CHECK(S) FAILED: {', '.join(failures[:6])}")
         return 1
