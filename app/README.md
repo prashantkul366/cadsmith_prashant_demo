@@ -280,9 +280,26 @@ drawing office expects (`OUTLINE`, `HIDDEN`, `CENTRE`, `DIMENSIONS`,
 out from one plan (`drawing.plan_sheet`) rather than from two implementations
 that would drift.
 
+**The sheet is built before anyone asks for it.** The hidden-line projection
+is the expensive half of a drawing - seconds of OCCT work in a subprocess -
+and it used to run when the Drawing button was clicked, so the button was
+followed by a wait. It now starts the moment a version is published, in a
+single background worker, and the result is cached beside the version. By the
+time someone has finished turning the part around, the sheet is already on
+disk: measured on a 20-tooth gear, 5.1 s of waiting became 15 ms. Nothing
+waits on it — if the click somehow arrives first it builds the sheet as
+before, and a prebuild that fails is silent, because the request path will
+build it again and report any problem properly.
+
+The projection is cached too (`projection.json`), so the DXF download does
+not repeat the work the SVG already did — the same gear's DXF went from a
+fresh projection to 0.27 s.
+
 `app/tests/test_drawing.py` saves the DXF, reopens it with a reader that
 knows nothing of how it was written, audits it, and asserts the dimensions
-still measure the part.
+still measure the part. `app/tests/test_server.py` checks that the sheet
+appears on disk without being requested, and that the DXF reuses the cached
+projection rather than redoing it.
 
 ### Why this is written here rather than taken from a library
 

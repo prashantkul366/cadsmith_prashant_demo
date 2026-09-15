@@ -45,7 +45,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -201,8 +203,21 @@ print(json.dumps({name: project(v["dir"], v["x"]) for name, v in spec.items()}))
 '''
 
 
-def _project(step_path: Path, timeout: int = 180) -> dict:
-    """Project the solid into every view. Returns {view name: view data}."""
+def _project(step_path: Path, timeout: int = 180,
+             cache: Optional[Path] = None) -> dict:
+    """Project the solid into every view. Returns {view name: view data}.
+
+    The hidden-line pass is the expensive half of a drawing - seconds, in a
+    subprocess - and the SVG sheet and the DXF need exactly the same result.
+    Caching it beside the version means the second of them is nearly free, and
+    that a prebuilt sheet also pays for the DXF download.
+    """
+    if cache is not None and cache.exists():
+        try:
+            return json.loads(cache.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass  # rebuild rather than trust a half-written file
+
     work = Path(tempfile.mkdtemp(prefix="cadsmith_drawing_"))
     script = work / "project.py"
     script.write_text(_WORKER, encoding="utf-8")
@@ -217,7 +232,14 @@ def _project(step_path: Path, timeout: int = 180) -> dict:
     if "__DRAWING__" not in result.stdout:
         raise RuntimeError(
             (result.stderr or result.stdout or "projection produced no output")[-800:])
-    return json.loads(result.stdout.split("__DRAWING__")[1].strip())
+
+    body = result.stdout.split("__DRAWING__")[1].strip()
+    if cache is not None:
+        try:
+            cache.write_text(body, encoding="utf-8")
+        except OSError:
+            pass  # a cache that cannot be written is not a failure
+    return json.loads(body)
 
 
 # ---------------------------------------------------------------------------
@@ -621,9 +643,9 @@ def _notes(geometry: dict) -> list[str]:
 
 
 def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
-                version: int) -> str:
+                version: int, projection: Optional[Path] = None) -> str:
     """Compose the drawing as a standalone SVG document."""
-    sheet = plan_sheet(_project(step_path))
+    sheet = plan_sheet(_project(step_path, cache=projection))
     scale = sheet["scale"]
 
     body: list[str] = []
@@ -645,16 +667,11 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
     )
 
 
-def ensure_sheet(version_dir: Path, prompt: str, job_id: str,
-                 version: int) -> Optional[Path]:
-    """Return the sheet for a version, building and caching it on first use."""
-    target = version_dir / "drawing.svg"
-    if target.exists() and target.stat().st_size > 0:
-        return target
-
+def _version_inputs(version_dir: Path) -> tuple[Optional[Path], dict]:
+    """The STEP this version built, and what the kernel measured of it."""
     step = version_dir / "model.step"
     if not step.exists():
-        return None
+        return None, {}
 
     geometry = {}
     geometry_file = version_dir / "geometry.json"
@@ -663,8 +680,22 @@ def ensure_sheet(version_dir: Path, prompt: str, job_id: str,
             geometry = json.loads(geometry_file.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             pass
+    return step, geometry
 
-    sheet = build_sheet(step, geometry, prompt, job_id, version)
+
+def ensure_sheet(version_dir: Path, prompt: str, job_id: str,
+                 version: int) -> Optional[Path]:
+    """Return the sheet for a version, building and caching it on first use."""
+    target = version_dir / "drawing.svg"
+    if target.exists() and target.stat().st_size > 0:
+        return target
+
+    step, geometry = _version_inputs(version_dir)
+    if step is None:
+        return None
+
+    sheet = build_sheet(step, geometry, prompt, job_id, version,
+                        projection=version_dir / "projection.json")
     target.write_text(sheet, encoding="utf-8")
     return target
 
@@ -695,7 +726,7 @@ def _dxf_y(y: float) -> float:
 
 
 def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
-              version: int):
+              version: int, projection: Optional[Path] = None):
     """The same drawing as a DXF document, with real DIMENSION entities.
 
     The SVG on screen is a picture of the drawing; this is the drawing. Its
@@ -714,7 +745,7 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
             "app/requirements-app.txt. The sheet shown in the app is SVG and "
             "does not need it.") from exc
 
-    sheet = plan_sheet(_project(step_path))
+    sheet = plan_sheet(_project(step_path, cache=projection))
     scale = sheet["scale"]
 
     doc = ezdxf.new("R2010", setup=True)
@@ -846,18 +877,62 @@ def ensure_dxf(version_dir: Path, prompt: str, job_id: str,
     if target.exists() and target.stat().st_size > 0:
         return target
 
-    step = version_dir / "model.step"
-    if not step.exists():
+    step, geometry = _version_inputs(version_dir)
+    if step is None:
         return None
 
-    geometry = {}
-    geometry_file = version_dir / "geometry.json"
-    if geometry_file.exists():
-        try:
-            geometry = json.loads(geometry_file.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            pass
-
-    doc = build_dxf(step, geometry, prompt, job_id, version)
+    doc = build_dxf(step, geometry, prompt, job_id, version,
+                    projection=version_dir / "projection.json")
     doc.saveas(target)
     return target
+
+
+# ---------------------------------------------------------------------------
+# Building it before anyone asks
+# ---------------------------------------------------------------------------
+
+#: One worker, so drawings queue behind each other rather than racing the
+#: kernel for cores. They are built while the run is waiting on the model,
+#: which is where the time actually goes, so the projection is usually done
+#: long before anyone opens the Drawing panel.
+_PREBUILD = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cadsmith-draw")
+
+#: Versions already queued, so a re-published version is not projected twice.
+_QUEUED: set[tuple[str, int]] = set()
+_QUEUED_LOCK = threading.Lock()
+
+
+def prebuild(version_dir: Path, prompt: str, job_id: str, version: int) -> None:
+    """Start building this version's sheet now, in the background.
+
+    Nothing waits on the result. ``ensure_sheet`` caches, so a click that
+    arrives first simply builds it, and a click that arrives after this
+    finishes finds the file already there - which is the point: the ten
+    seconds of hidden-line projection are spent while the person is still
+    looking at the part.
+
+    Failures are swallowed deliberately. This is speculative work; if it does
+    not succeed, the request path builds the sheet and reports any problem
+    properly, in the caller's language.
+    """
+    key = (job_id, int(version))
+    with _QUEUED_LOCK:
+        if key in _QUEUED:
+            return
+        _QUEUED.add(key)
+
+    def build() -> None:
+        try:
+            ensure_sheet(version_dir, prompt, job_id, version)
+        except Exception:
+            pass
+        finally:
+            with _QUEUED_LOCK:
+                _QUEUED.discard(key)
+
+    try:
+        _PREBUILD.submit(build)
+    except RuntimeError:
+        # Interpreter shutting down: nothing to prebuild for.
+        with _QUEUED_LOCK:
+            _QUEUED.discard(key)

@@ -214,6 +214,7 @@ class JobManager:
         sink = EventSink(path=directory / "events.jsonl")
         ctx = RunContext(sink=sink, job_dir=directory,
                          part_name=PART_NAME, lang=options.lang,
+                         prompt=prompt,
                          ground_dimensions=options.ground_dimensions)
 
         with self._lock:
@@ -558,6 +559,7 @@ class JobManager:
         sink = EventSink(path=directory / "events.jsonl")
         ctx = RunContext(sink=sink, job_dir=directory,
                          part_name=PART_NAME, lang=job.options.lang,
+                         prompt=job.prompt,
                          ground_dimensions=job.options.ground_dimensions)
 
         with self._lock:

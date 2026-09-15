@@ -28,7 +28,7 @@ import json
 import time
 
 from app.catalog import router
-from app.server import i18n
+from app.server import drawing, i18n
 from app.catalog.router import Routed
 from app.server.events import (
     PHASE_CATALOG, PHASE_VERSION, STATUS_INFO, STATUS_OK,
@@ -115,6 +115,12 @@ def serve(ctx: RunContext, routed: Routed, work_dir) -> dict:
     }
     ctx.versions.append(version)
     ctx.emit(PHASE_VERSION, STATUS_OK, **version)
+
+    # Start the drawing now rather than when someone asks for it. A catalogue
+    # part arrives in a second or two, so the projection is the longest wait
+    # left in the whole interaction - and it can be spent while the person is
+    # still turning the part around.
+    drawing.prebuild(version_dir, ctx.prompt, ctx.job_dir.name, 0)
     ctx.emit(PHASE_CATALOG, STATUS_INFO,
              i18n.t("catalog.built", ctx.lang,
                     ms=f"{(time.time() - started) * 1000:.0f}"))

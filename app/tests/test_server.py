@@ -165,6 +165,39 @@ def main() -> int:
         check("geometry.json is valid and watertight",
               geometry.status_code == 200 and geometry.json()["is_valid"])
 
+        print("\nThe drawing is built before anyone asks for it")
+        # The projection is seconds of hidden-line work. It is started when
+        # the version is published, so the wait is spent while the person is
+        # still looking at the part rather than after they click Drawing.
+        version_dir = _TMP_RUNS / job_id / "v0"
+        sheet = version_dir / "drawing.svg"
+        for _ in range(120):
+            if sheet.exists() and sheet.stat().st_size > 0:
+                break
+            time.sleep(0.5)
+        check("the sheet appears without being requested",
+              sheet.exists() and sheet.stat().st_size > 0,
+              f"{sheet.stat().st_size} bytes" if sheet.exists() else "never built")
+        check("and the projection is cached beside it",
+              (version_dir / "projection.json").exists())
+
+        started = time.time()
+        drawn = client.get(f"/api/jobs/{job_id}/v/0/drawing.svg")
+        served = time.time() - started
+        check("so asking for it is served from disk, not rebuilt",
+              drawn.status_code == 200 and served < 1.0,
+              f"{served * 1000:.0f} ms")
+
+        # The DXF needs the same projection. Reusing the cached one is what
+        # keeps the second format from paying the first one's cost again.
+        started = time.time()
+        dxf = client.get(f"/api/jobs/{job_id}/v/0/drawing.dxf")
+        built = time.time() - started
+        check("and the DXF reuses that projection rather than redoing it",
+              dxf.status_code == 200 and b"DIMENSION" in dxf.content
+              and built < 5.0,
+              f"{len(dxf.content)} bytes in {built:.1f}s")
+
         print("\nParameters, read and set")
         described = client.get(f"/api/jobs/{job_id}/parameters")
         check("the version's parameters are served",

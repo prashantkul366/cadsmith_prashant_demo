@@ -40,6 +40,7 @@ from autofab.validator import Validator, ValidationCheck, ValidationReport
 from app.catalog import grounding
 
 from . import budget as budget_mod
+from . import drawing
 from . import i18n
 from . import spec
 from .providers import LLMConfig, build_client
@@ -122,6 +123,9 @@ class RunContext:
     #: messages meant for them are translated; what the Refiner is told stays
     #: in English, because that is the language its instructions are in.
     lang: str = i18n.DEFAULT_LANG
+    #: What was asked for. Carried so a version can start its drawing the
+    #: moment it is published - the sheet's title block names the request.
+    prompt: str = ""
     #: Provenance stamped onto the next published version.
     source: str = "pipeline"
     method: str = ""
@@ -629,6 +633,12 @@ class InstrumentedValidator(Validator):
         # Belongs to the version just published, so it must not carry over.
         ctx.spec = None
         ctx.emit(PHASE_VERSION, STATUS_OK, **version)
+
+        # Start the drawing now rather than when someone asks for it. The
+        # projection takes seconds, and the seconds are available: the run
+        # spends most of its time waiting on the model, and a person spends
+        # a while looking at the part before they think about a drawing.
+        drawing.prebuild(vdir, ctx.prompt, ctx.job_dir.name, ctx.iteration)
 
 
 class InstrumentedPipeline(Pipeline):
