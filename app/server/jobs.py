@@ -38,7 +38,12 @@ from .events import (
     STATUS_OK,
     STATUS_STARTED,
 )
-from .providers import DEFAULT_PROVIDER, LLMConfig, resolve
+from .providers import (
+    DEFAULT_PROVIDER,
+    LLMConfig,
+    normalise_effort,
+    resolve,
+)
 from .replay import clone_run, is_replayable, replay_into
 from .instrument import (
     InstrumentedExecutor,
@@ -91,6 +96,11 @@ class JobOptions:
     #: Give the Planner the published dimensions for any standard part the
     #: request names. Off reproduces the pipeline as published.
     ground_dimensions: bool = True
+    #: How hard the agents are asked to think. A simple part answered at low
+    #: effort arrives in a fraction of the time; a hard one is worth the wait.
+    #: Empty leaves the choice to the backend, which reasons at its own
+    #: default. Applies to the Claude backends; other providers ignore it.
+    effort: str = ""
 
     @classmethod
     def from_dict(cls, raw: Optional[dict]) -> "JobOptions":
@@ -107,6 +117,7 @@ class JobOptions:
                                     or budget_mod.DEFAULT_BUDGET)),
             use_catalog=bool(raw.get("use_catalog", True)),
             ground_dimensions=bool(raw.get("ground_dimensions", True)),
+            effort=normalise_effort(raw.get("effort")),
         )
 
     def llm_config(self) -> LLMConfig:
@@ -116,6 +127,7 @@ class JobOptions:
             generation_model=self.generation_model,
             judge_model=self.judge_model,
             judge_vision=self.use_vision,
+            effort=self.effort,
         )
 
 

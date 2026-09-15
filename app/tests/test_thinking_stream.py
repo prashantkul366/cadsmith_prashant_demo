@@ -83,10 +83,14 @@ class _Event:
 
 
 class _Stream:
-    def __init__(self, thinking: str, text: str, reject: bool):
+    def __init__(self, thinking: str, text: str, reject: bool,
+                 reject_effort: bool = False):
         self._thinking, self._text, self._reject = thinking, text, reject
+        self._reject_effort = reject_effort
 
     def __enter__(self):
+        if self._reject_effort:
+            raise RuntimeError("Extraneous inputs: output_config")
         if self._reject:
             raise RuntimeError("thinking: unsupported parameter for this model")
         return self
@@ -111,6 +115,7 @@ class _Stream:
 class FakeMessages:
     calls: list[dict] = []
     reject_thinking = False
+    reject_effort = False
 
     def stream(self, **kwargs):
         FakeMessages.calls.append(kwargs)
@@ -122,7 +127,9 @@ class FakeMessages:
         else:
             body, think = BLOCK, "A single box() call is enough here. "
         reject = FakeMessages.reject_thinking and "thinking" in kwargs
-        return _Stream(think, body, reject)
+        no_effort = (FakeMessages.reject_effort
+                     and "output_config" in kwargs)
+        return _Stream(think, body, reject, no_effort)
 
 
 class FakeSDK:
@@ -141,7 +148,7 @@ def main() -> int:
     job = manager.create(PROMPT, JobOptions(
         max_iterations=1, use_vision=True, provider="bedrock",
         generation_model="anthropic.claude-sonnet-5",
-        judge_model="anthropic.claude-opus-5"))
+        judge_model="anthropic.claude-opus-5", effort="low"))
 
     deadline = time.time() + 300
     while job.status not in (STATUS_DONE, STATUS_ERROR):
@@ -189,6 +196,66 @@ def main() -> int:
               for c in FakeMessages.calls if "thinking" in c))
     check("the token ceiling was raised for thinking",
           all(c["max_tokens"] >= 8192 for c in FakeMessages.calls))
+
+    # The effort chosen for the run has to reach every agent in it, not just
+    # the first: a Judge still reasoning at the API's default would undo the
+    # saving the setting was chosen for.
+    print("\nReasoning effort travels with the run")
+    efforts = [c.get("output_config", {}).get("effort")
+               for c in FakeMessages.calls]
+    check("the run's effort reached every call",
+          bool(efforts) and all(e == "low" for e in efforts),
+          str(sorted(set(map(str, efforts)))))
+
+    FakeMessages.calls.clear()
+    plain = providers.build_client(providers.resolve(
+        "bedrock", generation_model="anthropic.claude-sonnet-5"))
+    plain.messages.create(model="anthropic.claude-sonnet-5", max_tokens=1024,
+                          system="Planner Agent",
+                          messages=[{"role": "user", "content": PROMPT}])
+    check("choosing no effort sends no output_config at all",
+          all("output_config" not in c for c in FakeMessages.calls),
+          str([c.get("output_config") for c in FakeMessages.calls]))
+
+    FakeMessages.calls.clear()
+    high = providers.build_client(providers.resolve(
+        "bedrock", generation_model="anthropic.claude-sonnet-5",
+        effort="HIGH "))
+    high.messages.create(model="anthropic.claude-sonnet-5", max_tokens=1024,
+                         system="Planner Agent",
+                         messages=[{"role": "user", "content": PROMPT}])
+    check("a level is taken however it was typed",
+          all(c.get("output_config") == {"effort": "high"}
+              for c in FakeMessages.calls),
+          str([c.get("output_config") for c in FakeMessages.calls]))
+
+    FakeMessages.calls.clear()
+    typo = providers.build_client(providers.resolve(
+        "bedrock", generation_model="anthropic.claude-sonnet-5",
+        effort="quick"))
+    typo.messages.create(model="anthropic.claude-sonnet-5", max_tokens=1024,
+                         system="Planner Agent",
+                         messages=[{"role": "user", "content": PROMPT}])
+    check("a level the API would reject is dropped, not passed on",
+          all("output_config" not in c for c in FakeMessages.calls),
+          str([c.get("output_config") for c in FakeMessages.calls]))
+
+    # A deployment that takes adaptive thinking but not the effort with it
+    # should cost the setting, not the reasoning and not the run.
+    FakeMessages.calls.clear()
+    FakeMessages.reject_effort = True
+    stubborn = providers.build_client(providers.resolve(
+        "bedrock", generation_model="anthropic.claude-sonnet-5", effort="low"))
+    answer = stubborn.messages.create(
+        model="anthropic.claude-sonnet-5", max_tokens=1024,
+        system="Planner Agent", messages=[{"role": "user", "content": PROMPT}])
+    FakeMessages.reject_effort = False
+    check("a model that refuses the effort still answers",
+          "description" in answer.content[0].text)
+    check("and keeps its reasoning - only the effort was dropped",
+          FakeMessages.calls[-1].get("thinking", {}).get("display")
+          == "summarized" and "output_config" not in FakeMessages.calls[-1],
+          str(FakeMessages.calls[-1].get("output_config")))
 
     print("\nA model that rejects the thinking parameter")
     FakeMessages.reject_thinking = True

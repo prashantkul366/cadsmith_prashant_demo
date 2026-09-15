@@ -544,7 +544,14 @@ def list_providers(models: bool = False) -> JSONResponse:
             if entry["ready"]:
                 entry["models"] = providers.list_models(entry["id"])
     return JSONResponse({"providers": entries,
-                         "default": providers.DEFAULT_PROVIDER})
+                         "default": providers.DEFAULT_PROVIDER,
+                         # The effort picker is built from what the API
+                         # accepts, not from a list copied into the browser,
+                         # so pinning CADSMITH_EFFORT to a level the picker
+                         # omits still leaves it selectable.
+                         "efforts": providers.effort_choices(),
+                         "effort": (providers.DEFAULT_EFFORT
+                                    or providers.EFFORT_DEFAULT)})
 
 
 @app.post("/api/providers/{provider_id}/key")

@@ -178,6 +178,30 @@ def main() -> int:
         check("and so does the interface",
               CJK.search(page.inner_text(".col.left")) is not None)
 
+        print("\nThe effort picker is written by JavaScript, so it is redrawn")
+        # Redrawing translated options must not quietly reset the level
+        # someone chose - the whole point of the control is that the choice
+        # holds until the run starts.
+        page.click('#langSw .lang[data-lang="en"]')
+        page.wait_for_timeout(400)
+        page.select_option("#optProvider", "anthropic")
+        page.wait_for_timeout(400)
+        page.select_option("#optEffort", "low")
+        page.click('#langSw .lang[data-lang="ja"]')
+        page.wait_for_timeout(400)
+        labels = page.evaluate(
+            "[...document.querySelectorAll('#optEffort option')]"
+            ".map(o => o.textContent).join('|')")
+        check("the levels are in Japanese", "低（最速）" in labels, labels)
+        check("and the label above them too",
+              "推論の深さ" in page.evaluate(
+                  "document.querySelector('#effortRow span').textContent"),
+              page.evaluate(
+                  "document.querySelector('#effortRow span').textContent"))
+        check("and the level chosen is still chosen",
+              page.input_value("#optEffort") == "low",
+              page.input_value("#optEffort"))
+
         print("\nA refusal from the server is in Japanese too")
         page.fill("#prompt", "")
         message = page.evaluate("""async () => {

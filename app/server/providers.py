@@ -173,6 +173,47 @@ def _base_url_for(spec: ProviderSpec) -> str:
 # Resolved configuration
 # ---------------------------------------------------------------------------
 
+#: How hard the model is asked to think, cheapest first. Effort governs the
+#: depth of reasoning and therefore both the wait and the token bill: a
+#: chamfered cylinder does not need the reasoning a planetary gearbox does.
+#: The ladder is the one the Messages API accepts; adaptive thinking and
+#: effort are generally available on Bedrock as well as the first-party API,
+#: so this works on either backend.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+#: What the picker offers. The rest of the ladder stays reachable through
+#: CADSMITH_EFFORT - xhigh and max are for a part worth waiting minutes for,
+#: not for a dropdown someone clicks through.
+EFFORT_CHOICES = ("low", "medium", "high")
+
+#: Effort the model applies when no request asks for one. Not our choice -
+#: the API's - and named here so the app can say which option is the default
+#: instead of leaving the picker to imply it.
+EFFORT_DEFAULT = "high"
+
+
+def normalise_effort(value: Any) -> str:
+    """The effort level as the API spells it, or "" for anything else.
+
+    Unknown values are dropped rather than passed on: the request would fail
+    for a typo, and the run is worth more than the setting.
+    """
+    text = str(value or "").strip().lower()
+    return text if text in EFFORT_LEVELS else ""
+
+
+#: Effort for a run that does not choose one. Set CADSMITH_EFFORT to pin the
+#: whole server to a level - including xhigh or max, which the picker omits.
+DEFAULT_EFFORT = normalise_effort(os.getenv("CADSMITH_EFFORT"))
+
+
+def effort_choices() -> list[str]:
+    """Levels the picker should offer, the server default included."""
+    out = list(EFFORT_CHOICES)
+    if DEFAULT_EFFORT and DEFAULT_EFFORT not in out:
+        out.append(DEFAULT_EFFORT)
+    return out
+
 
 @dataclass
 class LLMConfig:
@@ -183,6 +224,9 @@ class LLMConfig:
     generation_model: str
     judge_model: str
     judge_vision: bool = True
+    #: How hard this run asks the model to think. Empty leaves the choice to
+    #: the API, which reasons at ``EFFORT_DEFAULT``.
+    effort: str = ""
 
     def redacted(self) -> dict:
         return {
@@ -191,6 +235,7 @@ class LLMConfig:
             "generation_model": self.generation_model,
             "judge_model": self.judge_model,
             "judge_vision": self.judge_vision,
+            "effort": self.effort,
             "has_key": bool(self.api_key),
         }
 
@@ -200,6 +245,7 @@ def resolve(
     generation_model: str = "",
     judge_model: str = "",
     judge_vision: bool = True,
+    effort: str = "",
 ) -> LLMConfig:
     spec = BUILTIN.get(provider_id) or BUILTIN[DEFAULT_PROVIDER]
     return LLMConfig(
@@ -211,6 +257,7 @@ def resolve(
         judge_model=judge_model or spec.default_judge_model
                     or generation_model or spec.default_generation_model,
         judge_vision=judge_vision,
+        effort=normalise_effort(effort) or DEFAULT_EFFORT,
     )
 
 
@@ -721,17 +768,12 @@ class ClaudeClient:
     #: it can consume the whole budget before the reply starts.
     MIN_TOKENS_WITH_THINKING = int(os.getenv("CADSMITH_MIN_THINKING_TOKENS", "24000"))
 
-    #: Effort governs how deeply the model reasons, and therefore how much of
-    #: the budget thinking takes. Left unset the model decides; set
-    #: CADSMITH_EFFORT to low or medium to keep reasoning proportionate on
-    #: simple parts, or high/max when correctness matters more than tokens.
-    EFFORT = (os.getenv("CADSMITH_EFFORT") or "").strip().lower()
-
     def __init__(self, config: "LLMConfig", on_note=None, on_delta=None):
         self.config = config
         self._on_note = on_note
         self._client = _build_sdk_client(config)
         self._thinking_ok = True   # cleared if the model rejects the parameter
+        self._effort_ok = True     # cleared if it rejects the effort instead
         self._coalescer = _Coalescer(
             lambda kind, text: on_delta and on_delta(kind, text))
 
@@ -756,6 +798,15 @@ class ClaudeClient:
         try:
             return self._stream(target, system, payload, budget, role)
         except Exception as exc:
+            if (self._effort_ok and self.config.effort
+                    and _EFFORT_UNSUPPORTED.search(str(exc))):
+                # A model that thinks but takes no effort setting: keep the
+                # reasoning, drop the dial. Losing the run over a preference
+                # would be the wrong trade.
+                self._effort_ok = False
+                self._note(f"{target} does not take a reasoning effort; "
+                           f"continuing at its own default.")
+                return self._stream(target, system, payload, budget, role)
             if self._thinking_ok and _THINKING_UNSUPPORTED.search(str(exc)):
                 # Older models on Bedrock (Claude 3, some 4.x) reject the
                 # parameter outright. Fall back rather than fail the run.
@@ -781,8 +832,12 @@ class ClaudeClient:
             # default ("omitted") still returns a thinking block, but with an
             # empty string in it.
             kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
-            if self.EFFORT:
-                kwargs["output_config"] = {"effort": self.EFFORT}
+            # Effort governs how deeply the model reasons, and therefore both
+            # the wait and the share of the budget thinking takes. It rides on
+            # the run's own configuration, so one part can be answered at low
+            # effort and the next at high without restarting the server.
+            if self.config.effort and self._effort_ok:
+                kwargs["output_config"] = {"effort": self.config.effort}
 
         thinking_parts: list[str] = []
         with self._client.messages.stream(**kwargs) as stream:
@@ -813,7 +868,7 @@ class ClaudeClient:
                 self._note(
                     f"{target} used the whole {max_tokens}-token budget "
                     f"reasoning and produced no answer. Raise "
-                    f"CADSMITH_MIN_THINKING_TOKENS, or set CADSMITH_EFFORT=low "
+                    f"CADSMITH_MIN_THINKING_TOKENS, or drop Reasoning effort "
                     f"to make it think less.")
             else:
                 self._note(f"{target} hit max_tokens={max_tokens}; the reply "
@@ -850,6 +905,11 @@ def _strip_anthropic_images(messages: list) -> list:
 _THINKING_UNSUPPORTED = re.compile(
     r"thinking|extended.?thinking|budget_tokens|unsupported.*param",
     re.IGNORECASE)
+
+#: Model took the thinking parameter but not the effort with it. Checked
+#: first, so a deployment that has yet to catch up on effort keeps its
+#: streamed reasoning instead of losing both.
+_EFFORT_UNSUPPORTED = re.compile(r"output_config|\beffort\b", re.IGNORECASE)
 
 
 class _VisionUnsupported(RuntimeError):

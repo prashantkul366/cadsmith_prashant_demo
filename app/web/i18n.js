@@ -53,6 +53,19 @@ const I18N = (function () {
     "input.samples":    ["Benchmark prompts", "ベンチマーク例"],
 
     "opt.iterations":   ["Refinement iterations", "改良の反復回数"],
+    "opt.effort":       ["Reasoning effort", "推論の深さ"],
+    "opt.effort.tip": [
+      "How hard the model is asked to think. Low answers a simple part in a "
+      + "fraction of the time; High is worth the wait on a difficult one. "
+      + "Claude backends only.",
+      "モデルにどこまで深く考えさせるかです。単純な部品なら「低」で待ち時間が"
+      + "大幅に短くなり、難しい部品なら「高」で待つ価値があります。Claude の"
+      + "バックエンドでのみ有効です。"],
+    "opt.effort.low":    ["Low — fastest", "低（最速）"],
+    "opt.effort.medium": ["Medium", "中"],
+    "opt.effort.high":   ["High — default", "高（既定）"],
+    "opt.effort.xhigh":  ["Extra high", "超高"],
+    "opt.effort.max":    ["Maximum", "最大"],
     "opt.vision":       ["Vision Judge", "画像による検証"],
     "opt.provider":     ["Provider", "プロバイダー"],
     "opt.genmodel":     ["Generation model", "生成モデル"],

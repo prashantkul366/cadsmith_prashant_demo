@@ -145,6 +145,18 @@ def main() -> int:
                             ".selectedOptions[0].textContent"))
         check("the key field is cleared after use",
               page.locator("#providerKey").input_value() == "")
+        # A row the script marks hidden has to actually go: an author
+        # `display` beats the browser's own [hidden] rule whatever the
+        # specificity, so the stylesheet has to say so for each such row.
+        check("and the row goes away once a backend needs no setup",
+              page.evaluate("""() => {
+                  const el = document.querySelector('#keyRow');
+                  const was = el.hidden;
+                  el.hidden = true;
+                  const shown = getComputedStyle(el).display;
+                  el.hidden = was;
+                  return shown;
+              }""") == "none")
 
         check("a gateway with no declared default leaves the model empty",
               page.locator("#optGenModel").input_value() == "",
@@ -163,6 +175,42 @@ def main() -> int:
               "STRONGER-MODEL" in page.locator("#judgeModelLabel").inner_text(),
               page.locator("#judgeModelLabel").inner_text())
         page.screenshot(path=str(out / "12-providers.png"))
+
+        print("\nReasoning effort")
+        # The picker is worth having only where the parameter exists, so it
+        # follows the chosen backend rather than sitting there inert.
+        check("no picker for a backend with no effort parameter",
+              page.locator("#effortRow").is_hidden())
+        page.select_option("#optProvider", "anthropic")
+        page.wait_for_timeout(400)
+        check("and it is on screen for a Claude backend",
+              page.locator("#effortRow").is_visible())
+        levels = page.evaluate(
+            "[...document.querySelectorAll('#optEffort option')].map(o => o.value)")
+        check("the levels come from the server, cheapest first",
+              levels == ["low", "medium", "high"], str(levels))
+        check("it opens on the level the API applies anyway",
+              page.locator("#optEffort").input_value() == "high",
+              page.locator("#optEffort").input_value())
+        check("the fast one says so, so nobody has to guess",
+              "fastest" in page.evaluate(
+                  "document.querySelector('#optEffort option').textContent").lower(),
+              page.evaluate(
+                  "document.querySelector('#optEffort option').textContent"))
+        page.select_option("#optEffort", "low")
+        page.wait_for_timeout(200)
+        check("choosing a level sticks",
+              page.locator("#optEffort").input_value() == "low")
+        page.select_option("#optProvider", "custom")
+        page.wait_for_timeout(400)
+        page.select_option("#optProvider", "anthropic")
+        page.wait_for_timeout(400)
+        check("and survives a trip through another backend",
+              page.locator("#optEffort").input_value() == "low",
+              page.locator("#optEffort").input_value())
+        page.select_option("#optEffort", "high")
+        page.select_option("#optProvider", "custom")
+        page.wait_for_timeout(400)
 
         print("\nEnvironment panel")
         page.click("#healthChip")

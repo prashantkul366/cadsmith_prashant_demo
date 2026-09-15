@@ -32,6 +32,8 @@ const S = {
   seq: 0,          // next unseen event sequence number
   providers: [],
   provider: null,
+  efforts: [],        // reasoning levels the picker offers, from the server
+  effortDefault: "",  // the level it selects until someone chooses another
   editing: false,
   examples: [],    // kept so a language change can redraw them translated
   catalog: null,   // set when a standard part answered instead of the agents
@@ -813,6 +815,7 @@ async function generate() {
     use_vision: $("#optVision").classList.contains("on"),
     use_catalog: $("#optCatalog").classList.contains("on"),
     ground_dimensions: $("#optGround").classList.contains("on"),
+    effort: $("#optEffort").value,
     provider: $("#optProvider").value,
     generation_model: $("#optGenModel").value.trim(),
     judge_model: $("#optJudgeModel").value.trim(),
@@ -1104,6 +1107,9 @@ async function loadProviders() {
     return `<option value="${esc(p.id)}">${esc(p.label)}${esc(state)}</option>`;
   }).join("");
 
+  S.effortDefault = payload.effort || "";
+  renderEffort(payload.efforts || [], S.effortDefault);
+
   const preferred = S.providers.find(p => p.id === payload.default && p.ready)
     || S.providers.find(p => p.ready)
     || S.providers[0];
@@ -1111,6 +1117,19 @@ async function loadProviders() {
     select.value = preferred.id;
     applyProvider(preferred.id);
   }
+}
+
+/* Effort is the one option that trades wait against reasoning, so the levels
+   come from the server rather than a list copied into the browser: pinning
+   CADSMITH_EFFORT to a level the picker omits still leaves it selectable. */
+function renderEffort(levels, selected) {
+  const select = $("#optEffort");
+  const keep = selected || select.value || S.effortDefault || "";
+  if (levels) S.efforts = levels;
+  select.innerHTML = (S.efforts || []).map(level =>
+    `<option value="${esc(level)}">${esc(t("opt.effort." + level))}</option>`
+  ).join("");
+  if ((S.efforts || []).indexOf(keep) >= 0) select.value = keep;
 }
 
 function currentProvider() {
@@ -1136,6 +1155,12 @@ function applyProvider(providerId) {
   $("#optGenModel").placeholder = models.length
     ? t("ph.modelid.count", { n: models.length }) : t("ph.modelid");
   $("#optJudgeModel").placeholder = $("#optGenModel").placeholder;
+
+  // Effort is a Claude parameter. A local Llama or an OpenAI-compatible
+  // gateway does not take it, so do not offer a control that would do
+  // nothing.
+  $("#effortRow").hidden = !(provider.kind === "anthropic"
+                             || provider.kind === "bedrock");
 
   const needsSetup = !provider.ready;
   $("#keyRow").hidden = !(needsSetup || provider.key_from_session);
@@ -1878,6 +1903,7 @@ function relocalise() {
   // Not applyProvider(): that resets the model fields to the provider's
   // defaults and would silently discard a model id someone had typed. Only
   // the text it writes is redrawn.
+  renderEffort(null, $("#optEffort").value);
   if (S.provider) {
     const models = S.provider.models || [];
     $("#optGenModel").placeholder = models.length

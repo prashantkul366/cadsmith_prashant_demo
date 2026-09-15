@@ -84,12 +84,30 @@ def main() -> int:
 
         response = client.post("/api/jobs", json={
             "prompt": PROMPT,
-            "options": {"max_iterations": 2, "use_vision": True},
+            "options": {"max_iterations": 2, "use_vision": True,
+                        "effort": "low"},
         })
         check("job accepted", response.status_code == 201,
               f"status {response.status_code}")
         job_id = response.json()["job"]["id"]
+        check("the chosen effort is recorded on the job",
+              response.json()["job"]["options"]["effort"] == "low",
+              str(response.json()["job"]["options"].get("effort")))
         print(f"        job id: {job_id}")
+
+        listing = client.get("/api/providers").json()
+        check("the effort picker is offered levels to choose from",
+              listing.get("efforts") == ["low", "medium", "high"],
+              str(listing.get("efforts")))
+        check("and told which one the API applies by default",
+              listing.get("effort") == "high", str(listing.get("effort")))
+
+        junk = client.post("/api/jobs", json={
+            "prompt": PROMPT, "options": {"effort": "turbo"}})
+        check("an effort the API would reject never reaches it",
+              junk.status_code == 201
+              and junk.json()["job"]["options"]["effort"] == "",
+              f"status {junk.status_code}")
 
         print("\nEvent stream (SSE)")
         events: list[dict] = []

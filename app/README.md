@@ -159,6 +159,30 @@ strictly.
 Local providers are probed for reachability, so "ready" means something is
 actually listening rather than merely that no key is required.
 
+**Reasoning effort is on the panel, next to the iteration slider.** Current
+Claude models think before they answer, and how long they think is the
+largest single component of the wait: a cylinder with one hole and a
+planetary gearbox are not the same problem, but at the API's default effort
+the model reasons about both as though they were. Low, Medium and High are
+offered; Low is the one to pick for a part you could have drawn yourself, and
+High — what the API applies when nothing asks — for one you could not. The
+picker appears only for the Claude backends, because `output_config.effort`
+is a Claude parameter; adaptive thinking and effort are generally available
+on Amazon Bedrock as well as the first-party API, so both paths take it. The
+level travels with the run, so the Planner, Coder and Judge all reason at the
+level that was chosen, and a run already in flight keeps the level it started
+with.
+
+`CADSMITH_EFFORT` still works and now sets what the picker opens on, which is
+how to reach `xhigh` and `max`: those are on the API's ladder but not in the
+dropdown, since they buy depth at a cost in minutes that no one clicking
+through a menu expects.
+
+Two refusals are absorbed rather than failed. A model that reasons but has
+yet to take an effort with it is retried without the effort and keeps its
+streamed reasoning; an older one that rejects the thinking parameter outright
+is retried without either. Both say so in the run log.
+
 ## What you can do without any model backend
 
 The agents need one; the CAD kernel does not. Without one you can still:
@@ -563,9 +587,10 @@ deterministic.
                                                     # the standards it cites
 .venv/bin/python -m app.tests.test_budget           # the spend ceiling
 .venv/bin/python -m app.tests.test_edit_chain       # chained edits, real kernel
-.venv/bin/python -m app.tests.test_encoding         # UTF-8 everywhere (Windows)
+.venv/bin/python -m pytest app/tests/test_encoding.py   # UTF-8 everywhere (Windows)
 .venv/bin/python -m app.tests.test_layout           # panel geometry, real browser
-.venv/bin/python -m app.tests.test_thinking_stream  # streamed reasoning
+.venv/bin/python -m app.tests.test_thinking_stream  # streamed reasoning, and the
+                                                    # effort the run asked for
 .venv/bin/python -m app.tests.ui_check              # real browser, needs a server
 .venv/bin/python -m app.tests.ui_generate_check     # a real run in a browser,
                                                     # plus provider failures
