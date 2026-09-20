@@ -42,6 +42,9 @@ class ExecutionResult:
     # On success:
     step_path: Optional[str] = None
     stl_path: Optional[str] = None
+    #: Written only for an assembly, which needs a format carrying more than
+    #: one body: the component tree, its names and its colours.
+    gltf_path: Optional[str] = None
     geometry_json: Optional[dict] = None  # basic shape info extracted in-process
     # On failure:
     error: Optional[str] = None
@@ -151,27 +154,49 @@ try:
     _autofab_candidate_names = ["result", "model", "part", "shape", "assembly",
                                  "drone", "chassis", "bracket", "plate", "body"]
 
+    # An Assembly is as valid a result as a Workplane. "assembly" has been in
+    # the list of names to look for since this was written, but every
+    # candidate was gated behind isinstance(obj, cq.Workplane) - so a script
+    # that correctly built one was told no Workplane could be found, and the
+    # next attempt "fixed" it by fusing everything into a single body. The
+    # components, their names and their colours were lost every time.
+    _autofab_kinds = (cq.Workplane, cq.Assembly)
+
     for name in _autofab_candidate_names:
         obj = _autofab_user_globals.get(name)
-        if obj is not None and isinstance(obj, cq.Workplane):
+        if obj is not None and isinstance(obj, _autofab_kinds):
             _autofab_result = obj
             break
 
-    # Fallback: find the last Workplane assigned
+    # Fallback: find the last result-shaped object assigned
     if _autofab_result is None:
         for name, obj in reversed(list(_autofab_user_globals.items())):
             if name.startswith("_"):
                 continue
-            if isinstance(obj, cq.Workplane):
+            if isinstance(obj, _autofab_kinds):
                 _autofab_result = obj
                 break
 
     if _autofab_result is None:
-        _autofab_output = {{"success": False, "error": "No CadQuery Workplane object found in script output. Assign your final shape to a variable named 'result'.", "error_type": "NoResultError"}}
+        _autofab_output = {{"success": False, "error": "No CadQuery Workplane or Assembly found in script output. Assign your final shape to a variable named 'result'.", "error_type": "NoResultError"}}
     else:
+        _autofab_is_assembly = isinstance(_autofab_result, cq.Assembly)
+        if _autofab_is_assembly:
+            # One compound to measure, while the assembly itself keeps its
+            # tree for the STEP and the viewer.
+            _autofab_shape = _autofab_result.toCompound()
+            _autofab_parts = [
+                {{"name": _n, "colour": (list(_o.color.toTuple())
+                                        if getattr(_o, "color", None) else None)}}
+                for _n, _o in _autofab_result.traverse() if _n != _autofab_result.name
+            ]
+        else:
+            _autofab_shape = _autofab_result.val()
+            _autofab_parts = []
+
         # Extract geometry info
-        solid = _autofab_result.val()
-        bb = _autofab_result.val().BoundingBox()
+        solid = _autofab_shape
+        bb = solid.BoundingBox()
 
         _autofab_geometry = {{
             "volume": solid.Volume(),
@@ -182,14 +207,29 @@ try:
                 "zmin": bb.zmin, "zmax": bb.zmax, "zlen": bb.zlen,
             }},
             "is_valid": solid.isValid(),
-            "num_faces": len(_autofab_result.faces().vals()),
-            "num_edges": len(_autofab_result.edges().vals()),
-            "num_vertices": len(_autofab_result.vertices().vals()),
+            "num_faces": len(solid.Faces()),
+            "num_edges": len(solid.Edges()),
+            "num_vertices": len(solid.Vertices()),
+            "is_assembly": _autofab_is_assembly,
+            "components": _autofab_parts,
         }}
 
-        # Export STEP and STL
-        cq.exporters.export(_autofab_result, "{step_path}")
-        cq.exporters.export(_autofab_result, "{stl_path}")
+        if _autofab_is_assembly:
+            # "default" keeps the components separate in the STEP, with
+            # their names and colours; "fused" would weld the assembly into
+            # one solid and throw away the thing that makes it an assembly.
+            _autofab_result.export("{step_path}", exportType="STEP")
+            _autofab_result.export("{stl_path}", exportType="STL")
+            try:
+                # GLTF carries the tree, the names and the colours straight
+                # into the viewer. Best effort: an assembly is still usable
+                # without it, just monochrome.
+                _autofab_result.export("{gltf_path}", exportType="GLTF")
+            except Exception:
+                pass
+        else:
+            cq.exporters.export(_autofab_result, "{step_path}")
+            cq.exporters.export(_autofab_result, "{stl_path}")
 
         _autofab_output = {{
             "success": True,
@@ -235,6 +275,7 @@ class Executor:
         script_path = self.output_dir / f"{name}_script.py"
         step_path = self.output_dir / f"{name}.step"
         stl_path = self.output_dir / f"{name}.stl"
+        gltf_path = self.output_dir / f"{name}.gltf"
 
         script_path.write_text(cadquery_code, encoding="utf-8")
 
@@ -243,6 +284,7 @@ class Executor:
             script_path=str(script_path).replace("\\", "\\\\"),
             step_path=str(step_path).replace("\\", "\\\\"),
             stl_path=str(stl_path).replace("\\", "\\\\"),
+            gltf_path=str(gltf_path).replace("\\", "\\\\"),
         )
         runner_path = self.output_dir / f"{name}_runner.py"
         runner_path.write_text(runner_code, encoding="utf-8")
@@ -283,6 +325,7 @@ class Executor:
                     time_ms=elapsed_ms,
                     step_path=str(step_path),
                     stl_path=str(stl_path),
+                    gltf_path=str(gltf_path) if gltf_path.exists() else None,
                     geometry_json=result_data["geometry"],
                 )
             else:

@@ -399,6 +399,116 @@ def compare_stated(requirements: dict, measured: dict) -> list[SpecCheck]:
     return checks
 
 
+#: Twist drills a shop actually has, in millimetres. 0.5 steps to 14, then
+#: the sizes that stay common past it. A hole at a size not on this list is
+#: not wrong - it may be bored, reamed or milled - but it is worth saying,
+#: because it is usually the model having picked a number rather than a size.
+def _drill_sizes() -> set[float]:
+    sizes = {round(0.5 * n, 1) for n in range(2, 29)}          # 1.0 to 14.0
+    sizes |= {15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 24.0, 25.0,
+              26.0, 28.0, 30.0, 32.0, 35.0, 38.0, 40.0, 45.0, 50.0}
+    try:
+        from app.catalog import standards
+        for thread in standards.THREADS.values():
+            sizes.add(round(float(thread.clearance_close), 2))
+            sizes.add(round(float(thread.clearance_normal), 2))
+            sizes.add(round(float(thread.tapping_drill), 2))
+    except Exception:          # the catalogue is optional; the list is not
+        pass
+    return sizes
+
+
+DRILL_SIZES = _drill_sizes()
+
+
+def clashes(step_path: str | Path) -> list[SpecCheck]:
+    """Do any two components of an assembly occupy the same space?
+
+    The one check an assembly needs that a single part never did, and the
+    only one that settles the question a person actually asks of an
+    assembly - does it go together. It is a boolean intersection per pair,
+    so it is a measurement in the same sense as everything else here rather
+    than a judgement.
+
+    A part that is not an assembly yields no checks at all.
+    """
+    import cadquery as cq
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+    from OCP.GProp import GProp_GProps
+    from OCP.BRepGProp import BRepGProp
+
+    shape = cq.importers.importStep(str(step_path))
+    solids = shape.val().Solids() if shape.val() else []
+    if len(solids) < 2:
+        return []
+
+    def volume_of(occ_shape) -> float:
+        props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(occ_shape, props)
+        return abs(props.Mass())
+
+    # A shared face is not a clash: parts are meant to touch. Only a shared
+    # volume is, and a tolerance keeps a coincident face from reading as one.
+    floor = 0.01
+    overlaps: list[str] = []
+    checked = 0
+    for first in range(len(solids)):
+        for second in range(first + 1, len(solids)):
+            if checked >= 200:          # a large assembly is not this check's job
+                break
+            checked += 1
+            try:
+                common = BRepAlgoAPI_Common(solids[first].wrapped,
+                                            solids[second].wrapped).Shape()
+                shared = volume_of(common)
+            except Exception:
+                continue
+            if shared > floor:
+                overlaps.append(f"{first + 1}/{second + 1}: {shared:.2f} mm3")
+
+    return [SpecCheck(
+        key="clash", label="components that do not overlap",
+        expected=f"{len(solids)} separate bodies",
+        actual="none overlap" if not overlaps else "; ".join(overlaps[:4]),
+        passed=not overlaps, hard=True)]
+
+
+def manufacturability(measured: dict) -> list[SpecCheck]:
+    """What the measurements say about making the part, not about matching it.
+
+    Everything else here asks "is this the part that was asked for". This
+    asks the question after that one: could a shop make it. Only what a
+    measurement can settle, and advisory throughout - a hole at an odd size
+    may be bored on purpose, and a part refused for it would be a part
+    refused for being right.
+    """
+    checks: list[SpecCheck] = []
+    holes = list(measured.get("holes") or [])
+    if holes:
+        odd = [d for d in holes
+               if not any(abs(d - size) <= 0.06 for size in DRILL_SIZES)]
+        checks.append(SpecCheck(
+            key="drill_sizes", label="holes at stock drill sizes",
+            expected="standard sizes",
+            actual=(", ".join(f"{d:.2f}" for d in sorted(set(odd))[:6]) + " mm"
+                    if odd else "all standard"),
+            passed=not odd, hard=False))
+
+    box = measured.get("bbox") or {}
+    extents = [box.get(a, 0.0) for a in ("xlen", "ylen", "zlen")]
+    if all(e > 0 for e in extents):
+        thinnest = min(extents)
+        # The thinnest overall dimension, which for a plate is its thickness.
+        # Not the minimum wall - measuring that properly needs ray casting
+        # through the solid - but it catches the part built at 0.4mm because
+        # a unit was dropped somewhere.
+        checks.append(SpecCheck(
+            key="thin_section", label="thinnest overall dimension",
+            expected="at least 0.8 mm", actual=f"{thinnest:.2f} mm",
+            passed=thinnest >= 0.8, hard=False))
+    return checks
+
+
 def check(plan: dict, step_path: str | Path,
           requirements: Optional[dict] = None) -> SpecReport:
     """Measure the built part and settle every claim the plan makes about it."""
@@ -408,5 +518,13 @@ def check(plan: dict, step_path: str | Path,
         # Never let a measurement failure block a run: it means we could not
         # check, not that the part is wrong.
         return SpecReport(error=f"{type(exc).__name__}: {exc}")
-    checks = compare_stated(requirements or {}, measured) + compare(plan, measured)
+    checks = (compare_stated(requirements or {}, measured)
+              + compare(plan, measured)
+              + manufacturability(measured))
+    try:
+        checks += clashes(step_path)
+    except Exception:
+        # Could not check is not the same as wrong; an assembly that will
+        # not re-import must not cost the run its other measurements.
+        pass
     return SpecReport(checks=checks, measured=measured)

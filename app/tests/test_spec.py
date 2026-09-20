@@ -156,9 +156,57 @@ def main() -> int:
 
     empty = spec.check({}, as_step(plate(4), "noplan"))
     check("a plan claiming nothing measurable blocks nothing", empty.ok)
+    keys = [c.key for c in empty.checks]
     check("watertightness is checked even with no plan at all",
-          [c.key for c in empty.checks] == ["solid_valid"],
-          str([c.key for c in empty.checks]))
+          "solid_valid" in keys, str(keys))
+    check("and nothing the plan did not claim is invented to block on",
+          not [c for c in empty.checks if c.hard and c.key != "solid_valid"],
+          str([c.key for c in empty.checks if c.hard]))
+
+    # Making it is a separate question from matching the request, so it is
+    # asked of every part whether or not there is a plan to compare against.
+    check("how it would be made is asked even with no plan",
+          {"drill_sizes", "thin_section"} <= set(keys), str(keys))
+    check("and only ever advises - an odd bore may be bored on purpose",
+          all(not c.hard for c in empty.checks
+              if c.key in ("drill_sizes", "thin_section")))
+
+    odd = spec.manufacturability(
+        {"holes": [7.37], "bbox": {"xlen": 50.0, "ylen": 50.0, "zlen": 0.4}})
+    by_key = {c.key: c for c in odd}
+    check("a hole at no drill size is flagged",
+          not by_key["drill_sizes"].passed, by_key["drill_sizes"].actual)
+    check("and a section too thin to make is too",
+          not by_key["thin_section"].passed, by_key["thin_section"].actual)
+    standard = spec.manufacturability(
+        {"holes": [6.0, 8.4], "bbox": {"xlen": 50.0, "ylen": 50.0, "zlen": 8.0}})
+    check("while stock sizes and an M8 clearance hole pass",
+          all(c.passed for c in standard),
+          str([(c.key, c.actual) for c in standard]))
+
+    # An assembly's own question: does it go together. A shared face is not
+    # a clash - parts are meant to touch - only a shared volume is.
+    apart = cq.Assembly()
+    apart.add(cq.Workplane("XY").box(80, 50, 6), name="plate")
+    apart.add(cq.Workplane("XY").circle(12).extrude(20), name="boss",
+              loc=cq.Location(cq.Vector(0, 0, 6)))
+    apart.export(str(work / "apart.step"), exportType="STEP")
+    buried = cq.Assembly()
+    buried.add(cq.Workplane("XY").box(80, 50, 6), name="plate")
+    buried.add(cq.Workplane("XY").circle(12).extrude(20), name="boss",
+               loc=cq.Location(cq.Vector(0, 0, -2)))
+    buried.export(str(work / "buried.step"), exportType="STEP")
+
+    clean = spec.clashes(work / "apart.step")
+    check("components that only touch do not read as a clash",
+          clean and clean[0].passed, str([c.actual for c in clean]))
+    hit = spec.clashes(work / "buried.step")
+    check("components sharing volume do", hit and not hit[0].passed,
+          str([c.actual for c in hit]))
+    check("and a clash blocks, because an assembly that does not go "
+          "together is not the assembly", hit and hit[0].hard)
+    check("a single part is asked no assembly questions at all",
+          spec.clashes(as_step(plate(4), "lone")) == [])
 
     missing = spec.check(PLATE_PLAN, work / "does_not_exist.step")
     check("an unreadable part is reported, not treated as a failure",

@@ -148,8 +148,24 @@ Output a JSON object with these fields:
     "volume_error_threshold_pct": 5,
     "bbox_iou_threshold": 0.90
   },
+  "specification": {
+    "material": "what this would be made from, e.g. 'aluminium 6082-T6', 'mild steel S275', 'PA12 nylon'",
+    "process": "one of: machined, turned, cast, moulded, printed, sheet, fabricated",
+    "tolerance_class": "one of: ISO 2768-f, ISO 2768-m, ISO 2768-c",
+    "finish": "e.g. 'as machined', 'anodised', 'painted', or null",
+    "fits": [
+      {"feature": "what it is, e.g. 'bearing housing bore'", "size_mm": 40, "fit": "H7", "why": "6203 outer ring is a press fit in H7"}
+    ]
+  },
   "notes": "Any special considerations for the Coder agent"
 }
+
+The specification block is a PROPOSAL an engineer will review, not a decision.
+Say what you would choose and why; do not leave it blank because you are
+unsure. Pick the tolerance class from how the part is used: ISO 2768-f for a
+part with mating features, -m for general work, -c for a rough fabrication.
+Only list a fit where two parts actually meet - a bore for a bearing or a
+shaft, a spigot, a dowel. A clearance hole for a bolt is not a fit.
 
 Be precise with dimensions. If the user prompt includes explicit dimensions, use them exactly.
 If dimensions are not specified, estimate reasonable engineering dimensions and state your assumptions.
@@ -181,7 +197,15 @@ ORIENTATION CONVENTION (always follow):
 
 CRITICAL RULES:
 1. Import cadquery as cq at the top.
-2. Assign your final shape to a variable called `result` (type: cq.Workplane).
+2. Assign your final shape to a variable called `result`.
+   - For a single part, that is a cq.Workplane. This is the normal case.
+   - For a request that is genuinely several parts that go together - a
+     bearing block and its cover, a motor and its mount - build a
+     cq.Assembly instead, add each part with add(..., name=, loc=, color=),
+     and position them arithmetically from the parameters you already chose.
+     Do not use constraints or solve(): explicit placement is what the
+     kernel measures and what a reader can check.
+   - Do not wrap a single part in an Assembly. One part is one Workplane.
 3. Do NOT import or use ocp_vscode, show(), save_screenshot(), or any visualization.
 4. Do NOT call cq.exporters — the system handles export.
 5. The script must be self-contained and executable with just CadQuery installed.

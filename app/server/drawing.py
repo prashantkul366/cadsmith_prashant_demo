@@ -801,21 +801,42 @@ def _title_block(prompt: str, geometry: dict, job_id: str, version: int,
 
 
 #: Said once, on the sheet, rather than repeated against every dimension.
+#: The tolerance line is not here: what it says depends on whether anything
+#: has actually been specified, which ``specification.py`` decides.
 _NOTES = [
     "ALL DIMENSIONS IN MILLIMETRES",
-    "DIMENSIONS ARE AS MODELLED — NO TOLERANCES ARE SPECIFIED",
     "HIDDEN DETAIL SHOWN DASHED · ALL VIEWS TO THE STATED SCALE",
 ]
 
 
-def _notes(geometry: dict) -> list[str]:
-    """The notes as SVG."""
+def note_lines(geometry: dict, spec: Any = None) -> list[str]:
+    """Every note the sheet carries, in reading order.
+
+    Shared by both renderers for the same reason ``plan_sheet`` is: two
+    implementations of one drawing drift, and a tolerance note that appears
+    on the SVG and not on the DXF is worse than one that appears on neither.
+    """
     lines = list(_NOTES)
+    lines.extend(spec.sheet_notes() if spec is not None
+                 else ["DIMENSIONS ARE AS MODELLED — NO TOLERANCES "
+                       "ARE SPECIFIED"])
     if geometry.get("is_valid"):
         lines.append("SOLID IS CLOSED AND WATERTIGHT AS PROJECTED")
+    return lines
+
+
+def _notes(geometry: dict, spec: Any = None) -> list[str]:
+    """The notes as SVG."""
+    lines = note_lines(geometry, spec)
     out = []
+    # Grown upward from just above the footer rather than downward from the
+    # title block. A specified part has three times the notes an unspecified
+    # one had, and anchoring at the top ran them over the footer line; the
+    # space above is empty, so that is the direction with room in it.
+    last = FRAME_B - 9.0
     for index, text in enumerate(lines):
-        out.append(_text(FRAME_L + 2.0, TITLE_T + 8.0 + index * 5.0, text,
+        y = last - (len(lines) - 1 - index) * 5.0
+        out.append(_text(FRAME_L + 2.0, y, text,
                          TEXT_SMALL, anchor="start", fill="#333"))
     out.append(_text(FRAME_L + 2.0, FRAME_B - 3.0,
                      "Projected from the exported STEP solid by CADSmith",
@@ -824,7 +845,8 @@ def _notes(geometry: dict) -> list[str]:
 
 
 def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
-                version: int, projection: Optional[Path] = None) -> str:
+                version: int, projection: Optional[Path] = None,
+                spec: Any = None) -> str:
     """Compose the drawing as a standalone SVG document."""
     sheet = plan_sheet(_project(step_path, cache=projection))
     scale = sheet["scale"]
@@ -834,7 +856,7 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
         body += _render_view(view)
 
     body += _title_block(prompt, geometry, job_id, version, scale)
-    body += _notes(geometry)
+    body += _notes(geometry, spec)
 
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{SHEET_W}mm" '
@@ -848,11 +870,16 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
     )
 
 
-def _version_inputs(version_dir: Path) -> tuple[Optional[Path], dict]:
-    """The STEP this version built, and what the kernel measured of it."""
+def _version_inputs(version_dir: Path):
+    """The STEP this version built, what was measured, and what it specifies.
+
+    The specification is read from disk rather than passed in, so the
+    prebuild - which runs from a version directory and nothing else - puts
+    the same notes on the sheet as a request that arrives later.
+    """
     step = version_dir / "model.step"
     if not step.exists():
-        return None, {}
+        return None, {}, None
 
     geometry = {}
     geometry_file = version_dir / "geometry.json"
@@ -861,7 +888,17 @@ def _version_inputs(version_dir: Path) -> tuple[Optional[Path], dict]:
             geometry = json.loads(geometry_file.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             pass
-    return step, geometry
+
+    spec = None
+    spec_file = version_dir / "specification.json"
+    if spec_file.exists():
+        try:
+            from . import specification
+            spec = specification.from_dict(
+                json.loads(spec_file.read_text(encoding="utf-8")))
+        except Exception:      # a bad file must never cost the drawing
+            spec = None
+    return step, geometry, spec
 
 
 def ensure_sheet(version_dir: Path, prompt: str, job_id: str,
@@ -871,12 +908,13 @@ def ensure_sheet(version_dir: Path, prompt: str, job_id: str,
     if target.exists() and target.stat().st_size > 0:
         return target
 
-    step, geometry = _version_inputs(version_dir)
+    step, geometry, spec = _version_inputs(version_dir)
     if step is None:
         return None
 
     sheet = build_sheet(step, geometry, prompt, job_id, version,
-                        projection=version_dir / "projection.json")
+                        projection=version_dir / "projection.json",
+                        spec=spec)
     target.write_text(sheet, encoding="utf-8")
     return target
 
@@ -907,7 +945,8 @@ def _dxf_y(y: float) -> float:
 
 
 def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
-              version: int, projection: Optional[Path] = None):
+              version: int, projection: Optional[Path] = None,
+              spec: Any = None):
     """The same drawing as a DXF document, with real DIMENSION entities.
 
     The SVG on screen is a picture of the drawing; this is the drawing. Its
@@ -1044,9 +1083,12 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
         text(TITLE_L + 2.0, y, label, TEXT_SMALL, "MIDDLE_LEFT")
         text(TITLE_L + 52.0, y, value, TEXT_SMALL, "MIDDLE_LEFT")
 
-    for index, note in enumerate(_NOTES):
-        text(FRAME_L + 2.0, TITLE_T + 6.0 + index * 5.0, note, TEXT_SMALL,
-             "MIDDLE_LEFT")
+    notes = note_lines(geometry, spec)
+    for index, note in enumerate(notes):
+        # Bottom-aligned, as on the SVG, so the two sheets stay the same
+        # drawing however many notes a specification adds.
+        text(FRAME_L + 2.0, FRAME_B - 9.0 - (len(notes) - 1 - index) * 5.0,
+             note, TEXT_SMALL, "MIDDLE_LEFT")
 
     return doc
 
@@ -1058,12 +1100,13 @@ def ensure_dxf(version_dir: Path, prompt: str, job_id: str,
     if target.exists() and target.stat().st_size > 0:
         return target
 
-    step, geometry = _version_inputs(version_dir)
+    step, geometry, spec = _version_inputs(version_dir)
     if step is None:
         return None
 
     doc = build_dxf(step, geometry, prompt, job_id, version,
-                    projection=version_dir / "projection.json")
+                    projection=version_dir / "projection.json",
+                    spec=spec)
     doc.saveas(target)
     return target
 

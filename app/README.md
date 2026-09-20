@@ -183,6 +183,49 @@ yet to take an effort with it is retried without the effort and keeps its
 streamed reasoning; an older one that rejects the thinking parameter outright
 is retried without either. Both say so in the run log.
 
+**A part is a shape plus what it is made of and how closely.** The Planner's
+plan now carries a `specification` block - material, process, general
+tolerance class, finish, and the fits where two parts meet - and the sheet
+states it. Fits for anything the request names as a standard part come out
+of `catalog/standards.py` rather than out of the model: a 6203 sits in an H7
+housing bore and on a k6 shaft seat because ISO 286 says so, and an M8
+clearance hole is 9mm because ISO 273 does. The case of a fit designation is
+never folded, because in ISO 286 the case *is* the meaning - H7 is a hole and
+h7 a shaft.
+
+Everything the Planner proposed rather than looked up is marked on the sheet
+as proposed, and the sheet says so in as many words: MATERIAL, PROCESS AND
+TOLERANCE CLASS ARE PROPOSED BY THE PLANNER - CONFIRM BEFORE MANUFACTURE. A
+tolerance class the Planner invented - "ISO 2768-x" - becomes no class at
+all and the drawing goes back to saying nothing, which is where it started
+and no worse. The old refusal to print a tolerance note nobody had specified
+still holds; there is simply now something true to print.
+
+**Two questions are asked of every part about making it**, separately from
+whether it matches the request: are its holes at sizes a shop stocks a drill
+for, and is anything too thin to make. Both advisory - a bore may be bored on
+purpose - and both measured rather than judged.
+
+## Assemblies
+
+A script may assign a `cq.Assembly` to `result` instead of a `cq.Workplane`,
+and the pipeline carries it through: the STEP keeps the components separate
+with their names and colours, a GLTF is written alongside it, and the
+measured checks gain the one an assembly needs - **do any two components
+share volume**. Parts touching is not a clash; parts occupying the same space
+is, and it blocks, because an assembly that does not go together is not the
+assembly.
+
+Placement is explicit and arithmetic. Constraints and `solve()` are
+deliberately not used: a solver that fails to converge, or converges
+mirrored, fails silently and is nearly impossible to explain to a reader,
+while a position computed from the parameters can be checked by measurement
+like everything else here.
+
+What is not done yet: the viewer still shows the fused STL rather than the
+GLTF component tree, so an assembly appears as one colour and cannot be
+exploded or isolated; and the drawing has no parts list or balloons.
+
 ## What you can do without any model backend
 
 The agents need one; the CAD kernel does not. Without one you can still:
@@ -582,7 +625,9 @@ deterministic.
 .venv/bin/python -m app.tests.test_catalog          # the catalogue, real kernel
 .venv/bin/python -m app.tests.test_catalog_library  # every family builds and routes
 .venv/bin/python -m app.tests.test_grounding        # published dimensions retrieved
-.venv/bin/python -m app.tests.test_spec             # measurement over opinion
+.venv/bin/python -m app.tests.test_spec             # measurement over opinion,
+                                                    # clashes, and whether it
+                                                    # could be made
 .venv/bin/python -m app.tests.test_drawing          # the drawing sheet against
                                                     # the standards it cites
 .venv/bin/python -m app.tests.test_budget           # the spend ceiling
@@ -603,6 +648,20 @@ deterministic.
 .venv/bin/python -m app.tests.ui_params_check       # the parameter controls
                                                     # over every part family,
                                                     # and the right column
+```
+
+`app/tools/eval_parts.py` scores the app against twenty fixed prompts on what
+a kernel can settle - extents, bores, hole counts, volume, watertightness -
+so a change to a prompt or a schema can be told apart from a regression.
+`--catalogue-only` runs the seven standard-part cases with no model calls and
+costs nothing; the rest spend real money, twenty parts at a Planner, a Coder
+and a Judge each. `--baseline` diffs against a saved run and names anything
+that regressed.
+
+```bash
+.venv/bin/python -m app.tools.eval_parts --catalogue-only    # free
+.venv/bin/python -m app.tools.eval_parts --effort low --out eval-low.json
+.venv/bin/python -m app.tools.eval_parts --baseline eval-low.json
 ```
 
 `app/tests/ui_parts_check.py` is known to fail: it expects the mock provider

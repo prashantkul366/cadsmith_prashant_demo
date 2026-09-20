@@ -264,6 +264,36 @@ def main() -> int:
                       f"elbow {ex:.1f},{ey:.1f} for box "
                       f"{left:.1f},{top_y:.1f},{right:.1f},{bottom:.1f}")
 
+        print("\nA specification, once there is one to state")
+        from app.server import specification
+        spec = specification.read(
+            {"specification": {"material": "aluminium 6082-T6",
+                               "process": "machined",
+                               "tolerance_class": "ISO 2768-m",
+                               "finish": "as machined",
+                               "fits": [{"feature": "spigot", "size_mm": 30,
+                                         "fit": "h7"}]}},
+            "a bearing block for a 6203 with M8 fixings")
+        spec_notes = drawing.note_lines({"is_valid": True}, spec)
+        joined = " | ".join(spec_notes)
+        check("the general tolerance class is stated",
+              any("ISO 2768-m" in line for line in spec_notes), joined[:80])
+        check("and the material with it",
+              any("6082-T6" in line for line in spec_notes), joined[:80])
+        check("a bearing's fits come from the table, not the model",
+              any("H7" in line and "6203" in line for line in spec_notes),
+              joined[:120])
+        # ISO 286 reads the case of the letter: H7 is a hole, h7 a shaft.
+        # Shouting the note must not turn one into the other.
+        check("a shaft tolerance stays lower case",
+              any("k6" in line for line in spec_notes)
+              and not any("K6" in line for line in spec_notes), joined[:120])
+        check("and the sheet says who proposed it",
+              any("PROPOSED BY THE PLANNER" in line for line in spec_notes))
+        check("with nothing specified it still refuses to claim a tolerance",
+              any("NO TOLERANCES ARE SPECIFIED" in line
+                  for line in drawing.note_lines({"is_valid": True}, None)))
+
         print("\nThe same drawing as DXF")
         # The SVG is a picture of the drawing; the DXF is the drawing. Its
         # dimensions carry the geometry they measure, so this asks the file

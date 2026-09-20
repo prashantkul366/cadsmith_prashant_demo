@@ -43,6 +43,7 @@ from . import budget as budget_mod
 from . import drawing
 from . import i18n
 from . import spec
+from . import specification
 from . import stated
 from .providers import LLMConfig, build_client
 from .events import (
@@ -494,6 +495,13 @@ class InstrumentedExecutor(Executor):
                 shutil.copy2(result.stl_path, vdir / "model.stl")
             if result.step_path and Path(result.step_path).exists():
                 shutil.copy2(result.step_path, vdir / "model.step")
+            # What this version is made of and to what tolerance, beside
+            # what it measures. Written per version rather than per job
+            # because an edit can change the part enough to change them.
+            spec_doc = specification.read(ctx.design_plan or {}, ctx.prompt)
+            if spec_doc.stated:
+                (vdir / "specification.json").write_text(
+                    json.dumps(spec_doc.to_dict(), indent=2), encoding="utf-8")
             (vdir / "geometry.json").write_text(
                 json.dumps(result.geometry_json, indent=2), encoding="utf-8"
             )
