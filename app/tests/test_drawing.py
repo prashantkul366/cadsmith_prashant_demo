@@ -214,6 +214,56 @@ def main() -> int:
                       r"[ML](-?[\d.]+),", trapezoid.get("d"))),
                   "trapezoid then circles" if trapezoid is not None
                   else "no trapezoid found")
+        # A drawing that gives the overall size and the hole diameters, and
+        # never says where the holes are, cannot be made from. These are the
+        # dimensions that separate a description of a part from a drawing of
+        # one.
+        print("\nFeatures are positioned, not just counted")
+        patterned = (cq.Workplane("XY")
+                     .box(100.0, 60.0, 8.0)
+                     .faces(">Z").workplane()
+                     .rect(80.0, 40.0, forConstruction=True).vertices().hole(6.0)
+                     .faces(">Z").workplane().hole(25.0))
+        pat_step = work / "patterned.step"
+        cq.exporters.export(patterned, str(pat_step))
+        pat_plan = drawing.plan_sheet(drawing._project(pat_step))  # noqa: SLF001
+        top = next(v for v in pat_plan["views"] if v["name"] == "TOP")
+        measures = sorted(round(d["measure"], 2) for d in top["dimensions"])
+        check("the hole pattern's pitches are dimensioned",
+              80.0 in measures and 40.0 in measures, str(measures))
+
+        leaders = [c.get("label") for c in top["callouts"]]
+        check("four identical holes are called out once, not four times",
+              "4\u00d7 \u00d86" in leaders, str(leaders))
+        check("and the lone bore keeps a plain diameter",
+              "\u00d825" in leaders, str(leaders))
+
+        # A bolt circle is the other arrangement worth recognising: its PCD
+        # says everything, and positioning six holes individually would bury
+        # the sheet.
+        flanged = (cq.Workplane("XY").circle(60.0).extrude(10.0)
+                   .faces(">Z").workplane()
+                   .polarArray(45.0, 0.0, 360.0, 6).hole(9.0))
+        flange_step = work / "flange.step"
+        cq.exporters.export(flanged, str(flange_step))
+        flange_plan = drawing.plan_sheet(drawing._project(flange_step))  # noqa: SLF001
+        ftop = next(v for v in flange_plan["views"] if v["name"] == "TOP")
+        flabels = [c.get("label") or "" for c in ftop["callouts"]]
+        check("a bolt circle is called out by its pitch circle diameter",
+              any("PCD" in label and label.startswith("6\u00d7") for label in flabels),
+              str(flabels))
+
+        # Every leader has to end somewhere a reader can follow it to.
+        for view in pat_plan["views"] + flange_plan["views"]:
+            left, top_y, right, bottom = view["box"]
+            for call in view["callouts"]:
+                ex, ey = call["elbow"]
+                check(f"{view['name']} leader {call.get('label')} stays near its view",
+                      left - 40 <= ex <= right + 40
+                      and top_y - 40 <= ey <= bottom + 40,
+                      f"elbow {ex:.1f},{ey:.1f} for box "
+                      f"{left:.1f},{top_y:.1f},{right:.1f},{bottom:.1f}")
+
         print("\nThe same drawing as DXF")
         # The SVG is a picture of the drawing; the DXF is the drawing. Its
         # dimensions carry the geometry they measure, so this asks the file

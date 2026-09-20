@@ -358,15 +358,21 @@ def _escape(x: float, y: float, dx: float, dy: float,
 
     A leader has to get clear of the drawing it points into before its text
     can sit anywhere legible.
+
+    The *first* boundary the ray crosses, not the last. Taking the last was
+    right only for a feature at the middle of the view, where every crossing
+    is about as far off; from a hole near a corner it returns the distance to
+    the opposite edge extended, and the leader shoots across the whole sheet
+    to land in the margin. A plate's corner holes are exactly that case.
     """
-    far = 0.0
+    nearest = None
     for numerator, denominator in ((right - x, dx), (left - x, dx),
                                    (bottom - y, dy), (top - y, dy)):
         if abs(denominator) > 1e-9:
             distance = numerator / denominator
             if distance > 0:
-                far = max(far, min(distance, 1e4))
-    return far
+                nearest = distance if nearest is None else min(nearest, distance)
+    return min(nearest, 1e4) if nearest is not None else 0.0
 
 
 def _distinct_circles(circles: list[dict]) -> list[dict]:
@@ -381,6 +387,105 @@ def _distinct_circles(circles: list[dict]) -> list[dict]:
                round(circle["r"], 3))
         seen.setdefault(key, circle)
     return sorted(seen.values(), key=lambda c: -c["r"])
+
+
+#: How far a second row of dimensions sits beyond the first. ISO 129-1 wants
+#: dimension lines spaced far enough apart that their values do not collide;
+#: 8mm at sheet scale clears the 2.5mm text with room to read.
+DIM_STEP = 8.0
+
+#: Position dimensions are the point of a detail drawing, but a plate with
+#: sixteen scattered holes dimensioned one by one is unreadable. Past this
+#: many in one group, the drawing says how many there are and leaves the
+#: positions to the model - which is honest, and better than a black sheet.
+MAX_POSITIONED = 4
+
+#: How close two lengths have to be before a pattern is called a pattern.
+PATTERN_TOL = 0.05
+
+
+def _hole_patterns(circles: list[dict]) -> list[dict]:
+    """Same-size circles, grouped the way a drawing would call them out.
+
+    A drawing does not dimension four identical holes four times.  It says
+    "4 x M6" once and positions the pattern, and that is both the convention
+    and the only way the sheet stays readable.  Three arrangements cover
+    almost everything a part actually has:
+
+    * a **bolt circle** - three or more equidistant from a common centre,
+      called out with its pitch circle diameter;
+    * a **rectangular pattern** - two or four on an axis-aligned grid,
+      positioned by the two pitches;
+    * anything else, positioned individually from the datum corner.
+
+    Grouping is by diameter, because that is what makes holes interchangeable
+    on a drawing. Concentric families are already collapsed upstream.
+    """
+    by_size: dict[float, list[dict]] = {}
+    for circle in circles:
+        by_size.setdefault(round(circle["r"], 3), []).append(circle)
+
+    groups: list[dict] = []
+    for radius, members in sorted(by_size.items(), key=lambda kv: -kv[0]):
+        groups.append(_classify_holes(radius, members))
+    return groups
+
+
+def _classify_holes(radius: float, members: list[dict]) -> dict:
+    group = {"radius": radius, "members": members, "count": len(members),
+             "kind": "scatter"}
+    if len(members) == 1:
+        group["kind"] = "single"
+        return group
+
+    us = [c["u"] for c in members]
+    vs = [c["v"] for c in members]
+    cu, cv = sum(us) / len(us), sum(vs) / len(vs)
+
+    distinct_u = sorted({round(u, 2) for u in us})
+    distinct_v = sorted({round(v, 2) for v in vs})
+    # A grid is tested before a bolt circle, because the four corners of a
+    # rectangle are equidistant from its centre and would otherwise be called
+    # out as a pitch circle - true, and not how anyone dimensions a plate.
+    if (len(members) == 4 and len(distinct_u) == 2 and len(distinct_v) == 2) \
+            or (len(members) == 2
+                and (len(distinct_u) == 1 or len(distinct_v) == 1)):
+        group.update(
+            kind="rect",
+            pitch_u=(distinct_u[-1] - distinct_u[0]) if len(distinct_u) > 1 else 0.0,
+            pitch_v=(distinct_v[-1] - distinct_v[0]) if len(distinct_v) > 1 else 0.0,
+            umin=min(us), umax=max(us), vmin=min(vs), vmax=max(vs))
+        return group
+
+    if len(members) >= 3:
+        spans = [math.hypot(c["u"] - cu, c["v"] - cv) for c in members]
+        mean = sum(spans) / len(spans)
+        on_a_circle = mean > PATTERN_TOL and all(
+            abs(span - mean) <= max(PATTERN_TOL, mean * 0.01) for span in spans)
+        if on_a_circle:
+            # Equidistant is not enough: so is every rectangle. A pitch
+            # circle is equally *spaced* as well, which is what makes one
+            # "6 holes on a 90 PCD" instead of six positions.
+            angles = sorted(math.atan2(c["v"] - cv, c["u"] - cu)
+                            for c in members)
+            gaps = [(b - a) % (2 * math.pi)
+                    for a, b in zip(angles, angles[1:] + [angles[0] + 2 * math.pi])]
+            step = 2 * math.pi / len(members)
+            if all(abs(gap - step) < math.radians(3.0) for gap in gaps):
+                group.update(kind="bolt_circle", centre=(cu, cv), pcd=mean * 2.0)
+                return group
+
+    return group
+
+
+def _hole_label(group: dict) -> str:
+    """What the leader says: the count, the size, and the pattern if any."""
+    diameter = _num(group["radius"] * 2.0)
+    text = f"\u00d8{diameter}" if group["count"] == 1 \
+        else f"{group['count']}\u00d7 \u00d8{diameter}"
+    if group["kind"] == "bolt_circle":
+        text += f" ON \u00d8{_num(group['pcd'])} PCD"
+    return text
 
 
 def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
@@ -446,14 +551,87 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
             "offset": -DIM_OFFSET, "vertical": True,
             "measure": vmax - vmin})
 
-    # Diameters, largest first and capped: a drawing that calls out every
+    # Where the features are, not just how big the part is. A plate whose
+    # drawing says 100 x 60 x 8 with four 6mm holes and does not say where
+    # the holes go cannot be made from that drawing - it is the single thing
+    # that separated this sheet from a manufacturable one.
+    groups = _hole_patterns(circles)
+    level = 1 if "width" in dimension else 0
+    positioned = 0
+
+    def below_line(at_y: float) -> float:
+        nonlocal level
+        return (bottom + DIM_OFFSET + level * DIM_STEP) - at_y
+
+    def left_line(at_x: float) -> float:
+        return (left - DIM_OFFSET - level * DIM_STEP) - at_x
+
+    for group in groups:
+        if positioned >= 2:
+            break
+        members = group["members"]
+        if group["kind"] == "bolt_circle":
+            # The PCD is on the leader text; a pitch circle needs no further
+            # dimensioning, which is exactly why drawings use one.
+            continue
+        if group["kind"] == "rect":
+            (ax, ay) = to_sheet(group["umin"], group["vmin"])
+            (bx, by) = to_sheet(group["umax"], group["vmax"])
+            if group["pitch_u"] > PATTERN_TOL:
+                plan["dimensions"].append({
+                    "p1": (ax, ay), "p2": (bx, ay),
+                    "offset": below_line(ay), "vertical": False,
+                    "measure": group["pitch_u"]})
+            if group["pitch_v"] > PATTERN_TOL:
+                plan["dimensions"].append({
+                    "p1": (ax, ay), "p2": (ax, by),
+                    "offset": left_line(ax), "vertical": True,
+                    "measure": group["pitch_v"]})
+            level += 1
+            positioned += 1
+            continue
+
+        # Single holes and small scatters: positioned from the datum corner,
+        # which is the bottom-left of the view as drawn.
+        if len(members) > MAX_POSITIONED:
+            continue
+        for circle in members:
+            px, py = to_sheet(circle["u"], circle["v"])
+            on_centre_u = abs(circle["u"] - uc) < PATTERN_TOL
+            on_centre_v = abs(circle["v"] - vc) < PATTERN_TOL
+            if on_centre_u and on_centre_v:
+                # Dead centre, and the centre lines already say so.
+                continue
+            if not on_centre_u:
+                plan["dimensions"].append({
+                    "p1": (left, py), "p2": (px, py),
+                    "offset": below_line(py), "vertical": False,
+                    "measure": circle["u"] - umin})
+            if not on_centre_v:
+                plan["dimensions"].append({
+                    "p1": (px, bottom), "p2": (px, py),
+                    "offset": left_line(px), "vertical": True,
+                    "measure": circle["v"] - vmin})
+            level += 1
+            positioned += 1
+            if positioned >= 2:
+                break
+
+    # Leaders, largest first and capped: a drawing that calls out every
     # circle on a gear is unreadable, and the ones that matter are the big
-    # ones.
-    for index, circle in enumerate(circles[:2]):
+    # ones. One leader per group, so four identical holes are named once.
+    for index, group in enumerate(groups[:3]):
+        # Leaders go right, because position dimensions go below and left.
+        # Two things sharing the same margin is how a sheet ends up with a
+        # hole size written across a pitch.
+        angle = math.radians((45, -45, 135)[index])
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        # Start from the member furthest along the leader's own direction, so
+        # it leaves from the outside of the group rather than crossing it.
+        circle = max(group["members"],
+                     key=lambda c: c["u"] * cos_a + c["v"] * sin_a)
         px, py = to_sheet(circle["u"], circle["v"])
         radius = circle["r"] * scale
-        angle = math.radians(45 if index == 0 else 135)
-        cos_a, sin_a = math.cos(angle), math.sin(angle)
         # A leader runs out from the feature and then levels off, and the
         # value sits above that shoulder. The run is long enough to clear the
         # whole view, not just its own circle: a gear's bore is small and
@@ -466,9 +644,11 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
             "elbow": (px + (radius + run) * cos_a,
                       py - (radius + run) * sin_a),
             "shoulder": 6.0 if cos_a > 0 else -6.0,
-            "measure": circle["r"] * 2.0})
+            "measure": circle["r"] * 2.0,
+            "label": _hole_label(group)})
 
-    below = bottom + (DIM_OFFSET + 10.0 if "width" in dimension else 5.0)
+    below = bottom + (DIM_OFFSET + level * DIM_STEP + 10.0
+                     if ("width" in dimension or level) else 5.0)
     floor = CELLS_T + (meta["cell"][1] + 1) * CELL_H - 3.0
     plan["label_at"] = (cx, min(below + 5.0, floor))
     return plan
@@ -521,7 +701,8 @@ def _render_view(plan: dict) -> list[str]:
         out.append(_line(ex, ey, ex + shoulder, ey))
         length = math.hypot(ex - sx, ey - sy) or 1.0
         out.append(_arrow(sx, sy, (sx - ex) / length, (sy - ey) / length))
-        out.append(_text(ex + shoulder, ey - 1.6, f"Ø{_num(call['measure'])}",
+        out.append(_text(ex + shoulder, ey - 1.6,
+                         call.get("label") or f"Ø{_num(call['measure'])}",
                          anchor="start" if shoulder > 0 else "end"))
 
     out.append(_text(plan["label_at"][0], plan["label_at"][1], plan["label"],
