@@ -664,6 +664,25 @@ that regressed.
 .venv/bin/python -m app.tools.eval_parts --baseline eval-low.json
 ```
 
+`app/tools/census.py` parses every script the model has already written under
+`app/runs` and counts which CadQuery operations it actually reaches for. It
+exists to answer one question with evidence rather than argument: how wide
+would a feature vocabulary have to be to replace these scripts with an
+ordered, named, suppressible feature document? Over 367 stored scripts the
+answer is **17 distinct building operations, of which 10 cover 90% and 15
+cover 99%**, and seven selectors dominated by `faces` and `workplane`. A
+declarative feature IR is therefore a small vocabulary with an escape hatch,
+not a large one - though note those scripts come from seeded demo runs and
+test runs, so a real user population may be wider.
+
+`--tree` prints one script as the feature list a tree view would show, which
+is the cheapest possible answer to whether such a view would be useful:
+
+```bash
+.venv/bin/python -m app.tools.census
+.venv/bin/python -m app.tools.census --tree app/runs/<job>/v0/code.py
+```
+
 `app/tests/ui_parts_check.py` is known to fail: it expects the mock provider
 to answer from `app/tools/mock_parts.py`, and `app/tools/mock_provider.py`
 never consults it, so every prompt gets the same 40 x 30 x 10 placeholder.
