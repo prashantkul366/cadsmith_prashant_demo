@@ -325,7 +325,82 @@ def compare(plan: dict, measured: dict) -> list[SpecCheck]:
     return checks
 
 
-def check(plan: dict, step_path: str | Path) -> SpecReport:
+def compare_stated(requirements: dict, measured: dict) -> list[SpecCheck]:
+    """Settle what the *request* stated, as opposed to what the plan claimed.
+
+    The distinction matters more than it looks.  Everything ``compare`` reads
+    comes from the Planner, which is both the author of the claim and the
+    source of the error in it - so every gate there has to be forgiving, and
+    the bbox comment above says as much.  A number the person typed has no
+    such problem: "150mm diameter" is a fact about the request, and a part
+    that has no 150 anywhere in it did not answer the request.
+
+    Only the unambiguous forms block.  ``stated.py`` decides which those are
+    and hands them over already separated; this function does not second-guess
+    that split, it just measures.
+    """
+    checks: list[SpecCheck] = []
+    if not requirements:
+        return checks
+
+    extents = [measured["bbox"][a] for a in ("xlen", "ylen", "zlen")]
+    holes = list(measured["holes"])
+
+    def present(value: float, among: list[float]) -> bool:
+        return any(_near(candidate, value) for candidate in among)
+
+    # Overall sizes, stated in the one form that can only mean overall size.
+    # Checked for presence rather than per axis: which way up the Coder built
+    # it is its own business, and a 40 x 50 tube lying down is the same tube
+    # standing up.
+    for value in requirements.get("extents") or []:
+        checks.append(SpecCheck(
+            key=f"stated_{value:g}", label=f"stated {value:g} mm",
+            expected=f"{value:g} mm",
+            actual=" x ".join(f"{e:.2f}" for e in extents) + " mm",
+            passed=present(value, extents), hard=True))
+
+    # Bores. A stated hole diameter must actually be a hole: finding 10.5 on
+    # the outside of a part that was asked for a 10.5 bore is not the part.
+    remaining = list(holes)
+    for value in requirements.get("bores") or []:
+        hit = next((d for d in remaining if _near(d, value)), None)
+        if hit is not None:
+            remaining.remove(hit)
+        checks.append(SpecCheck(
+            key=f"stated_bore_{value:g}", label=f"stated {value:g} mm hole",
+            expected=f"{value:g} mm",
+            actual=(", ".join(f"{d:g}" for d in holes[:6]) + " mm")
+                   if holes else "no holes",
+            passed=hit is not None, hard=True))
+
+    wanted = requirements.get("hole_count")
+    if wanted:
+        # Same asymmetry compare() settled on: a shortfall is unambiguous,
+        # a surplus usually means the request under-described the part.
+        actual = measured["num_holes"]
+        checks.append(SpecCheck(
+            key="stated_hole_count", label="holes the request asked for",
+            expected=str(wanted), actual=str(actual),
+            passed=actual >= wanted, hard=True))
+
+    # Everything else the request stated. Reported and shown to the Judge,
+    # never blocking: a stepped shaft legitimately states diameters that
+    # appear nowhere in its bounding box.
+    for value in requirements.get("advisory") or []:
+        checks.append(SpecCheck(
+            key=f"stated_adv_{value:g}",
+            label=f"stated {value:g} mm (advisory)",
+            expected=f"{value:g} mm",
+            actual=" x ".join(f"{e:.2f}" for e in extents) + " mm",
+            passed=present(value, extents) or present(value, holes),
+            hard=False))
+
+    return checks
+
+
+def check(plan: dict, step_path: str | Path,
+          requirements: Optional[dict] = None) -> SpecReport:
     """Measure the built part and settle every claim the plan makes about it."""
     try:
         measured = measure_step(step_path)
@@ -333,4 +408,5 @@ def check(plan: dict, step_path: str | Path) -> SpecReport:
         # Never let a measurement failure block a run: it means we could not
         # check, not that the part is wrong.
         return SpecReport(error=f"{type(exc).__name__}: {exc}")
-    return SpecReport(checks=compare(plan, measured), measured=measured)
+    checks = compare_stated(requirements or {}, measured) + compare(plan, measured)
+    return SpecReport(checks=checks, measured=measured)

@@ -43,6 +43,7 @@ from . import budget as budget_mod
 from . import drawing
 from . import i18n
 from . import spec
+from . import stated
 from .providers import LLMConfig, build_client
 from .events import (
     EventSink,
@@ -114,6 +115,10 @@ class RunContext:
     #: The plan the Planner produced, which states the claims spec.py
     #: measures the built solid against.
     design_plan: Optional[dict] = None
+    #: Dimensions the request itself stated, read before any agent saw it.
+    #: Separate from design_plan on purpose: the plan is the Planner's claim
+    #: and can be wrong, while these are what was asked for.
+    stated: dict = field(default_factory=dict)
     #: The most recent kernel-measured specification result.
     spec: Any = None
     #: What this run may spend. ``None`` outside the web app, so run.py and
@@ -285,23 +290,35 @@ def install_agent_hooks() -> None:
             # No run context: the pipeline is being used outside the app.
             return _plan_inner(prompt, *args, **kwargs)
         if not ctx.ground_dimensions:
-            # Grounding is a per-run ablation; refusing an empty plan is not,
-            # so that check still applies.
+            # Grounding is a per-run ablation whose whole point is to
+            # reproduce the published pipeline exactly, so nothing may be
+            # appended to the prompt here - reading the request's own
+            # dimensions back to the Planner is an addition like any other,
+            # and it rides with the same switch.
             plan = _plan_inner(prompt, *args, **kwargs)
             _refuse_empty_plan(plan)
             ctx.design_plan = plan if isinstance(plan, dict) else None
             return plan
         grounded, facts = grounding.ground(prompt)
+        # What the person stated themselves, read before any agent sees the
+        # prompt and carried separately from the plan the Planner returns.
+        ctx.stated = stated.requirements(prompt)
+        told = stated.note(prompt)
         ctx.emit(
             PHASE_GROUND,
             STATUS_OK if facts else STATUS_INFO,
             grounding.summary(facts),
             subjects=[fact.subject for fact in facts],
             standards=[fact.standard for fact in facts],
-            added_chars=len(grounded) - len(prompt),
+            added_chars=len(grounded) + len(told) - len(prompt),
+            # Reported on the same event rather than a second one: they are
+            # two halves of the same answer to "what was the Planner told
+            # that the bare prompt did not say".
+            stated=ctx.stated.get("read"),
+            stated_holes=ctx.stated.get("hole_count"),
         )
         try:
-            plan = _plan_inner(grounded, *args, **kwargs)
+            plan = _plan_inner(grounded + told, *args, **kwargs)
         except json.JSONDecodeError:
             # The overwhelmingly common cause is a prompt the model declined
             # or did not read as a part - "write me a poem", an insult, a
@@ -551,7 +568,7 @@ class InstrumentedValidator(Validator):
         if not ctx.design_plan or not step.exists():
             return
 
-        result = spec.check(ctx.design_plan, step)
+        result = spec.check(ctx.design_plan, step, ctx.stated)
         ctx.spec = result
         if result.error:
             ctx.emit(PHASE_SPEC, STATUS_INFO, result.summary(),

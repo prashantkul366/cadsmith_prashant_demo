@@ -32,6 +32,12 @@ LANGS = ("en", "ja")
 #: needs, since the verb goes last and the qualifier goes first.
 MESSAGES: dict[str, dict[str, str]] = {
 
+    # -- dimensions read straight out of the request ------------------------
+    "stated.read": {
+        "en": "{n} dimension(s) stated in the request, held fixed",
+        "ja": "リクエストに明記された寸法 {n} 件を固定値として使用します",
+    },
+
     # -- the Planner found nothing to build --------------------------------
     "plan.empty": {
         "en": "The Planner did not find a part to make in this request: it "

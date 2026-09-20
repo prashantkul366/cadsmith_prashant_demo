@@ -1,8 +1,26 @@
-"""Sandboxed CadQuery code executor.
+"""CadQuery code executor, run out of process.
 
-Runs generated CadQuery scripts in an isolated subprocess with timeout
-and resource limits. Returns either a success result with paths to
-exported files, or a failure result with the full error traceback.
+Runs generated CadQuery scripts in a separate interpreter and returns either
+a success result with paths to exported files, or a failure result with the
+full error traceback.
+
+**What the isolation is, precisely.**  The script is model-written, so it is
+treated as untrusted input rather than as code the project wrote:
+
+* it runs in its own process, so a segfault in the kernel - which OCCT can be
+  provoked into - costs one part rather than the server;
+* it runs under a wall-clock timeout on every platform;
+* on POSIX it runs under an address-space and CPU ceiling, so a runaway
+  extrude cannot take the machine down with it;
+* and it is handed a deliberately small environment.  ``os.environ`` here
+  holds AWS credentials and provider API keys, and generated code has no use
+  for any of them.  Only the variables an interpreter needs to find its own
+  libraries are passed through.
+
+**What it is not.**  There is no filesystem or network confinement: the child
+can read what the server's user can read and can open sockets.  Running
+untrusted prompts from people you do not trust needs a container or a VM, and
+this module does not pretend otherwise.
 """
 
 import json
@@ -28,6 +46,86 @@ class ExecutionResult:
     # On failure:
     error: Optional[str] = None
     error_type: Optional[str] = None  # e.g. "SyntaxError", "StdFail_NotDone"
+
+
+#: Environment variables the child genuinely needs to be a working Python.
+#: Everything else - every credential among it - is left behind.  Names are
+#: matched exactly; prefixes live in ``_ENV_PREFIXES``.
+_ENV_KEEP = frozenset({
+    # finding the interpreter, its libraries and its temp space
+    "PATH", "PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX",
+    "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH",
+    "TMPDIR", "TEMP", "TMP", "HOME", "USERPROFILE",
+    # OCCT reads CASROOT for its resource files
+    "CASROOT",
+    # Windows will not start a process without these
+    "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "SYSTEMDRIVE",
+    "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+    "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS", "OS",
+    # text handling, so a traceback in any language survives the pipe
+    "LANG", "LC_ALL", "LC_CTYPE",
+})
+
+#: Prefixes kept wholesale. ``PYTHON*`` covers the interpreter's own knobs.
+_ENV_PREFIXES = ("PYTHON",)
+
+#: Anything a deployment finds it also needs, named here rather than by
+#: reopening the whole environment.  Comma separated, read once per call so a
+#: fix does not need a restart.
+_ENV_PASSTHROUGH = "CADSMITH_EXEC_ENV"
+
+#: Address space and CPU seconds the child may have, on the platforms that can
+#: enforce them.  Generous: a large assembly tessellating legitimately wants
+#: room, and the point is to stop a runaway, not to be frugal.
+EXEC_MEMORY_MB = int(os.getenv("CADSMITH_EXEC_MEMORY_MB", "4096"))
+EXEC_CPU_SECONDS = int(os.getenv("CADSMITH_EXEC_CPU_SECONDS", "300"))
+
+
+def child_environment() -> dict:
+    """The environment a generated script is allowed to see.
+
+    Built by allowing names in rather than by denying credentials out: a
+    deny-list is one new provider away from leaking, and the child's real
+    needs are short enough to write down.
+    """
+    extra = {n.strip().upper()
+             for n in (os.getenv(_ENV_PASSTHROUGH) or "").split(",")
+             if n.strip()}
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if name.upper() in _ENV_KEEP
+        or name.upper() in extra
+        or name.upper().startswith(_ENV_PREFIXES)
+    }
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # The child prints tracebacks from generated code, which can carry
+    # non-ASCII. Without this it encodes with the Windows locale codec and
+    # dies before reaching __AUTOFAB_RESULT__.
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
+def _limit_child() -> None:
+    """Cap the child's memory and CPU. POSIX only; a no-op elsewhere.
+
+    Called in the child between fork and exec, so raising here would kill a
+    process the parent is about to wait on - every failure is swallowed
+    deliberately, and the wall-clock timeout remains the backstop that works
+    on every platform.
+    """
+    try:
+        import resource
+    except ImportError:          # Windows
+        return
+    for what, limit in ((resource.RLIMIT_AS, EXEC_MEMORY_MB * 1024 * 1024),
+                        (resource.RLIMIT_CPU, EXEC_CPU_SECONDS)):
+        try:
+            soft, hard = resource.getrlimit(what)
+            ceiling = limit if hard == resource.RLIM_INFINITY else min(limit, hard)
+            resource.setrlimit(what, (ceiling, hard))
+        except Exception:
+            pass
 
 
 # This script template is what actually runs inside the subprocess.
@@ -160,14 +258,8 @@ class Executor:
                 errors="replace",
                 timeout=self.timeout,
                 cwd=str(self.output_dir),
-                env={
-                    **os.environ,
-                    "PYTHONDONTWRITEBYTECODE": "1",
-                    # The child prints tracebacks from generated code, which can
-                    # carry non-ASCII. Without this it encodes with the Windows
-                    # locale codec and dies before reaching __AUTOFAB_RESULT__.
-                    "PYTHONIOENCODING": "utf-8",
-                },
+                env=child_environment(),
+                **({} if os.name == "nt" else {"preexec_fn": _limit_child}),
             )
             elapsed_ms = (time.time() - start_time) * 1000
 

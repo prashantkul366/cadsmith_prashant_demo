@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 import traceback
@@ -67,6 +68,12 @@ STATUS_DONE = "done"
 STATUS_ERROR = "error"
 
 PART_NAME = "part"
+
+#: How many finished runs to keep on disk. Each is a few megabytes of STEP,
+#: STL, renders and drawing sheets, and nothing in the app reads a run it is
+#: not showing. 0 keeps everything, for a machine where the disk is not the
+#: constraint.
+KEEP_RUNS = int(os.getenv("CADSMITH_KEEP_RUNS", "200"))
 
 
 @dataclass
@@ -663,7 +670,8 @@ class JobManager:
                                        keep_appending=True)
             ctx = RunContext(sink=sink, job_dir=directory,
                              part_name=PART_NAME, lang=job.options.lang,
-                         ground_dimensions=job.options.ground_dimensions)
+                             prompt=job.prompt,
+                             ground_dimensions=job.options.ground_dimensions)
             ctx.versions = list(job.versions)
             if job.versions:
                 ctx.iteration = max(v.get("iteration", 0) for v in job.versions)
@@ -674,3 +682,51 @@ class JobManager:
                 self._contexts[job.id] = ctx
             restored += 1
         return restored
+
+    # -- keeping the disk from filling ---------------------------------------
+
+    def prune(self, keep: Optional[int] = None) -> int:
+        """Delete all but the newest ``keep`` runs. Returns how many went.
+
+        A run directory holds a STEP, an STL, three-view renders, a cached
+        projection and a drawing sheet per version, so a few hundred runs is
+        real disk. Nothing here is precious - every run is reproducible from
+        its prompt - but a demo that fills the disk stops being a demo, and
+        the failure arrives as an unrelated-looking write error much later.
+
+        Newest by when the run was created, not by file mtime: opening an old
+        run writes its drawing cache, and that should not promote it.
+        """
+        limit = KEEP_RUNS if keep is None else keep
+        if limit <= 0:
+            return 0
+
+        with self._lock:
+            candidates = [
+                job for job in self._jobs.values()
+                # A queued or running job is being written to right now, and
+                # its directory is the only copy of what it has produced.
+                if job.status in (STATUS_DONE, STATUS_ERROR)
+            ]
+        candidates.sort(key=lambda j: j.created_at, reverse=True)
+        doomed = candidates[limit:]
+
+        removed = 0
+        for job in doomed:
+            try:
+                shutil.rmtree(job.directory, ignore_errors=False)
+            except OSError:
+                # Windows holds a file open now and then; leaving the run
+                # registered means the next sweep tries again.
+                continue
+            with self._lock:
+                self._jobs.pop(job.id, None)
+                sink = self._sinks.pop(job.id, None)
+                self._contexts.pop(job.id, None)
+            if sink is not None:
+                try:
+                    sink.close()
+                except Exception:
+                    pass
+            removed += 1
+        return removed

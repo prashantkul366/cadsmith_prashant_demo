@@ -742,7 +742,12 @@ if WEB_DIR.exists():
 @app.on_event("startup")
 def _startup() -> None:
     restored = manager.load_from_disk()
+    # Sweep once at startup rather than on every run: pruning is the kind of
+    # thing that should be visible in the log at a moment someone is reading
+    # it, not a surprise midway through a job.
+    pruned = manager.prune()
     status = _health()
-    print(f"CADSmith app ready - {restored} past run(s) restored")
+    print(f"CADSmith app ready - {restored} past run(s) restored"
+          + (f", {pruned} old run(s) removed" if pruned else ""))
     for name, check in status["checks"].items():
         print(f"  [{'ok ' if check['ok'] else 'MISS'}] {name}: {check['detail']}")
