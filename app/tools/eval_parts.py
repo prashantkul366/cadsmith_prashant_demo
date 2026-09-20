@@ -56,6 +56,7 @@ LENGTH_TOL_FRAC = 0.02
 class CaseResult:
     id: str
     prompt: str
+    tier: str = "easy"
     built: bool = False
     converged: bool = False
     catalogue: bool = False
@@ -81,7 +82,8 @@ class CaseResult:
 
     def to_dict(self) -> dict:
         return {
-            "id": self.id, "prompt": self.prompt, "built": self.built,
+            "id": self.id, "prompt": self.prompt, "tier": self.tier,
+            "built": self.built,
             "converged": self.converged, "catalogue": self.catalogue,
             "passed": self.passed, "matched": self.matched,
             "total": self.total, "checks": self.checks,
@@ -159,7 +161,8 @@ def score(expect: dict, measured: dict, catalogue_served: bool) -> list[dict]:
 
 def run_case(manager: JobManager, case: dict, options: JobOptions,
              timeout: float) -> CaseResult:
-    result = CaseResult(id=case["id"], prompt=case["prompt"])
+    result = CaseResult(id=case["id"], prompt=case["prompt"],
+                        tier=case.get("tier", "easy"))
     started = time.time()
     job = manager.create(case["prompt"], options)
 
@@ -237,6 +240,18 @@ def report(results: list[CaseResult], baseline: Optional[dict]) -> dict:
         print(f"{r.id:<22} {state:<7} {checks:<9} {r.seconds:>6.1f}s "
               f"{r.llm_calls:>6}  {mark}  {detail[:60]}")
 
+    # By difficulty, because one number across easy and very hard cases says
+    # nothing useful: a model that builds every block and no gearbox and one
+    # that builds neither score the same in aggregate.
+    order = ["catalogue", "easy", "medium", "hard", "very hard"]
+    print("-" * 72)
+    for tier in order:
+        rows = [r for r in results if r.tier == tier]
+        if not rows:
+            continue
+        print(f"  {tier:<12} built {sum(1 for r in rows if r.built)}/{len(rows)}"
+              f"   fully correct {sum(1 for r in rows if r.passed)}/{len(rows)}"
+              f"   checks {sum(r.matched for r in rows)}/{sum(r.total for r in rows)}")
     print("-" * 72)
     print(f"built {summary['built']}/{summary['cases']}   "
           f"fully correct {summary['passed']}/{summary['cases']}   "
@@ -280,6 +295,8 @@ def main() -> int:
                         help="run only this case id (repeatable)")
     parser.add_argument("--catalogue-only", action="store_true",
                         help="only the cases the catalogue answers - no spend")
+    parser.add_argument("--tier", action="append", default=[],
+                        help="only this difficulty tier (repeatable)")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--provider", default="")
     parser.add_argument("--generation-model", default="")
@@ -298,6 +315,9 @@ def main() -> int:
     cases = json.loads(CASES_FILE.read_text(encoding="utf-8"))["cases"]
     if args.catalogue_only:
         cases = [c for c in cases if (c.get("expect") or {}).get("catalogue")]
+    if args.tier:
+        tiers = set(args.tier)
+        cases = [c for c in cases if c.get("tier", "easy") in tiers]
     if args.case:
         wanted = set(args.case)
         cases = [c for c in cases if c["id"] in wanted]
@@ -353,6 +373,14 @@ def main() -> int:
         "effort": options.effort,
         "iterations": options.max_iterations,
         "summary": summary,
+        "by_tier": {
+            tier: {
+                "cases": len([r for r in results if r.tier == tier]),
+                "built": len([r for r in results if r.tier == tier and r.built]),
+                "passed": len([r for r in results if r.tier == tier and r.passed]),
+            }
+            for tier in {r.tier for r in results}
+        },
         "cases": [r.to_dict() for r in results],
     }
     if args.out:
