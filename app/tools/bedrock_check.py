@@ -106,14 +106,6 @@ def main() -> int:
         line(None, name)
     if not offered:
         line(False, "none listed", empty_because)
-    else:
-        # Choosing from the live list is what the app does, so check the same
-        # ids rather than the defaults declared before AWS could be asked.
-        generation, judge = providers.bedrock_defaults(offered)
-        if generation and not args.model:
-            config.generation_model = generation
-        if judge:
-            config.judge_model = judge
 
     model = args.model or config.generation_model
     print("\nModels the app will ask for")
@@ -124,9 +116,10 @@ def main() -> int:
     line(config.judge_model in offered if offered else None, "judge",
          config.judge_model)
     if offered and model not in offered:
-        line(False, "note",
-             f"{model!r} is not in the list above, so the call will be "
-             f"refused. Name one of those with --model.")
+        line(None, "note",
+             f"{model!r} is not in the list above. That is not proof of "
+             f"anything either way - the list comes from the control plane, "
+             f"the runtime decides separately. The probe settles it.")
 
     print("\nSpend guard")
     line(True, "token budget per run", f"{budget.DEFAULT_BUDGET:,} tokens")

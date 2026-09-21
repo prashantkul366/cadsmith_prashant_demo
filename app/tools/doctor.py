@@ -278,16 +278,6 @@ def check_configuration(args) -> dict:
         judge_model=args.judge_model,
     )
     issues = providers.problems(config)
-    # Bedrock's declared default is a guess made before AWS can be asked
-    # anything. Check what you would actually invoke: unless a model was
-    # named on the command line, take one from the live list.
-    if not issues and config.kind == "bedrock":
-        offered = providers.list_models("bedrock", timeout=args.timeout)
-        generation, judge = providers.bedrock_defaults(offered)
-        if generation and not args.generation_model:
-            config.generation_model = generation
-        if judge and not args.judge_model:
-            config.judge_model = judge
     print()
     if issues:
         for issue in issues:
@@ -455,11 +445,15 @@ def _check_claude(config, args, providers) -> None:
             for role, name in (("generation", config.generation_model),
                                ("judge", config.judge_model)):
                 if name not in offered:
+                    # Said, not advised. An id absent from the list can be
+                    # perfectly invokable - on this account the two that
+                    # work are the two that are missing - so this is a fact
+                    # worth knowing if the call below fails, and nothing to
+                    # act on if it succeeds.
                     warn(f"{role} model is not in the list", name,
-                         "Bedrock ids carry a region prefix and a version "
-                         "suffix, and most recent Claude models are invokable "
-                         "only through a cross-region inference profile "
-                         "(us.anthropic.claude-...). Name one from the list.")
+                         "Not necessarily wrong: the list comes from the "
+                         "control plane and the runtime decides separately. "
+                         "The probe below is the real answer.")
         else:
             warn("model list", "nothing listed", empty_because)
 

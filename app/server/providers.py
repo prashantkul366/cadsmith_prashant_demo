@@ -482,79 +482,12 @@ def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
     return bedrock_models(timeout)[0]
 
 
-#: Which Claude each role wants, weakest acceptable first. The pipeline
-#: judges with a stronger, independent model on purpose, so the two roles
-#: look for different families rather than settling on one list's first entry.
-_BEDROCK_FAMILIES = {"generation": ("sonnet", "opus", "haiku"),
-                     "judge": ("opus", "sonnet", "haiku")}
-
-#: Which geography each AWS region prefix belongs to, for reading an
-#: inference profile id against AWS_REGION.
-_GEOGRAPHIES = (("us-", "us."), ("eu-", "eu."), ("ap-", "apac."),
-                ("ca-", "ca."), ("sa-", "sa."))
-
-
-def _profile_rank(model_id: str) -> int:
-    """How willingly to default to this id, highest first.
-
-    Bedrock lists ``global.`` profiles beside the regional ones, and a
-    global profile routes the request to wherever the model is served -
-    the best availability, and the worst answer for anyone under a data
-    residency rule. Sorting the ids as text put ``us.`` ahead of
-    ``global.`` only because u comes after g, which is not a basis on
-    which to decide where a company's drawings get sent.
-
-    So, deliberately: a profile in this region's own geography first, then
-    global, then another geography's - which is last among the profiles
-    because it is not merely a worse choice, it cannot be invoked from
-    here at all. A bare foundation id comes below all three, since most
-    recent Claude models refuse to be invoked by one.
-
-    Where a region has no profile of its own, this does settle on global,
-    and the residency point stands: it is a default, and the model box is
-    right there.
-    """
-    region = (os.getenv("AWS_REGION") or "us-east-1").lower()
-    home = next((prefix for start, prefix in _GEOGRAPHIES
-                 if region.startswith(start)), "")
-    if home and model_id.startswith(home):
-        return 4
-    if model_id.startswith("global."):
-        return 3
-    if any(model_id.startswith(prefix) for _, prefix in _GEOGRAPHIES):
-        return 2
-    return 1
-
-
-def bedrock_defaults(offered: list[str]) -> tuple[str, str]:
-    """``(generation, judge)`` ids picked from what Bedrock really serves.
-
-    ``ProviderSpec`` has to declare something without asking AWS anything,
-    and a declared id is a guess about one account in one region - a guess
-    that reads as a considered choice in the model box and then fails at the
-    first call.  Where a real list came back, choose from it.
-    """
-    if not offered:
-        return "", ""
-    picked: dict[str, str] = {}
-    for role, families in _BEDROCK_FAMILIES.items():
-        for family in families:
-            # Three preferences, strongest first. Where the request is
-            # allowed to travel (see _profile_rank), then a complete
-            # Bedrock id - one carrying a version suffix - because an id
-            # without one has been seen listed by an account and then
-            # refused at invoke time, which costs a whole run to discover.
-            # Then the newest, the ids carrying their own version. All
-            # three only decide between ids the account itself offered, so
-            # nothing is excluded from the box; this picks which one is
-            # filled in by default.
-            matches = sorted((m for m in offered if family in m.lower()),
-                             key=lambda m: (_profile_rank(m), ":" in m, m),
-                             reverse=True)
-            if matches:
-                picked[role] = matches[0]
-                break
-    return picked.get("generation", ""), picked.get("judge", "")
+#: What Bedrock lists and what Bedrock will invoke are different sets.
+#: This account offers 27 ids through list_foundation_models and
+#: list_inference_profiles, refuses the ones that were tried from it, and
+#: serves the two ProviderSpec declares - which are not in the list at all.
+#: So the list populates the picker and explains a failure; it does not get
+#: to overrule a default that works.
 
 
 def list_models(provider_id: str, timeout: float = 6.0) -> list[str]:

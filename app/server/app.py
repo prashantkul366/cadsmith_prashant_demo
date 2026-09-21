@@ -543,18 +543,11 @@ def list_providers(models: bool = False) -> JSONResponse:
         for entry in entries:
             if not entry["ready"]:
                 continue
+            # The list fills the datalist and nothing else. Choosing the
+            # default from it was worse than the guess it replaced: the ids
+            # this account lists are refused at invoke time, and the two it
+            # serves are not listed.
             entry["models"] = providers.list_models(entry["id"])
-            # Bedrock's declared defaults are a guess about one account in
-            # one region, made before anything could be asked of AWS. Where
-            # a real list came back, choose from it - otherwise the model
-            # box shows an id that reads as chosen and fails at the first
-            # call, which is a twenty-minute run to find out.
-            if entry["kind"] == "bedrock":
-                generation, judge = providers.bedrock_defaults(entry["models"])
-                if generation:
-                    entry["default_generation_model"] = generation
-                if judge:
-                    entry["default_judge_model"] = judge
     return JSONResponse({"providers": entries,
                          "default": providers.DEFAULT_PROVIDER,
                          # The effort picker is built from what the API
