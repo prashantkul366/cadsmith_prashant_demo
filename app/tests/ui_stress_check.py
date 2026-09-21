@@ -175,7 +175,7 @@ def main() -> int:
                         page.click(selector, timeout=2500)
                     except Exception:
                         pass
-                page.evaluate("document.querySelector('#drawBtn').click()")
+                page.evaluate("document.querySelector('#viewSeg .vsegb[data-view=\\"drawing\\"]').click()")
                 page.evaluate("document.querySelector('#applyBtn').click()")
                 page.evaluate("document.querySelector('#genBtn').click()")
                 for key in ("w", "h", "d", "f", "Escape"):

@@ -122,7 +122,7 @@ def main() -> int:
         # The panel opens on the parameter controls. Everything below reads
         # the source - it is how this check knows an edit reached the screen
         # - so open that view and stay in it.
-        page.click("#viewCodeBtn")
+        page.click('#viewSeg .vsegb[data-view="code"]')
         page.wait_for_timeout(300)
 
         print("\nA part to work on")

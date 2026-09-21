@@ -77,8 +77,15 @@ def generate(page, prompt: str) -> None:
 
 
 def grab(page, selector: str, out: Path) -> Path | None:
+    """Click one format in the Export menu, opening the menu first.
+
+    The five formats were spread over the code panel and the drawing sheet
+    and are one menu now, so reaching a format means opening it - which is
+    what a person does too.
+    """
     try:
         with page.expect_download(timeout=30000) as info:
+            page.click("#exportBtn")
             page.click(selector)
         download = info.value
         target = out / download.suggested_filename
@@ -141,7 +148,7 @@ def main() -> int:
                   f"{triangles} triangles")
         if code:
             body = code.read_text(encoding="utf-8")
-            page.click("#viewCodeBtn")
+            page.click('#viewSeg .vsegb[data-view="code"]')
             page.wait_for_timeout(300)
             panel = page.locator("#codeScroll").inner_text()
             shown = next((line.strip() for line in panel.splitlines()

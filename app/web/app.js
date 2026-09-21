@@ -967,8 +967,7 @@ async function openJob(jobId) {
   const job = state.job;
   S.replay = job.source === "replay";
   if (S.replay) {
-    $("#enginePill").textContent = t("hist.replaypill");
-    $("#enginePill").classList.add("replaying");
+    setPill(t("hist.replaypill"));
   } else {
     resetPill();
   }
@@ -1034,14 +1033,10 @@ document.addEventListener("click", e => {
   }
 });
 
-$$(".vt[data-view]").forEach(button => {
-  button.onclick = () => {
-    $$(".vt[data-view]").forEach(b => b.classList.remove("on"));
-    button.classList.add("on");
-    $("#spinBtn").classList.remove("on");
-    Viewer.view(button.dataset.view, true);
-  };
-});
+/* ISO, FRONT, TOP and RIGHT are the gizmo's job now. What is left of this
+   is the one thing the buttons did that the gizmo cannot: stop the model
+   spinning when somebody asks for a fixed view. */
+Viewer.onView = () => $("#spinBtn").classList.remove("on");
 // Collapse every finished step; the running one stays open.
 $("#thinkClear").onclick = () => {
   document.querySelectorAll(".tblock").forEach(el => {
@@ -1075,6 +1070,30 @@ function download(name) {
   link.download = "";
   link.click();
 }
+/* ── the export menu ─────────────────────────────────────────────────
+   Five formats that were spread over the code panel and the drawing sheet.
+   The drawing two need a drawing, so they build one first rather than
+   refusing - asking someone to visit another view before they may download
+   a DXF is a rule the app invented, not one the file format has. */
+
+function closeExport() {
+  $("#exportMenu").hidden = true;
+  $("#exportBtn").setAttribute("aria-expanded", "false");
+}
+
+$("#exportBtn").onclick = event => {
+  event.stopPropagation();
+  const open = $("#exportMenu").hidden;
+  $("#exportMenu").hidden = !open;
+  $("#exportBtn").setAttribute("aria-expanded", String(open));
+};
+document.addEventListener("click", event => {
+  if (!event.target.closest(".expwrap")) closeExport();
+});
+$$("#exportMenu .expitem").forEach(item => {
+  item.addEventListener("click", closeExport);
+});
+
 $("#dlPy").onclick = () => download("code.py");
 $("#dlStep").onclick = () => download("model.step");
 $("#dlStl").onclick = () => download("model.stl");
@@ -1339,8 +1358,7 @@ async function startReplay(sourceJobId) {
   paramsReset();
   showOverlay("pipe");
   renderStages("plan", t("detail.replaying"));
-  $("#enginePill").textContent = t("hist.replaypill");
-  $("#enginePill").classList.add("replaying");
+  setPill(t("hist.replaypill"));
 
   try {
     const job = await API.replay(sourceJobId, 6);
@@ -1354,10 +1372,15 @@ async function startReplay(sourceJobId) {
   }
 }
 
-function resetPill() {
-  $("#enginePill").textContent = t("app.engine");
-  $("#enginePill").classList.remove("replaying");
+function setPill(text) {
+  const pill = $("#enginePill");
+  if (!pill) return;
+  pill.textContent = text || "";
+  pill.hidden = !text;
+  pill.classList.toggle("replaying", Boolean(text));
 }
+
+function resetPill() { setPill(""); }
 
 /* ═══════════════════════ natural-language edits ═══════════════════════ */
 
@@ -1785,6 +1808,17 @@ $("#viewParamsBtn").onclick = () => chooseParamView("params");
 
 function chooseParamView(which) {
   showParamView(which);
+  // The right column's toggle and the header's switch are two doors into
+  // the same room, so opening one moves the other.
+  $$("#viewSeg .vsegb").forEach(button => {
+    if (button.dataset.view === "code" || button.dataset.view === "params") {
+      const on = button.dataset.view === which;
+      button.classList.toggle("on", on);
+      button.setAttribute("aria-selected", String(on));
+    }
+  });
+  const model = $('#viewSeg .vsegb[data-view="model"]');
+  if (model) { model.classList.remove("on"); model.setAttribute("aria-selected", "false"); }
   try { localStorage.setItem(PARAM_VIEW_KEY, S.paramView); } catch (e) { /* fine */ }
 }
 
@@ -1829,6 +1863,17 @@ async function openDrawing() {
   }
 }
 
+/* The PNG is made from the sheet, so there has to be a sheet. Building one
+   costs a projection on the server and no model call, which is cheaper than
+   telling someone to go and open another view before they may have their
+   file. */
+async function ensureDrawing() {
+  if (sheetSvg) return true;
+  if (S.selected < 0) { warnToast(t("draw.needpart")); return false; }
+  await openDrawing();
+  return Boolean(sheetSvg);
+}
+
 /* Rasterise the sheet in the browser. The SVG is self-contained - no external
    references - so it can be drawn straight onto a canvas. */
 function exportDrawingPng() {
@@ -1870,9 +1915,74 @@ function exportDrawingPng() {
   image.src = url;
 }
 
-$("#drawBtn").onclick = openDrawing;
-$("#back3d").onclick = () => $("#sheet").classList.remove("on");
-$("#expPng").onclick = exportDrawingPng;
+// Through the switch, not straight to the sheet, so the header cannot
+// show the model tab while a drawing is on screen.
+$("#drawBtn").onclick = () => showView("drawing");
+
+/* Reload re-reads the built part from the server rather than rebuilding it:
+   no model call, no kernel run, nothing billed. It is for a canvas that has
+   got itself into a state, which is the only thing a reload can honestly
+   promise. */
+$("#reloadBtn").onclick = async () => {
+  if (S.selected < 0) { warnToast(t("draw.needpart")); return; }
+  await selectVersion(S.selected);
+  toast(t("view.reloaded"));
+};
+$("#back3d").onclick = () => showView("model");
+
+/* ── the four ways to look at a part ─────────────────────────────────
+   One switch, in the header, over what used to be three controls in three
+   places: the right column's own Code/Parameters toggle, and a Drawing
+   button on the viewport toolbar. They are the same kind of choice, so they
+   are now the same control, and the old ones still work underneath it. */
+
+const VIEWS = ["model", "code", "params", "drawing"];
+
+function showView(which) {
+  if (!VIEWS.includes(which)) which = "model";
+  if (which === "drawing" && $("#drawBtn").disabled) {
+    // Nothing to draw yet. Say so rather than switching to a blank sheet.
+    toast(t("view.needpart"));
+    return;
+  }
+  S.view = which;
+  // The stage and the code panel are the same slot in the centre column.
+  const source = which === "code" || which === "params";
+  $("#stage").hidden = source;
+  $(".vtools").hidden = source;          // ISO/FIT/SPIN mean nothing over code
+  $("#codeSec").hidden = !(which === "code" || which === "params");
+  $("#sheet").classList.toggle("on", which === "drawing");
+  if (which === "drawing") openDrawing();
+  if (which === "code" || which === "params") chooseParamView(which);
+  $$("#viewSeg .vsegb").forEach(button => {
+    const on = button.dataset.view === which;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-selected", String(on));
+  });
+}
+
+$$("#viewSeg .vsegb").forEach(button => {
+  button.onclick = () => showView(button.dataset.view);
+});
+
+/* The drawing segment follows the button it replaces, which the run itself
+   enables and disables - so the two cannot disagree about whether there is
+   a part to draw. */
+new MutationObserver(() => {
+  $('#viewSeg .vsegb[data-view="drawing"]').disabled = $("#drawBtn").disabled;
+}).observe($("#drawBtn"), { attributes: true, attributeFilter: ["disabled"] });
+
+$("#fullBtn").onclick = () => {
+  const doc = document;
+  if (doc.fullscreenElement) doc.exitFullscreen();
+  else doc.documentElement.requestFullscreen().catch(() => {
+    // Refused (an iframe without the permission, or a browser that asks
+    // first). Nothing is broken; the page simply stays as it is.
+  });
+};
+$("#expPng").onclick = async () => {
+  if (await ensureDrawing()) exportDrawingPng();
+};
 
 /* The DXF is the drawing; the SVG on screen is a picture of it. Its
    dimensions are real DIMENSION entities, so whatever opens the file

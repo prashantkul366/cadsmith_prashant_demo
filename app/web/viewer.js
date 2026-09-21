@@ -25,7 +25,7 @@ const Viewer = (() => {
   let dist = 300, theta = -Math.PI * 0.28, phi = Math.PI * 0.34;
   let spin = true, wire = false;
 
-  scene.add(new THREE.HemisphereLight(0xBFD4EE, 0x141821, 0.85));
+  scene.add(new THREE.HemisphereLight(0xEAEEF5, 0x4A4A4A, 0.85));
   const key = new THREE.DirectionalLight(0xffffff, 0.95);
   key.position.set(1, 0.7, 1.4); scene.add(key);
   const fill = new THREE.DirectionalLight(0x9FC0EA, 0.4);
@@ -33,7 +33,9 @@ const Viewer = (() => {
   const rim = new THREE.DirectionalLight(0xffffff, 0.28);
   rim.position.set(0, -1, -1); scene.add(rim);
 
-  const grid = new THREE.GridHelper(600, 30, 0x2A3442, 0x1A2029);
+  // Against the design's #4C4C4C viewport rather than the old near-black
+  // one: a grid mixed for a dark scene disappears on a mid grey.
+  const grid = new THREE.GridHelper(600, 30, 0x6E6E6E, 0x5A5A5A);
   grid.rotation.x = Math.PI / 2; grid.position.z = -0.4;
   grid.material.transparent = true; grid.material.opacity = 0.55;
   scene.add(grid);
@@ -299,7 +301,13 @@ const Viewer = (() => {
   new ResizeObserver(resize).observe(host);
   resize();
 
+  /* The gizmo is a control, not an ornament: it took over from the ISO,
+     FRONT, TOP and RIGHT buttons, so each arm is a hit target that looks
+     down its own axis, and the hub returns to the isometric. Clicking an
+     axis is how every CAD package does this, which is the point - four
+     buttons replaced by the thing people already reach for. */
   const axisGroup = document.querySelector("#axG");
+  const AXIS_VIEW = { X: "right", Y: "front", Z: "top" };
   function drawAxes() {
     const R = 20, cx = 30, cy = 30;
     const dirs = [
@@ -307,15 +315,27 @@ const Viewer = (() => {
       ["Y", new THREE.Vector3(0, 1, 0), "#3DD68C"],
       ["Z", new THREE.Vector3(0, 0, 1), "#4D8DF6"],
     ];
-    let svg = "";
+    let svg = `<circle cx="${cx}" cy="${cy}" r="8.5" fill="#FFBE44" stroke="none"/>`
+            + `<circle cx="${cx}" cy="${cy}" r="4.6" fill="#1E1E1E" stroke="none"/>`;
     for (const [name, vector, colour] of dirs) {
       const p = vector.clone().project(cam);
       const x = cx + p.x * R, y = cy - p.y * R;
+      const lx = cx + (x - cx) * 1.32, ly = cy + (y - cy) * 1.32;
       svg += `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${colour}"/>`;
-      svg += `<text x="${(cx + (x - cx) * 1.32).toFixed(1)}" y="${(cy + (y - cy) * 1.32 + 3).toFixed(1)}" fill="${colour}" font-size="8" font-family="monospace" text-anchor="middle" stroke="none">${name}</text>`;
+      svg += `<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" fill="${colour}" font-size="8" font-family="monospace" text-anchor="middle" stroke="none">${name}</text>`;
+      svg += `<circle class="axhit" data-view="${AXIS_VIEW[name]}" cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="7.5"><title>${name}</title></circle>`;
     }
+    svg += `<circle class="axhit" data-view="iso" cx="${cx}" cy="${cy}" r="8.5"><title>ISO</title></circle>`;
     axisGroup.innerHTML = svg;
   }
+
+  document.querySelector("#axes").addEventListener("click", event => {
+    const hit = event.target.closest(".axhit");
+    if (!hit) return;
+    spin = false;
+    if (api.onView) api.onView(hit.dataset.view);
+    view(hit.dataset.view, true);
+  });
 
   (function loop() {
     requestAnimationFrame(loop);
@@ -332,8 +352,11 @@ const Viewer = (() => {
     drawAxes();
   })();
 
-  return {
+  const api = {
     load, clear, fit, view,
+    //: Set by the app so the Spin chip can un-light itself when a fixed
+    //: view is chosen from the gizmo.
+    onView: null,
     get spin() { return spin; },
     set spin(v) { spin = v; },
     //: Slow orbit while the pipeline works, without touching the SPIN toggle.
@@ -360,4 +383,6 @@ const Viewer = (() => {
       return url;
     },
   };
+
+  return api;
 })();

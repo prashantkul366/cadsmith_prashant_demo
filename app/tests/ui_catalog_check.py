@@ -172,7 +172,7 @@ def main() -> int:
               page.locator("#mtitle").inner_text())
         # The panel opens on the parameter controls; the source is the other
         # view of the same script.
-        page.click("#viewCodeBtn")
+        page.click('#viewSeg .vsegb[data-view="code"]')
         page.wait_for_timeout(300)
         code = page.locator("#codeScroll").inner_text()
         check("the code panel shows parametric source",
@@ -209,7 +209,7 @@ def main() -> int:
 
         # -----------------------------------------------------------------
         print("\nA drawing from a catalogue part")
-        page.click("#drawBtn")
+        page.click('#viewSeg .vsegb[data-view="drawing"]')
         page.wait_for_function(
             "() => document.querySelector('#sheet') && "
             "document.querySelector('#sheet').innerHTML.includes('svg')",

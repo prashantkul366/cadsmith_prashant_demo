@@ -18,8 +18,41 @@
     <svg class="logo" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>
     <h1>CADSmith</h1>
   </div>
-  <div class="pill" id="enginePill" data-i18n="app.engine">Planner · Coder · Executor · Validator · Refiner</div>
+  <!-- Was the always-on "Planner · Coder · Executor · Validator · Refiner"
+       strapline, which the design drops. The element stays because it is
+       also where a replay announces itself, and that is a state worth
+       keeping: it is the difference between watching a run and watching a
+       recording. Hidden until there is something to say. -->
+  <div class="pill" id="enginePill" hidden></div>
   <div style="flex:1"></div>
+
+  <!-- The four things a part can be looked at as. They were in three
+       different places - two in the right column's own toggle, one on the
+       viewport toolbar - which made them read as three unrelated controls
+       rather than one choice. -->
+  <div class="vseg" id="viewSeg" role="tablist" aria-label="View">
+    <button class="vsegb on" data-view="model" role="tab" aria-selected="true"
+            data-i18n-title="view.model" title="3D model">
+      <svg class="icn" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3.2"/></svg>
+    </button>
+    <button class="vsegb" data-view="code" role="tab" aria-selected="false"
+            data-i18n-title="view.code" title="Code">
+      <svg class="icn" viewBox="0 0 24 24"><path d="m8.5 17-5.5-5 5.5-5M15.5 7l5.5 5-5.5 5"/></svg>
+    </button>
+    <button class="vsegb" data-view="params" role="tab" aria-selected="false"
+            data-i18n-title="view.params" title="Parameters">
+      <svg class="icn" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 10h18M9.5 10v9.5"/></svg>
+    </button>
+    <button class="vsegb" data-view="drawing" role="tab" aria-selected="false"
+            data-i18n-title="view.drawing" title="Drawing" disabled>
+      <svg class="icn" viewBox="0 0 24 24"><rect x="3" y="3.5" width="18" height="17" rx="2"/><path d="M7 9h7M7 13h4.5M7 17h2.5M14.5 17H17"/></svg>
+    </button>
+  </div>
+
+  <button class="iconbtn accent" id="fullBtn" data-i18n-title="app.fullscreen"
+          title="Fullscreen">
+    <svg class="icn" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+  </button>
   <div class="langsw" id="langSw" role="group"></div>
   <button class="health" id="healthChip"><i></i><span data-i18n="health.checking">CHECKING…</span></button>
   <button class="btn ghost sm" id="histBtn">
@@ -118,17 +151,51 @@
   <!-- ══════════ CENTRE: viewer ══════════ -->
   <div class="col center">
     <div class="vtools">
-      <button class="vt on" data-view="iso" data-i18n="view.iso">ISO</button>
-      <button class="vt" data-view="front" data-i18n="view.front">FRONT</button>
-      <button class="vt" data-view="top" data-i18n="view.top">TOP</button>
-      <button class="vt" data-view="right" data-i18n="view.right">RIGHT</button>
-      <div class="spacer" style="flex:1"></div>
-      <button class="vt" id="fitBtn" data-i18n="view.fit">FIT</button>
-      <button class="vt" id="wireBtn" data-i18n="view.wire">WIREFRAME</button>
-      <button class="vt" id="spinBtn" data-i18n="view.spin">SPIN</button>
-      <button class="btn sm" id="drawBtn" disabled>
-        <svg class="icn" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18M9 9v11"/></svg><span data-i18n="view.drawing">Drawing</span>
+      <!-- ISO / FRONT / TOP / RIGHT are gone from here on purpose: the axis
+           gizmo does that job now, the way it does in every CAD package -
+           click an axis to look down it. Four buttons replaced by the thing
+           people already reach for, rather than four buttons hidden. -->
+      <button class="chipb" id="spinBtn">
+        <span data-i18n="view.spin">Spin</span>
+        <svg class="icn" viewBox="0 0 24 24"><path d="M12 5a7 7 0 1 1-6.6 4.6"/><path d="M5 4v5h5"/></svg>
       </button>
+      <button class="chipb" id="fitBtn">
+        <span data-i18n="view.fit">Fit</span>
+        <svg class="icn" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+      </button>
+      <button class="chipb" id="reloadBtn">
+        <span data-i18n="view.reload">Reload</span>
+        <svg class="icn" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg>
+      </button>
+      <button class="chipb" id="wireBtn">
+        <span data-i18n="view.wire">Wireframe</span>
+        <svg class="icn" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>
+      </button>
+      <div class="spacer" style="flex:1"></div>
+      <button class="chipb" id="copyBtn">
+        <svg class="icn" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        <span data-i18n="code.copy">Copy</span>
+      </button>
+
+      <!-- One menu for the five formats that were spread across the code
+           panel and the drawing sheet. -->
+      <div class="expwrap">
+        <button class="chipb accent" id="exportBtn" aria-haspopup="menu" aria-expanded="false">
+          <svg class="icn" viewBox="0 0 24 24"><path d="M12 15V3M8 7l4-4 4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          <span data-i18n="export.label">Export</span>
+          <svg class="icn caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div class="expmenu" id="exportMenu" role="menu" hidden>
+          <button class="expitem" id="dlStep" role="menuitem">STEP<small data-i18n="export.step">solid, for CAD</small></button>
+          <button class="expitem" id="dlStl" role="menuitem">STL<small data-i18n="export.stl">mesh, for printing</small></button>
+          <button class="expitem" id="dlPy" role="menuitem">.py<small data-i18n="export.py">the CadQuery script</small></button>
+          <div class="expsep"></div>
+          <button class="expitem" id="expDxf" role="menuitem">DXF<small data-i18n="export.dxf">the drawing, re-measurable</small></button>
+          <button class="expitem" id="expPng" role="menuitem">PNG<small data-i18n="export.png">the drawing, as a picture</small></button>
+        </div>
+      </div>
+
+      <button class="chipb" id="drawBtn" hidden disabled></button>
     </div>
 
     <div class="stage" id="stage">
@@ -177,6 +244,35 @@
       </div>
     </div>
 
+    <div class="centrepane" id="codeSec" hidden>
+      <div class="phead">
+        <h2 id="codeHeading" data-i18n="params.heading">Part parameters</h2>
+        <div class="spacer" style="flex:1"></div>
+        <!-- Two views of the same script. Parameters opens first: it is
+             the one someone who does not read Python can work in, and the
+             source is one click away for anyone who wants it. -->
+        <div class="seg" id="codeViews" role="tablist">
+          <button class="segb" id="viewCodeBtn" role="tab"
+                  aria-selected="false" data-i18n="code.view.code">Code</button>
+          <button class="segb on" id="viewParamsBtn" role="tab"
+                  aria-selected="true" data-i18n="code.view.params">Parameters</button>
+        </div>
+        <span class="eyebrow" id="codeStat">— — —</span>
+      </div>
+
+      <div class="codewrap" id="codeView" hidden>
+        <div class="code-scroll" id="codeScroll">
+          <div class="code-inner">
+            <pre class="hl" id="hl"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="codewrap" id="paramsView">
+        <div class="params-body" id="paramsBody"></div>
+      </div>
+
+    </div>
     <div class="itersrow">
       <div class="iters" id="iters"></div>
       <div class="usage" id="usage" hidden></div>
@@ -216,42 +312,6 @@
             <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
             <span data-i18n="plan.none">No part planned yet.</span>
           </div>
-        </div>
-      </div>
-
-      <div class="rsec code" id="codeSec">
-        <div class="phead">
-          <h2 id="codeHeading" data-i18n="params.heading">Part parameters</h2>
-          <div class="spacer" style="flex:1"></div>
-          <!-- Two views of the same script. Parameters opens first: it is
-               the one someone who does not read Python can work in, and the
-               source is one click away for anyone who wants it. -->
-          <div class="seg" id="codeViews" role="tablist">
-            <button class="segb" id="viewCodeBtn" role="tab"
-                    aria-selected="false" data-i18n="code.view.code">Code</button>
-            <button class="segb on" id="viewParamsBtn" role="tab"
-                    aria-selected="true" data-i18n="code.view.params">Parameters</button>
-          </div>
-          <span class="eyebrow" id="codeStat">— — —</span>
-        </div>
-
-        <div class="codewrap" id="codeView" hidden>
-          <div class="code-scroll" id="codeScroll">
-            <div class="code-inner">
-              <pre class="hl" id="hl"></pre>
-            </div>
-          </div>
-        </div>
-
-        <div class="codewrap" id="paramsView">
-          <div class="params-body" id="paramsBody"></div>
-        </div>
-
-        <div class="coderow" id="codeRow">
-          <button class="btn sm" id="copyBtn"><svg class="icn" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg><span data-i18n="code.copy">Copy</span></button>
-          <button class="btn sm" id="dlPy"><svg class="icn" viewBox="0 0 24 24"><path d="M12 3v12M7 11l5 5 5-5M4 20h16"/></svg>.py</button>
-          <button class="btn sm" id="dlStep">STEP</button>
-          <button class="btn sm" id="dlStl">STL</button>
         </div>
       </div>
 
@@ -308,8 +368,6 @@
   <div class="sheet-bar">
     <span class="eyebrow" data-i18n="draw.heading">ENGINEERING DRAWING</span>
     <div class="spacer" style="flex:1"></div>
-    <button class="btn sm" id="expDxf" data-i18n="draw.exportdxf">Download DXF</button>
-    <button class="btn sm" id="expPng" data-i18n="draw.exportpng">Export PNG</button>
     <button class="btn sm primary" id="back3d" data-i18n="draw.back3d">Back to 3D</button>
   </div>
   <div class="sheet-scroll"><div class="paper" id="paper"></div></div>

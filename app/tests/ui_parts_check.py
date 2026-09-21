@@ -187,7 +187,7 @@ def main() -> int:
                           abs(a - b) < 0.6 for a, b in zip(extents, bbox)),
                       f"{got} vs expected {list(bbox)}")
 
-                page.click("#viewCodeBtn")
+                page.click('#viewSeg .vsegb[data-view="code"]')
                 page.wait_for_timeout(250)
                 code = page.locator("#codeScroll").inner_text()
                 expected = mock_parts.select(prompt)
@@ -233,7 +233,7 @@ def main() -> int:
             check("Generate is locked while busy",
                   page.locator("#genBtn").is_disabled())
             check("the drawing button is locked while busy",
-                  page.locator("#drawBtn").is_disabled())
+                  page.locator('#viewSeg .vsegb[data-view="drawing"]').is_disabled())
             check("the edit bar is locked while busy",
                   page.locator("#cmdIn").is_disabled()
                   and page.locator("#applyBtn").is_disabled())
@@ -241,7 +241,7 @@ def main() -> int:
             # Force the clicks anyway: a disabled button a person can still
             # reach through the keyboard must not start a second run.
             page.evaluate("document.querySelector('#genBtn').click()")
-            page.evaluate("document.querySelector('#drawBtn').click()")
+            page.evaluate("document.querySelector('#viewSeg .vsegb[data-view=\\"drawing\\"]').click()")
             page.wait_for_timeout(400)
             in_flight = page.evaluate("S.jobId")
 
@@ -312,7 +312,7 @@ def main() -> int:
             print("\nDrawing the finished part")
             page.locator('.iter[data-i="1"]').click()
             page.wait_for_timeout(1500)
-            page.click("#drawBtn")
+            page.click('#viewSeg .vsegb[data-view="drawing"]')
             page.wait_for_timeout(1000)
             page.wait_for_function(
                 "() => document.querySelector('#sheet') "

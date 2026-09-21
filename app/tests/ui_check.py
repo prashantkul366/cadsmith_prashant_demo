@@ -325,7 +325,7 @@ def main() -> int:
         print("\nEngineering drawing")
         page.click('.iter[data-i="1"]')
         page.wait_for_timeout(2000)
-        page.click("#drawBtn")
+        page.click('#viewSeg .vsegb[data-view="drawing"]')
         page.wait_for_selector("#paper svg", timeout=90000)
         page.wait_for_timeout(600)
         check("sheet opens", page.locator("#sheet.on").count() == 1)
@@ -410,7 +410,7 @@ def main() -> int:
         page.screenshot(path=str(out / "11-replay-done.png"))
 
         print("\nViews")
-        page.click('.vt[data-view="front"]')
+        page.click('#axes .axhit[data-view="front"]')
         page.wait_for_timeout(900)
         page.screenshot(path=str(out / "06-front-view.png"))
         page.click("#wireBtn")

@@ -203,13 +203,13 @@ def main() -> int:
               "arameter" in page.locator("#codeHeading").inner_text()
               or "パラメータ" in page.locator("#codeHeading").inner_text(),
               page.locator("#codeHeading").inner_text())
-        page.click("#viewCodeBtn")
+        page.click('#viewSeg .vsegb[data-view="code"]')
         page.wait_for_timeout(400)
         check("Code shows the source, one click away",
               not page.locator("#codeView").is_hidden()
               and "cadquery" in page.locator("#codeScroll").inner_text().lower(),
               page.locator("#codeScroll").inner_text().replace("\n", " ")[:50])
-        page.click("#viewParamsBtn")
+        page.click('#viewSeg .vsegb[data-view="params"]')
         page.wait_for_timeout(400)
 
         found = {r["name"]: r for r in rows(page)}
@@ -305,7 +305,7 @@ def main() -> int:
 
         # -----------------------------------------------------------------
         print("\nThe choice of view is remembered")
-        page.click("#viewCodeBtn")
+        page.click('#viewSeg .vsegb[data-view="code"]')
         page.wait_for_timeout(300)
         page.reload(wait_until="networkidle")
         page.wait_for_timeout(1500)
@@ -313,7 +313,7 @@ def main() -> int:
               page.evaluate("S.paramView") == "code"
               and not page.locator("#codeView").is_hidden(),
               page.evaluate("S.paramView"))
-        page.click("#viewParamsBtn")
+        page.click('#viewSeg .vsegb[data-view="params"]')
         page.wait_for_timeout(300)
         page.reload(wait_until="networkidle")
         page.wait_for_timeout(1500)
