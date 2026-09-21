@@ -28,7 +28,6 @@ import base64
 import json
 import os
 import platform
-import re
 import socket
 import sys
 import tempfile
@@ -302,7 +301,7 @@ def check_configuration(args) -> dict:
             # and only one of them is in use.
             arn = providers._aws_check()[0]
             if arn:
-                ok("AWS identity", _mask_arn(arn))
+                ok("AWS identity", providers.mask_arn(arn))
         if config.generation_model == config.judge_model:
             warn("one model for both roles", config.judge_model,
                  "The Judge grades its own work. Works, but it is not an "
@@ -450,7 +449,7 @@ def _check_claude(config, args, providers) -> None:
 
     offered: list[str] = []
     if config.kind == "bedrock":
-        offered = providers.list_models("bedrock", timeout=args.timeout)
+        offered, empty_because = providers.bedrock_models(timeout=args.timeout)
         if offered:
             ok("models this account can invoke", f"{len(offered)} offered")
             for role, name in (("generation", config.generation_model),
@@ -462,9 +461,7 @@ def _check_claude(config, args, providers) -> None:
                          "only through a cross-region inference profile "
                          "(us.anthropic.claude-...). Name one from the list.")
         else:
-            warn("model list", "empty or unavailable",
-                 "Check AWS_REGION, and that Claude is enabled for this "
-                 "account under Bedrock > Model access in that region.")
+            warn("model list", "nothing listed", empty_because)
 
     roles = [("generation", config.generation_model)]
     if config.judge_model and config.judge_model != config.generation_model:
@@ -492,16 +489,6 @@ def _check_claude(config, args, providers) -> None:
                       f"--judge-model.{RESET}")
             if role == "generation":
                 return
-
-
-def _mask_arn(arn: str) -> str:
-    """The caller ARN with the account number masked.
-
-    Which role you are answers "whose credentials are these"; the account
-    number does not, and this output is the first thing anyone pastes into a
-    chat asking for help.
-    """
-    return re.sub(r"\b\d{12}\b", "*" * 12, arn)
 
 
 def _advice(error: str) -> str:

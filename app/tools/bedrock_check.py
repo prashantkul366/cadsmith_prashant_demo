@@ -24,9 +24,10 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 
-from app.server import budget, providers  # noqa: E402
+from app.server import budget, providers, tls  # noqa: E402
 
 #: The smallest useful request: a handful of input tokens, a two-token answer.
 #: Enough to prove the whole path - credentials, region, model access, quota -
@@ -64,30 +65,66 @@ def main() -> int:
         line(False, "the app knows about Bedrock")
         return 1
 
+    # Both before anything reaches the network. Without the trust store this
+    # fails on any corporate network that re-signs TLS, and the failure looks
+    # like an empty model list rather than a certificate problem; without
+    # .env, a region set only in the file is not seen.
+    trust = tls.configure()
+    env_file = ROOT / ".env"
+    if env_file.exists():
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv(env_file)
+        except Exception:
+            pass
+
     print("\nConfiguration")
-    region = providers._region_for(spec)
+    line(trust["ok"], "certificate trust", trust["detail"])
+    region = os.getenv("AWS_REGION", "")
     line(bool(region), "region",
          region or "not set - export AWS_REGION or pass --region")
-    profile = providers._profile_for(spec)
+    profile = (os.getenv("AWS_PROFILE") or "").strip()
     line(None, "profile", profile or "none (using the default chain)")
+    if profile and os.getenv("AWS_ACCESS_KEY_ID"):
+        line(None, "note",
+             "AWS_PROFILE and AWS_ACCESS_KEY_ID are both set. The profile "
+             "wins and the keys are ignored.")
 
     print("\nCredentials")
-    found, where = providers._aws_credentials_found(force=True)
-    line(found, "botocore can resolve credentials", where)
-    if not found:
-        print("\n  Run `aws sso login` (or set AWS_PROFILE) and try again.")
+    arn, why = providers._aws_check()
+    line(bool(arn) and not why, "botocore can resolve credentials",
+         providers.mask_arn(arn) if arn
+         else why or "resolved, but AWS could not confirm them")
+    if why:
         return 1
 
     config = providers.resolve("bedrock")
+    print("\nModels this account can invoke")
+    offered, empty_because = providers.bedrock_models()
+    for name in offered:
+        line(None, name)
+    if not offered:
+        line(False, "none listed", empty_because)
+    else:
+        # Choosing from the live list is what the app does, so check the same
+        # ids rather than the defaults declared before AWS could be asked.
+        generation, judge = providers.bedrock_defaults(offered)
+        if generation and not args.model:
+            config.generation_model = generation
+        if judge:
+            config.judge_model = judge
+
     model = args.model or config.generation_model
     print("\nModels the app will ask for")
-    line(None, "generation", config.generation_model)
-    line(None, "judge", config.judge_model)
-    if not str(model).startswith(("anthropic.", "us.", "eu.", "apac.")):
-        line(None, "note",
-             f"{model!r} has no Bedrock prefix. Bedrock ids look like "
-             f"'anthropic.claude-sonnet-5'; a cross-region inference profile "
-             f"looks like 'us.anthropic.claude-sonnet-5'.")
+    line(model in offered if offered else None, "generation",
+         config.generation_model)
+    line(config.judge_model in offered if offered else None, "judge",
+         config.judge_model)
+    if offered and model not in offered:
+        line(False, "note",
+             f"{model!r} is not in the list above, so the call will be "
+             f"refused. Name one of those with --model.")
 
     print("\nSpend guard")
     line(True, "token budget per run", f"{budget.DEFAULT_BUDGET:,} tokens")
@@ -109,7 +146,7 @@ def main() -> int:
         return 1
 
     try:
-        client = providers.build_client(config)
+        client = providers._build_sdk_client(config)
         response = client.messages.create(
             model=model, max_tokens=PROBE_MAX_TOKENS,
             system="Answer in one word.", messages=PROBE)

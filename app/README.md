@@ -201,8 +201,12 @@ invoke, so take the model box's suggestions rather than typing a name. To
 see the list from a terminal:
 
 ```powershell
-.venv\Scripts\python -c "from app.server import providers; print(chr(10).join(providers.list_models('bedrock')))"
+.venv\Scripts\python -m app.tools.bedrock_check --no-call
 ```
+
+That prints the region, the identity your credentials resolve to, and every
+model id this account can invoke — and bills nothing. Drop `--no-call` and it
+also sends one eight-token probe to prove the model answers.
 
 For the command-line evaluations, name one explicitly:
 

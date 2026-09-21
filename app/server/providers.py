@@ -387,13 +387,28 @@ def _aws_check(timeout: float = 4.0) -> tuple[str, str]:
     return arn, why
 
 
+def mask_arn(arn: str) -> str:
+    """The caller ARN with the account number masked.
+
+    Which role you are answers "whose credentials are these"; the account
+    number does not, and this gets printed by tools whose output is the
+    first thing anyone pastes into a chat asking for help.
+    """
+    return re.sub(r"\b\d{12}\b", "*" * 12, arn)
+
+
 def _aws_identity(timeout: float = 4.0) -> str:
     """The caller ARN if AWS credentials resolve, else ""."""
     return _aws_check(timeout)[0]
 
 
-def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
-    """Anthropic models this account can actually invoke in this region.
+def bedrock_models(timeout: float = 6.0) -> tuple[list[str], str]:
+    """``(ids this account can invoke, why the list is empty)``.
+
+    An empty list with no reason is the same trap the credential check used
+    to set: on a network that re-signs TLS, or with no boto3 installed, this
+    returns nothing and the reader is left guessing at model ids that were
+    never the problem.
 
     Two calls, not one, because "the region carries it" and "you may invoke
     it by that id" are different questions.  ``list_foundation_models``
@@ -408,17 +423,19 @@ def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
         import boto3
         from botocore.config import Config
     except Exception:
-        return []
+        return [], ("boto3 is not installed. Install it with "
+                    "`pip install \"anthropic[bedrock]\"`.")
 
     cfg = Config(connect_timeout=timeout, read_timeout=timeout,
                  retries={"max_attempts": 1})
     region = os.getenv("AWS_REGION") or "us-east-1"
     try:
         client = boto3.client("bedrock", region_name=region, config=cfg)
-    except Exception:
-        return []
+    except Exception as exc:
+        return [], f"{type(exc).__name__}: {exc}"
 
     ids: set[str] = set()
+    failed = ""
     try:
         for entry in client.list_foundation_models().get("modelSummaries", []):
             model_id = entry.get("modelId", "")
@@ -428,15 +445,15 @@ def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
             # that does not report it predates the profile-only models.
             kinds = entry.get("inferenceTypesSupported")
             if kinds is not None and "ON_DEMAND" not in kinds:
-                continue
+                continue  # invokable only through an inference profile
             # A model on its way out is still listed, and still answers, but
             # it is not what anyone means by "what can I use".
             lifecycle = (entry.get("modelLifecycle") or {}).get("status")
             if lifecycle and lifecycle != "ACTIVE":
                 continue
             ids.add(model_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        failed = f"list_foundation_models: {type(exc).__name__}: {exc}"
     try:
         for entry in client.list_inference_profiles().get(
                 "inferenceProfileSummaries", []):
@@ -452,9 +469,17 @@ def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
                                for m in entry.get("models") or [])
             if "anthropic" in (profile_id + carries).lower():
                 ids.add(profile_id)
-    except Exception:
-        pass
-    return sorted(ids)
+    except Exception as exc:
+        failed = failed or f"list_inference_profiles: {type(exc).__name__}: {exc}"
+    if ids:
+        return sorted(ids), ""
+    return [], failed or (f"AWS answered, but no Anthropic model is available "
+                          f"in {region}. Check the region, and Model access "
+                          f"for this account.")
+
+
+def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
+    return bedrock_models(timeout)[0]
 
 
 #: Which Claude each role wants, weakest acceptable first. The pipeline
