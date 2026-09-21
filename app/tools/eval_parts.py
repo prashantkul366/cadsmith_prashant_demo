@@ -323,6 +323,19 @@ def main() -> int:
                         help="an earlier --out file to compare against")
     args = parser.parse_args()
 
+    # Before the first case, not after the last one. A missing directory is
+    # a typo caught in a second at the start, or half an hour of real model
+    # calls thrown away at the end - which is what it was.
+    if args.out:
+        out_path = Path(args.out)
+        try:
+            if out_path.parent != Path(""):
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.touch()
+        except OSError as exc:
+            print(f"cannot write to {args.out}: {exc}")
+            return 2
+
     cases = json.loads(CASES_FILE.read_text(encoding="utf-8"))["cases"]
     if args.catalogue_only:
         cases = [c for c in cases if (c.get("expect") or {}).get("catalogue")]

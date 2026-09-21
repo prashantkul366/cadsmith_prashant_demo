@@ -117,8 +117,10 @@ def main() -> int:
 
     model = args.model or config.generation_model
     print("\nModels the app will ask for")
-    line(model in offered if offered else None, "generation",
-         config.generation_model)
+    # `model`, not config.generation_model: with --model given, the config
+    # still holds the declared default, and printing that beside a tick
+    # computed from the id actually being probed marked a wrong id as fine.
+    line(model in offered if offered else None, "generation", model)
     line(config.judge_model in offered if offered else None, "judge",
          config.judge_model)
     if offered and model not in offered:
