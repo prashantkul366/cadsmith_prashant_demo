@@ -28,6 +28,7 @@ import base64
 import json
 import os
 import platform
+import re
 import socket
 import sys
 import tempfile
@@ -238,6 +239,16 @@ def check_configuration(args) -> dict:
         else:
             ok(name, value)
 
+    # Both set is the trap worth naming: the app passes AWS_PROFILE to the
+    # SDK explicitly, and botocore then drops the environment provider
+    # entirely - so the keys you just pasted are not the ones being used.
+    if show_aws and os.getenv("AWS_PROFILE") and os.getenv("AWS_ACCESS_KEY_ID"):
+        warn("AWS_PROFILE and AWS_ACCESS_KEY_ID are both set",
+             os.getenv("AWS_PROFILE", ""),
+             "The profile wins and the pasted keys are ignored. Remove the "
+             "AWS_PROFILE line - including from .env - if you mean to use "
+             "the keys.")
+
     try:
         from app.server import providers
     except Exception as exc:
@@ -276,6 +287,13 @@ def check_configuration(args) -> dict:
     else:
         ok(f"selected provider '{args.provider}'",
            f"gen={config.generation_model} judge={config.judge_model}")
+        if config.kind == "bedrock":
+            # Which identity AWS actually resolved to, since a profile, an
+            # instance role and the pasted keys can all be present at once
+            # and only one of them is in use.
+            arn = providers._aws_check()[0]
+            if arn:
+                ok("AWS identity", _mask_arn(arn))
         if config.generation_model == config.judge_model:
             warn("one model for both roles", config.judge_model,
                  "The Judge grades its own work. Works, but it is not an "
@@ -456,6 +474,16 @@ def _check_claude(config, args, providers) -> None:
                  _advice(str(exc)))
             if role == "generation":
                 return
+
+
+def _mask_arn(arn: str) -> str:
+    """The caller ARN with the account number masked.
+
+    Which role you are answers "whose credentials are these"; the account
+    number does not, and this output is the first thing anyone pastes into a
+    chat asking for help.
+    """
+    return re.sub(r"\b\d{12}\b", "*" * 12, arn)
 
 
 def _advice(error: str) -> str:

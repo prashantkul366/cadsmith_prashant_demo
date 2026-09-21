@@ -172,6 +172,13 @@ aws sso login --profile my-profile
 export AWS_PROFILE=my-profile
 ```
 
+**Pick one of the two.** `AWS_PROFILE` is passed to the SDK explicitly, and
+botocore then drops the environment credentials entirely — so with both set,
+the profile wins and the keys you pasted are never used. If the profile does
+not exist, nothing resolves at all, whatever else is set. A stale
+`AWS_PROFILE=` line left in `.env` is the usual way this happens; the
+preflight names it.
+
 Portal credentials are short-lived, so the check is made live rather than
 inferred from the presence of the variables: an expired token is reported
 before a long run starts rather than half way through one. A variable set in
