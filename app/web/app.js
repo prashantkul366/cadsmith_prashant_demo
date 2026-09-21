@@ -879,6 +879,26 @@ function finishRun(data) {
   loadHistory();
 }
 
+/* A run that died on the model id is the one failure the browser can answer
+   by itself: the provider said what it serves when the picker was filled, so
+   name those rather than sending the reader off to look at a panel. Bedrock
+   is where this bites - an account can list a model the runtime then refuses,
+   and the id is long enough that nobody spots the difference by eye. */
+function modelAdvice(message) {
+  const text = String(message || "");
+  if (!/not_found|does not exist|ValidationException|inference profile|invalid/i
+        .test(text)) return "";
+  const offered = (S.provider && S.provider.models) || [];
+  const chosen = [$("#optGenModel").value.trim(), $("#optJudgeModel").value.trim()];
+  // Only when the id really is not on offer. A 404 for another reason should
+  // not be answered with a confident, wrong explanation.
+  if (!offered.length || !chosen.some(m => m && offered.indexOf(m) < 0)) return "";
+  const shortlist = offered.filter(m => /sonnet|opus|haiku/i.test(m)).slice(0, 3);
+  return t("err.badmodel", {
+    n: offered.length, names: (shortlist.length ? shortlist : offered.slice(0, 3)).join(", "),
+  });
+}
+
 function failRun(message) {
   S.busy = false;
   Viewer.building = false;
@@ -886,7 +906,7 @@ function failRun(message) {
   $("#genBtn").disabled = !(S.health && S.health.can_generate);
   $("#errTitle").textContent = t("err.title");
   $("#errMsg").textContent = message || t("err.unknown");
-  $("#errFix").textContent = t(S.versions.length
+  $("#errFix").textContent = modelAdvice(message) || t(S.versions.length
     ? "err.haveattempt" : "err.checkenv");
   $("#errKeep").hidden = !S.versions.length;
   showOverlay("error");

@@ -113,6 +113,11 @@ const I18N = (function () {
                          "下に、これより前の試行が残っています。"],
     "err.checkenv":     ["Check the environment panel in the header, then try again.",
                          "ヘッダーの実行環境パネルを確認してから、再実行してください。"],
+    "err.badmodel":     ["That model id is not one this provider will serve. "
+                         + "Pick another in the model box - it offers {n}, "
+                         + "among them {names}.",
+                         "そのモデル ID はこのプロバイダーでは利用できません。"
+                         + "モデル欄から選び直してください（{n} 件、例: {names}）。"],
 
     /* ── stages ─────────────────────────────────────────────────────── */
     "stage.plan":       ["Planning the part", "部品を計画中"],

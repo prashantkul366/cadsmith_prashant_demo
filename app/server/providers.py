@@ -502,10 +502,17 @@ def bedrock_defaults(offered: list[str]) -> tuple[str, str]:
     picked: dict[str, str] = {}
     for role, families in _BEDROCK_FAMILIES.items():
         for family in families:
-            # A cross-region profile ("us.anthropic.claude-...") is invokable
-            # where the bare foundation id increasingly is not, so prefer one.
+            # Two preferences, strongest first. A cross-region profile
+            # ("us.anthropic.claude-...") is invokable where the bare
+            # foundation id increasingly is not. And a complete Bedrock id
+            # carries a version suffix - anything without one has been seen
+            # listed by an account and then refused at invoke time, which
+            # costs a whole run to discover. Both only decide between ids
+            # the account itself offered, so nothing is excluded from the
+            # box; this picks which one is filled in by default.
             matches = sorted((m for m in offered if family in m.lower()),
-                             key=lambda m: (not m.startswith("anthropic."), m),
+                             key=lambda m: (not m.startswith("anthropic."),
+                                            ":" in m, m),
                              reverse=True)
             if matches:
                 picked[role] = matches[0]
