@@ -52,6 +52,11 @@ def executable() -> str | None:
 
 
 def generate(page, prompt: str) -> None:
+    # One composer: a second prompt edits the part on screen unless the +
+    # says otherwise. Starting a part is what this helper means.
+    if page.locator("#verPill").is_visible():
+        page.click("#newBtn")
+        page.wait_for_timeout(200)
     page.fill("#prompt", prompt)
     page.click("#genBtn")
     page.wait_for_function("() => S.busy === false", timeout=180000)

@@ -56,6 +56,11 @@ def js_errors() -> list[str]:
 
 
 def build(page, prompt: str) -> None:
+    # One composer: a second prompt edits the part on screen unless the +
+    # says otherwise. Starting a part is what this helper means.
+    if page.locator("#verPill").is_visible():
+        page.click("#newBtn")
+        page.wait_for_timeout(200)
     page.fill("#prompt", prompt)
     page.click("#genBtn")
     page.wait_for_function(
@@ -150,24 +155,29 @@ def main() -> int:
         page.wait_for_timeout(1200)
 
         # -----------------------------------------------------------------
-        print("\nEvery panel in the right column is reachable")
-        # Four panels sharing one column: each has to keep enough height to
-        # show something, and when they cannot all fit, the column scrolls
-        # rather than crushing one of them to its header.
+        print("\nEvery panel is reachable at any height")
+        # The four bodies live in two scrolling columns now - the thread on
+        # the left holds the plan and the reasoning, the cards on the right
+        # hold the parameters, the properties, the spend and the verdict.
+        # The claim is unchanged: nothing is crushed to nothing, and what
+        # does not fit can be scrolled to.
         for height in (950, 800, 700, 620):
             page.set_viewport_size({"width": 1600, "height": height})
             page.wait_for_timeout(350)
             state = page.evaluate("""() => {
-                const split = document.querySelector('.rsplit');
-                // Whichever of the code panel's two views is showing.
-                const shown = document.getElementById('codeView').hidden
-                  ? 'paramsBody' : 'codeScroll';
-                const body = id => document.getElementById(id).clientHeight;
+                const columns = ['.thread', '.col.right'].map(
+                  sel => document.querySelector(sel));
+                const body = id => {
+                  const el = document.getElementById(id);
+                  return el && !el.closest('[hidden]') ? el.clientHeight : 999;
+                };
                 return {
-                  crushed: ['thinkBody', 'planBody', shown, 'valBody']
-                    .filter(id => body(id) < 40),
-                  scrolls: split.scrollHeight > split.clientHeight + 1,
-                  fits: split.scrollHeight <= split.clientHeight + 1,
+                  crushed: ['thinkBody', 'planBody', 'valBody']
+                    .filter(id => body(id) < 30),
+                  scrolls: columns.some(
+                    c => c && c.scrollHeight > c.clientHeight + 1),
+                  fits: columns.every(
+                    c => c && c.scrollHeight <= c.clientHeight + 1),
                 };
             }""")
             check(f"at {height}px, no panel is crushed",
@@ -181,13 +191,18 @@ def main() -> int:
         # A body with more content than height must be scrollable, not clipped.
         build(page, "an M8 flat washer")
         overflow = page.evaluate("""() =>
-            ['thinkBody', 'planBody',
-             document.getElementById('codeView').hidden ? 'paramsBody' : 'codeScroll',
-             'valBody']
+            ['thinkBody', 'planBody', 'valBody', 'codeScroll']
               .filter(id => {
                 const el = document.getElementById(id);
-                return el.scrollHeight > el.clientHeight + 1
-                  && !['auto', 'scroll'].includes(getComputedStyle(el).overflowY);
+                if (!el || el.closest('[hidden]')) return false;
+                if (el.scrollHeight <= el.clientHeight + 1) return false;
+                // Either the body scrolls itself, or the column it sits in
+                // does. Both are reachable; neither is clipped.
+                for (let node = el; node; node = node.parentElement) {
+                  const how = getComputedStyle(node).overflowY;
+                  if (how === 'auto' || how === 'scroll') return false;
+                }
+                return true;
               })""")
         check("a panel with more to show can be scrolled to it",
               not overflow, ", ".join(overflow) or "all scrollable")

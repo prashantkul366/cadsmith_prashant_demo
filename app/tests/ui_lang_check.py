@@ -40,6 +40,17 @@ JAPANESE_PROMPT = "M10の平座金"
 failures: list[str] = []
 
 
+def settings(page):
+    """Open the composer's settings menu if it is shut.
+
+    Provider, both model ids, the iteration count and a pasted key moved
+    behind the kebab beside the prompt, so a test that sets one opens it
+    the way a person does.
+    """
+    if page.locator("#moreMenu").is_hidden():
+        page.click("#moreBtn")
+
+
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'PASS' if ok else 'FAIL'}  {label}"
           f"{(' - ' + detail) if detail else ''}")
@@ -88,7 +99,7 @@ def main() -> int:
         for label, selector in (("the left column", ".col.left"),
                                 ("the viewer toolbar", ".vtools"),
                                 ("the right column", ".col.right"),
-                                ("the editor bar", ".cmd")):
+                                ("the composer", ".composer")):
             text = page.inner_text(selector)
             check(f"{label} is in Japanese", CJK.search(text) is not None,
                   " ".join(text.split())[:40])
@@ -152,6 +163,7 @@ def main() -> int:
             page.screenshot(path=str(shots / "03_back_to_english.png"))
 
         print("\nSwitching does not disturb what was typed into the form")
+        settings(page)
         page.fill("#optGenModel", "some/model-id")
         page.fill("#prompt", "M10の平座金")
         page.click('#langSw .lang[data-lang="ja"]')
@@ -184,6 +196,7 @@ def main() -> int:
         # holds until the run starts.
         page.click('#langSw .lang[data-lang="en"]')
         page.wait_for_timeout(400)
+        settings(page)
         page.select_option("#optProvider", "anthropic")
         page.wait_for_timeout(400)
         page.select_option("#optEffort", "low")

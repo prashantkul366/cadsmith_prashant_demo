@@ -871,6 +871,45 @@ function editing() {
   return Boolean(S.jobId) && S.versions.length > 0 && !S.busy;
 }
 
+/* Back to a blank sheet. Everything the thread shows belongs to one part,
+   so starting another clears all of it rather than leaving a previous
+   part's plan above a new one's prompt. The run itself is untouched - it is
+   in History, and it is still on disk. */
+function startNewPart() {
+  if (S.busy) return;
+  S.jobId = null;
+  S.versions = [];
+  S.selected = -1;
+  S.designPlan = null;
+  S.catalog = null;
+  if (S.stream) { S.stream.close(); S.stream = null; }
+  showAsk("");
+  $("#verPill").hidden = true;
+  // Written straight back to their waiting state: renderPlan and
+  // renderValidation both describe a version, and there is no version now.
+  const waiting = key =>
+    `<div class="await"><span>${esc(t(key))}</span></div>`;
+  $("#planBody").innerHTML = waiting("plan.none");
+  $("#valBody").innerHTML = waiting("val.none");
+  thinkReset();
+  setThinkOpen(false);
+  $("#thinkSummary").textContent = t("think.heading");
+  resetUsage();
+  $("#iters").innerHTML = "";
+  ["props", "tokens", "params"].forEach(name => showCard(name, false));
+  paramsReset();
+  setCode("");
+  Viewer.clear();
+  showOverlay("empty");
+  showView("model");
+  $("#drawBtn").disabled = true;
+  $("#prompt").value = "";
+  setComposerEnabled(true);
+  refreshComposer();
+  $("#prompt").focus();
+}
+$("#newBtn").onclick = startNewPart;
+
 function submitComposer() {
   if (S.busy) return;
   if (editing()) applyEdit();
@@ -2125,14 +2164,16 @@ $("#fullBtn").onclick = () => {
     // first). Nothing is broken; the page simply stays as it is.
   });
 };
-$("#expPng").onclick = async () => {
-  if (await ensureDrawing()) exportDrawingPng();
-};
+//: Two doors to each drawing format - the sheet's own bar, and the Export
+//: menu in the viewport toolbar that the sheet covers.
+const exportPng = async () => { if (await ensureDrawing()) exportDrawingPng(); };
+$("#expPng").onclick = exportPng;
+$("#menuPng").onclick = exportPng;
 
 /* The DXF is the drawing; the SVG on screen is a picture of it. Its
    dimensions are real DIMENSION entities, so whatever opens the file
    re-measures the geometry rather than trusting a string. */
-$("#expDxf").onclick = () => {
+const exportDxf = () => {
   const version = S.versions[S.selected];
   if (!S.jobId || !version) { warnToast(t("draw.needpart")); return; }
   const link = document.createElement("a");
@@ -2141,6 +2182,8 @@ $("#expDxf").onclick = () => {
   link.click();
   toast(t("draw.dxfstarted"));
 };
+$("#expDxf").onclick = exportDxf;
+$("#menuDxf").onclick = exportDxf;
 
 /* ═══════════════════════ interface language ═══════════════════════ */
 

@@ -332,8 +332,16 @@ const Viewer = (() => {
       svg += `<circle class="axhit" data-view="${AXIS_VIEW[name]}" cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="6.5"><title>${name}</title></circle>`;
     }
     svg += `<circle class="axhit" data-view="iso" cx="${cx}" cy="${cy}" r="6"><title>ISO</title></circle>`;
-    axisGroup.innerHTML = svg;
+    // Only when it actually changed. This runs once per animation frame, so
+    // rewriting unconditionally replaced the hit targets sixty times a
+    // second - which is a lot of DOM for a still camera, and means the
+    // circles are never the same element long enough to be clicked.
+    if (svg !== lastAxes) {
+      lastAxes = svg;
+      axisGroup.innerHTML = svg;
+    }
   }
+  let lastAxes = "";
 
   document.querySelector("#axes").addEventListener("click", event => {
     const hit = event.target.closest(".axhit");

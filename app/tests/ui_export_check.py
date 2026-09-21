@@ -71,6 +71,11 @@ def settle(page, timeout: int = 240000) -> None:
 
 
 def generate(page, prompt: str) -> None:
+    # One composer: a second prompt edits the part on screen unless the +
+    # says otherwise. Starting a part is what this helper means.
+    if page.locator("#verPill").is_visible():
+        page.click("#newBtn")
+        page.wait_for_timeout(200)
     page.fill("#prompt", prompt)
     page.click("#genBtn")
     settle(page)
@@ -206,6 +211,8 @@ def main() -> int:
             ("a compression spring, 2mm wire, 20mm od, 50mm long", "geometry"),
         ]
         for prompt, expect in sequence:
+            if page.locator("#verPill").is_visible():
+                page.click("#newBtn")
             page.fill("#prompt", prompt)
             page.click("#genBtn")
             deadline = time.time() + 200

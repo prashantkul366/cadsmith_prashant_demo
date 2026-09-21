@@ -57,6 +57,10 @@ def executable() -> str | None:
 
 
 def run(page, prompt: str, timeout_ms: int = 180000) -> float:
+    # One composer means a second prompt edits the part on screen unless
+    # you say otherwise, which is what the + does.
+    if page.locator("#verPill").is_visible():
+        page.click("#newBtn")
     page.fill("#prompt", prompt)
     started = time.time()
     page.click("#genBtn")

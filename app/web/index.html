@@ -131,6 +131,13 @@
       <textarea class="prompt" id="prompt" data-i18n-ph="input.placeholder"
                 placeholder="Describe the part you want to generate…"></textarea>
       <div class="crow">
+        <!-- With one composer, "another part" and "change this part" are
+             the same box. This is what says which: without it the only way
+             back to a blank sheet is History or a reload. -->
+        <button class="kebab" id="newBtn" data-i18n-title="input.newpart"
+                title="Start a new part">
+          <svg class="icn" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
         <button class="kebab" id="moreBtn" aria-haspopup="menu" aria-expanded="false"
                 data-i18n-title="opt.more" title="Model and run settings">
           <svg class="icn" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
@@ -240,8 +247,8 @@
           <button class="expitem" id="dlStl" role="menuitem">STL<small data-i18n="export.stl">mesh, for printing</small></button>
           <button class="expitem" id="dlPy" role="menuitem">.py<small data-i18n="export.py">the CadQuery script</small></button>
           <div class="expsep"></div>
-          <button class="expitem" id="expDxf" role="menuitem">DXF<small data-i18n="export.dxf">the drawing, re-measurable</small></button>
-          <button class="expitem" id="expPng" role="menuitem">PNG<small data-i18n="export.png">the drawing, as a picture</small></button>
+          <button class="expitem" id="menuDxf" role="menuitem">DXF<small data-i18n="export.dxf">the drawing, re-measurable</small></button>
+          <button class="expitem" id="menuPng" role="menuitem">PNG<small data-i18n="export.png">the drawing, as a picture</small></button>
         </div>
       </div>
 
@@ -382,6 +389,12 @@
   <div class="sheet-bar">
     <span class="eyebrow" data-i18n="draw.heading">ENGINEERING DRAWING</span>
     <div class="spacer" style="flex:1"></div>
+    <!-- The drawing's own formats, on the drawing. The Export menu offers
+         them too, but the menu is in the viewport toolbar and the sheet
+         covers it - so looking at a drawing would have meant no way to
+         download one. -->
+    <button class="btn sm" id="expDxf" data-i18n="draw.exportdxf">Download DXF</button>
+    <button class="btn sm" id="expPng" data-i18n="draw.exportpng">Export PNG</button>
     <button class="btn sm primary" id="back3d" data-i18n="draw.back3d">Back to 3D</button>
   </div>
   <div class="sheet-scroll"><div class="paper" id="paper"></div></div>

@@ -30,6 +30,17 @@ _CANDIDATE_BROWSERS = [
 ]
 
 
+def settings(page):
+    """Open the composer's settings menu if it is shut.
+
+    Provider, both model ids, the iteration count and a pasted key moved
+    behind the kebab beside the prompt, so a test that sets one opens it
+    the way a person does.
+    """
+    if page.locator("#moreMenu").is_hidden():
+        page.click("#moreBtn")
+
+
 def _executable_path() -> str | None:
     for candidate in _CANDIDATE_BROWSERS:
         if Path(candidate).exists():
@@ -105,6 +116,7 @@ def main() -> int:
                   "[...document.querySelectorAll('#optProvider option')]"
                   ".map(o => o.textContent).join('|')"))
 
+        settings(page)
         page.select_option("#optProvider", "ollama")
         page.wait_for_timeout(500)
         note = page.locator("#providerNote").inner_text()
@@ -117,11 +129,13 @@ def main() -> int:
         check("the key field appears when setup is needed",
               page.locator("#keyRow").is_visible())
 
+        settings(page)
         page.select_option("#optProvider", "custom")
         page.wait_for_timeout(400)
         check("a custom backend exposes its base URL",
               page.locator("#providerBase").is_visible())
 
+        settings(page)
         page.select_option("#optProvider", "anthropic")
         page.wait_for_timeout(400)
         check("model roles are prefilled per provider",
@@ -131,6 +145,7 @@ def main() -> int:
               f'{page.locator("#optJudgeModel").input_value()}')
 
         # Configure a backend through the UI, which is also how a key gets in.
+        settings(page)
         page.select_option("#optProvider", "custom")
         page.wait_for_timeout(400)
         page.fill("#providerBase", "http://127.0.0.1:9/v1")
@@ -161,12 +176,14 @@ def main() -> int:
         check("a gateway with no declared default leaves the model empty",
               page.locator("#optGenModel").input_value() == "",
               page.locator("#optGenModel").input_value())
+        settings(page)
         page.fill("#optGenModel", "same-model")
         page.fill("#optJudgeModel", "same-model")
         page.wait_for_timeout(400)
         check("using one model for both roles is flagged",
               "grades its own work" in page.locator("#providerNote").inner_text(),
               page.locator("#providerNote").inner_text()[:60])
+        settings(page)
         page.fill("#optJudgeModel", "stronger-model")
         page.wait_for_timeout(400)
         check("a distinct judge model clears the warning",
@@ -181,6 +198,7 @@ def main() -> int:
         # follows the chosen backend rather than sitting there inert.
         check("no picker for a backend with no effort parameter",
               page.locator("#effortRow").is_hidden())
+        settings(page)
         page.select_option("#optProvider", "anthropic")
         page.wait_for_timeout(400)
         check("and it is on screen for a Claude backend",
@@ -201,6 +219,7 @@ def main() -> int:
         page.wait_for_timeout(200)
         check("choosing a level sticks",
               page.locator("#optEffort").input_value() == "low")
+        settings(page)
         page.select_option("#optProvider", "custom")
         page.wait_for_timeout(400)
         page.select_option("#optProvider", "anthropic")
@@ -209,6 +228,7 @@ def main() -> int:
               page.locator("#optEffort").input_value() == "low",
               page.locator("#optEffort").input_value())
         page.select_option("#optEffort", "high")
+        settings(page)
         page.select_option("#optProvider", "custom")
         page.wait_for_timeout(400)
 
@@ -410,6 +430,19 @@ def main() -> int:
         page.screenshot(path=str(out / "11-replay-done.png"))
 
         print("\nViews")
+        # The gizmo lives in the viewport, and by now the run has been
+        # through the code view and the drawing. Come back to the model
+        # first, the way a person would before reaching for a view control.
+        if page.locator("#sheet.on").count():
+            page.click("#back3d")
+        page.click('#viewSeg .vsegb[data-view="model"]')
+        page.wait_for_timeout(400)
+        # The model spins by default, and the gizmo turns with the camera,
+        # so nothing in the viewport holds still enough to be clicked. Stop
+        # it first - which is what the chip is for.
+        if page.evaluate("() => Viewer.spin"):
+            page.click("#spinBtn")
+            page.wait_for_timeout(400)
         page.click('#axes .axhit[data-view="front"]')
         page.wait_for_timeout(900)
         page.screenshot(path=str(out / "06-front-view.png"))

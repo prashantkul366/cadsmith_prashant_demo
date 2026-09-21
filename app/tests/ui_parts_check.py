@@ -40,6 +40,17 @@ failures: list[str] = []
 timings: list[dict] = []
 
 
+def settings(page):
+    """Open the composer's settings menu if it is shut.
+
+    Provider, both model ids, the iteration count and a pasted key moved
+    behind the kebab beside the prompt, so a test that sets one opens it
+    the way a person does.
+    """
+    if page.locator("#moreMenu").is_hidden():
+        page.click("#moreBtn")
+
+
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'PASS' if ok else 'FAIL'}  {label}{(' - ' + detail) if detail else ''}")
     if not ok:
@@ -82,6 +93,7 @@ PROMPTS = [
 
 
 def configure_provider(page, base_url: str) -> None:
+    settings(page)
     page.select_option("#optProvider", "custom")
     page.wait_for_timeout(400)
     page.fill("#providerBase", base_url)
@@ -241,7 +253,7 @@ def main() -> int:
             # Force the clicks anyway: a disabled button a person can still
             # reach through the keyboard must not start a second run.
             page.evaluate("document.querySelector('#genBtn').click()")
-            page.evaluate("document.querySelector('#viewSeg .vsegb[data-view=\\"drawing\\"]').click()")
+            page.evaluate("document.querySelector(\"#viewSeg .vsegb[data-view='drawing']\").click()")
             page.wait_for_timeout(400)
             in_flight = page.evaluate("S.jobId")
 

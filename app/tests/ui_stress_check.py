@@ -38,6 +38,17 @@ failures: list[str] = []
 console: list[str] = []
 
 
+def settings(page):
+    """Open the composer's settings menu if it is shut.
+
+    Provider, both model ids, the iteration count and a pasted key moved
+    behind the kebab beside the prompt, so a test that sets one opens it
+    the way a person does.
+    """
+    if page.locator("#moreMenu").is_hidden():
+        page.click("#moreBtn")
+
+
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'PASS' if ok else 'FAIL'}  {label}{(' - ' + detail) if detail else ''}")
     if not ok:
@@ -75,6 +86,7 @@ def settle(page, timeout: int = 240000) -> None:
 
 
 def configure_mock(page, port: int) -> None:
+    settings(page)
     page.select_option("#optProvider", "custom")
     page.wait_for_timeout(400)
     page.fill("#providerBase", f"http://127.0.0.1:{port}/v1")
@@ -175,7 +187,7 @@ def main() -> int:
                         page.click(selector, timeout=2500)
                     except Exception:
                         pass
-                page.evaluate("document.querySelector('#viewSeg .vsegb[data-view=\\"drawing\\"]').click()")
+                page.evaluate("document.querySelector(\"#viewSeg .vsegb[data-view='drawing']\").click()")
                 page.evaluate("document.querySelector('#genBtn').click()")
                 page.evaluate("document.querySelector('#genBtn').click()")
                 for key in ("w", "h", "d", "f", "Escape"):
@@ -204,6 +216,7 @@ def main() -> int:
             page.wait_for_selector("#ovPipe:not([hidden])", timeout=20000)
             page.wait_for_timeout(1200)
             try:
+                settings(page)
                 page.select_option("#optProvider", "anthropic", timeout=3000)
                 page.wait_for_timeout(600)
                 page.select_option("#optProvider", "custom", timeout=3000)
@@ -245,6 +258,7 @@ def main() -> int:
             # defaults to fall back on. Put them back, exactly as a person
             # would have to before generating again - otherwise this is a
             # test of the "no model chosen" message, which is elsewhere.
+            settings(page)
             page.fill("#optGenModel", "mock-coder")
             page.fill("#optJudgeModel", "mock-judge")
             page.wait_for_timeout(300)
