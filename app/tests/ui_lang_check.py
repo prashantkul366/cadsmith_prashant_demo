@@ -49,6 +49,8 @@ def settings(page):
     """
     if page.locator("#moreMenu").is_hidden():
         page.click("#moreBtn")
+    page.wait_for_selector("#moreMenu:not([hidden])", timeout=5000)
+    page.wait_for_timeout(120)
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
