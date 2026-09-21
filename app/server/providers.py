@@ -427,8 +427,14 @@ def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
             # Absent the field, assume on-demand: an older control plane
             # that does not report it predates the profile-only models.
             kinds = entry.get("inferenceTypesSupported")
-            if kinds is None or "ON_DEMAND" in kinds:
-                ids.add(model_id)
+            if kinds is not None and "ON_DEMAND" not in kinds:
+                continue
+            # A model on its way out is still listed, and still answers, but
+            # it is not what anyone means by "what can I use".
+            lifecycle = (entry.get("modelLifecycle") or {}).get("status")
+            if lifecycle and lifecycle != "ACTIVE":
+                continue
+            ids.add(model_id)
     except Exception:
         pass
     try:
@@ -436,6 +442,11 @@ def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
                 "inferenceProfileSummaries", []):
             profile_id = entry.get("inferenceProfileId", "")
             if not profile_id:
+                continue
+            # A profile that is not ACTIVE is listed and cannot be invoked,
+            # which is the one thing this list exists to rule out.
+            status = entry.get("status")
+            if status and status != "ACTIVE":
                 continue
             carries = " ".join(m.get("modelArn", "")
                                for m in entry.get("models") or [])

@@ -197,8 +197,14 @@ prefix and a version suffix, and most recent Claude models can only be
 invoked through a cross-region *inference profile*
 (`us.anthropic.claude-sonnet-4-5-...`) rather than by the bare foundation id.
 The app asks your account for both lists and offers what you can actually
-invoke, so take the model box's suggestions rather than typing a name. For
-the command-line evaluations, name one explicitly:
+invoke, so take the model box's suggestions rather than typing a name. To
+see the list from a terminal:
+
+```powershell
+.venv\Scripts\python -c "from app.server import providers; print(chr(10).join(providers.list_models('bedrock')))"
+```
+
+For the command-line evaluations, name one explicitly:
 
 ```bash
 python -m app.tools.eval_parts --provider bedrock \

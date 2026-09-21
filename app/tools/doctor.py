@@ -448,6 +448,7 @@ def _check_claude(config, args, providers) -> None:
              _advice(str(exc)))
         return
 
+    offered: list[str] = []
     if config.kind == "bedrock":
         offered = providers.list_models("bedrock", timeout=args.timeout)
         if offered:
@@ -481,6 +482,14 @@ def _check_claude(config, args, providers) -> None:
         except Exception as exc:
             fail(f"{role} model answers", f"{model} - {type(exc).__name__}: {exc}",
                  _advice(str(exc)))
+            # The list is what the next command needs, so print it here
+            # rather than leaving "27 offered" and no way to see which 27.
+            if offered:
+                print(f"\n  {DIM}Models this account can invoke:{RESET}")
+                for name in offered:
+                    print(f"    {DIM}{name}{RESET}")
+                print(f"\n  {DIM}Name one with --generation-model and "
+                      f"--judge-model.{RESET}")
             if role == "generation":
                 return
 
