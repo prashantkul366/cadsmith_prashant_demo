@@ -172,8 +172,8 @@ def main() -> int:
               "STANDARD" in page.locator("#iters").inner_text(),
               page.locator("#iters").inner_text().replace("\n", " ")[:40])
         check("the viewer titles it a standard part",
-              "Standard part" in page.locator("#mtitle").inner_text(),
-              page.locator("#mtitle").inner_text())
+              "Standard part" in page.locator("#mtitle").text_content(),
+              page.locator("#mtitle").text_content())
         # The panel opens on the parameter controls; the source is the other
         # view of the same script.
         page.click('#viewSeg .vsegb[data-view="code"]')

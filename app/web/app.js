@@ -678,7 +678,7 @@ async function selectVersion(index, options) {
   // stays available without an API key; the agent path reports its own need.
   const canRebuild = !!(S.health && S.health.checks
                         && S.health.checks.cadquery.ok);
-  setComposerEnabled(canRebuild);
+  setEditable(canRebuild);
 }
 
 /* ═══════════════════════ panels ═══════════════════════ */
@@ -861,14 +861,26 @@ function renderValidation(version) {
    is from whether there is a part on screen, so nobody has to learn the
    difference between describing and editing. */
 
+//: Only while a run is in flight. Nothing else may take the prompt away:
+//: describing a part is always allowed, whatever is or is not on screen.
 function setComposerEnabled(on) {
   $("#prompt").disabled = !on;
   $("#genBtn").disabled = !on;
 }
 
+/* Whether the part on screen can be rebuilt. A version that cannot -
+   a replay, or one whose script is gone - is not an error to report by
+   disabling the only text box in the app; it just means the next thing
+   typed starts a new part rather than editing this one. */
+function setEditable(can) {
+  S.canRebuild = can !== false;
+  refreshComposer();
+}
+
 //: True once there is something to change, which is what makes this an edit.
 function editing() {
-  return Boolean(S.jobId) && S.versions.length > 0 && !S.busy;
+  return Boolean(S.jobId) && S.versions.length > 0
+         && S.canRebuild !== false && !S.busy;
 }
 
 /* Back to a blank sheet. Everything the thread shows belongs to one part,
@@ -882,6 +894,7 @@ function startNewPart() {
   S.selected = -1;
   S.designPlan = null;
   S.catalog = null;
+  S.canRebuild = true;
   if (S.stream) { S.stream.close(); S.stream = null; }
   showAsk("");
   $("#verPill").hidden = true;
@@ -925,6 +938,9 @@ function refreshComposer() {
   box.setAttribute("data-i18n-ph", key);
   $("#genBtn").title = t(editing() ? "edit.apply" : "input.generate");
 }
+
+//: Reaching for the prompt means the settings are finished with.
+$("#prompt").addEventListener("focus", closeMore);
 
 $("#prompt").addEventListener("keydown", event => {
   // Enter sends. A part description is a sentence, not a document, and
@@ -1042,6 +1058,10 @@ function thinkSummary() {
 
 function finishRun(data) {
   thinkSummary();
+  // The run held the composer while it worked; give it back. selectVersion
+  // decides only whether the next thing typed edits this part or starts
+  // another, never whether anything may be typed at all.
+  setComposerEnabled(true);
   refreshComposer();
   S.busy = false;
   Viewer.building = false;
@@ -1096,6 +1116,7 @@ function modelAdvice(message) {
 
 function failRun(message) {
   S.busy = false;
+  setComposerEnabled(true);
   Viewer.building = false;
   thinkIdle();
   $("#genBtn").disabled = !(S.health && S.health.can_generate);
@@ -1930,7 +1951,7 @@ async function loadParameters(iteration) {
   S.paramBase = iteration;
   S.paramDraft = {};
   S.paramLoading = true;
-  if (S.paramView === "params") renderParameters();
+  renderParameters();
 
   try {
     // Both at once, and both here: the controls patch the source, so a
@@ -1956,7 +1977,7 @@ async function loadParameters(iteration) {
   }
 
   S.paramLoading = false;
-  if (S.paramView === "params") renderParameters();
+  renderParameters();
   setStat();
 }
 
@@ -1968,7 +1989,7 @@ function paramsReset() {
   S.paramBase = null;
   S.paramLoading = false;
   endParameterRebuild();
-  if (S.paramView === "params") renderParameters();
+  renderParameters();
   setStat();
 }
 
@@ -2244,8 +2265,8 @@ function relocalise() {
   } else if (S.genModel || S.judgeModel) {
     setModelLabels(S.genModel, S.judgeModel);
   }
-  if (S.paramView === "params") renderParameters();
-  if (S.codeLines !== undefined || S.paramView === "params") setStat();
+  renderParameters();
+  if (S.codeLines !== undefined) setStat();
   if (S.stage) renderStages(S.stage.key, S.stage.detail);
   renderUsage();
   if (!S.replay) resetPill();

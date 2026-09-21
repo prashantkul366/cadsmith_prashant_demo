@@ -88,8 +88,10 @@ def main() -> int:
         check("the app opens in English",
               page.get_attribute("html", "lang") == "en",
               page.get_attribute("html", "lang"))
+        # Lower-cased because the eyebrows are upper-cased by CSS, and
+        # inner_text reports what is painted rather than what is written.
         check("and reads as English",
-              "Design Input" in page.inner_text(".col.left"))
+              "benchmark prompts" in page.inner_text(".col.left").lower())
 
         print("\nSwitching to Japanese redraws the interface")
         page.click('#langSw .lang[data-lang="ja"]')
@@ -206,11 +208,11 @@ def main() -> int:
             "[...document.querySelectorAll('#optEffort option')]"
             ".map(o => o.textContent).join('|')")
         check("the levels are in Japanese", "低（最速）" in labels, labels)
-        check("and the label above them too",
-              "推論の深さ" in page.evaluate(
-                  "document.querySelector('#effortRow span').textContent"),
-              page.evaluate(
-                  "document.querySelector('#effortRow span').textContent"))
+        # The label is the control's accessible name now - the design has
+        # the effort as a chip in the composer with no text beside it.
+        check("and the control is named in Japanese too",
+              "推論の深さ" in page.get_attribute("#optEffort", "aria-label"),
+              page.get_attribute("#optEffort", "aria-label"))
         check("and the level chosen is still chosen",
               page.input_value("#optEffort") == "low",
               page.input_value("#optEffort"))

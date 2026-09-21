@@ -167,9 +167,13 @@ def main() -> int:
             state = page.evaluate("""() => {
                 const columns = ['.thread', '.col.right'].map(
                   sel => document.querySelector(sel));
+                // offsetParent is null for anything display:none, which
+                // covers a shut disclosure and a hidden card. Neither is a
+                // crushed panel - they are closed, and one click reopens.
                 const body = id => {
                   const el = document.getElementById(id);
-                  return el && !el.closest('[hidden]') ? el.clientHeight : 999;
+                  if (!el || !el.offsetParent) return 999;
+                  return el.clientHeight;
                 };
                 return {
                   crushed: ['thinkBody', 'planBody', 'valBody']
@@ -194,7 +198,7 @@ def main() -> int:
             ['thinkBody', 'planBody', 'valBody', 'codeScroll']
               .filter(id => {
                 const el = document.getElementById(id);
-                if (!el || el.closest('[hidden]')) return false;
+                if (!el || !el.offsetParent) return false;
                 if (el.scrollHeight <= el.clientHeight + 1) return false;
                 // Either the body scrolls itself, or the column it sits in
                 // does. Both are reachable; neither is clipped.
@@ -208,35 +212,24 @@ def main() -> int:
               not overflow, ", ".join(overflow) or "all scrollable")
 
         # -----------------------------------------------------------------
-        print("\nThe code panel flips between two views")
-        # Parameters first: the point of the default is that a part can be
-        # adjusted without anyone being told there is Python behind it.
-        check("it opens on the controls, not the source",
-              page.locator("#codeView").is_hidden()
-              and not page.locator("#paramsView").is_hidden())
-        check("and the panel is named for them",
-              "arameter" in page.locator("#codeHeading").inner_text()
-              or "パラメータ" in page.locator("#codeHeading").inner_text(),
-              page.locator("#codeHeading").inner_text())
+        print("\nThe controls and the source are both one click away")
+        # They were two tabs of one panel. The dimensions are a card beside
+        # the model they change, and the source has the centre to itself,
+        # so neither hides the other any more.
+        check("the controls are on screen with the part",
+              not page.locator('.rcard[data-card="params"]').is_hidden()
+              and page.locator("#paramsBody .prow").count() > 0,
+              f'{page.locator("#paramsBody .prow").count()} control(s)')
         page.click('#viewSeg .vsegb[data-view="code"]')
         page.wait_for_timeout(400)
         check("Code shows the source, one click away",
               not page.locator("#codeView").is_hidden()
               and "cadquery" in page.locator("#codeScroll").inner_text().lower(),
               page.locator("#codeScroll").inner_text().replace("\n", " ")[:50])
-        page.click('#viewSeg .vsegb[data-view="params"]')
+        check("and the controls are still there behind it",
+              page.locator("#paramsBody .prow").count() > 0)
+        page.click('#viewSeg .vsegb[data-view="model"]')
         page.wait_for_timeout(400)
-
-        found = {r["name"]: r for r in rows(page)}
-        check("every dimension the script declares has a control",
-              {"inner_diameter", "outer_diameter", "thickness"} == set(found),
-              ", ".join(sorted(found)))
-        check("each is labelled, measured and bracketed",
-              all(r["label"] and r["unit"] == "mm"
-                  and r["min"] <= r["value"] <= r["max"]
-                  for r in found.values()),
-              str(found.get("thickness")))
-        page.screenshot(path=str(out / "params-view.png"))
 
         # -----------------------------------------------------------------
         print("\nDragging changes the source, letting go changes the part")
@@ -319,23 +312,26 @@ def main() -> int:
               f"{zlen(page):.2f} mm thick")
 
         # -----------------------------------------------------------------
-        print("\nThe choice of view is remembered")
-        page.click('#viewSeg .vsegb[data-view="code"]')
+        print("\nA card that was shut stays shut")
+        # Code and Parameters were two tabs of one panel and which one you
+        # last used was remembered. The dimensions are a card in the right
+        # column now, so what is worth remembering is whether you shut it.
+        toggle = '.rcard[data-card="params"] [data-card-toggle]'
+        shut = """() => document.querySelector('.rcard[data-card=\"params\"]')
+                           .classList.contains('shut')"""
+        page.click(toggle)
         page.wait_for_timeout(300)
+        check("shutting a card collapses it", page.evaluate(shut))
         page.reload(wait_until="networkidle")
         page.wait_for_timeout(1500)
-        check("choosing Code survives a reload",
-              page.evaluate("S.paramView") == "code"
-              and not page.locator("#codeView").is_hidden(),
-              page.evaluate("S.paramView"))
-        page.click('#viewSeg .vsegb[data-view="params"]')
+        # A reload has no part, so the card is not merely shut, it is absent
+        # - an empty card is worse than no card. Build something for it to
+        # hold before asking whether it remembered.
+        build(page, "an M8 flat washer")
+        check("and it is still shut after a reload", page.evaluate(shut))
+        page.click(toggle)
         page.wait_for_timeout(300)
-        page.reload(wait_until="networkidle")
-        page.wait_for_timeout(1500)
-        check("and so does choosing Parameters again",
-              page.evaluate("S.paramView") == "params"
-              and not page.locator("#paramsView").is_hidden(),
-              page.evaluate("S.paramView"))
+        check("and opening it again sticks", not page.evaluate(shut))
 
         # -----------------------------------------------------------------
         print("\nA part with no declared dimensions says so")

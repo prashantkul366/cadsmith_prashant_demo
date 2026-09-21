@@ -143,7 +143,8 @@
           <svg class="icn" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
         </button>
         <div class="effortchip" id="effortRow">
-          <select id="optEffort" data-i18n-title="opt.effort.tip"
+          <select id="optEffort" data-i18n-label="opt.effort"
+                  aria-label="Reasoning effort" data-i18n-title="opt.effort.tip"
                   title="How hard the model is asked to think."></select>
         </div>
         <button class="modelchip" id="modelChip">
@@ -171,10 +172,9 @@
         </div>
       </div>
     </div>
-
-    <!-- Everything that decides how a run is made, one click from the
+      <!-- Everything that decides how a run is made, one click from the
          composer rather than always on screen. -->
-    <div class="moremenu" id="moreMenu" role="menu" hidden>
+      <div class="moremenu" id="moreMenu" role="menu" hidden>
       <div class="opt">
         <span data-i18n="opt.provider">Provider</span>
         <select id="optProvider"></select>
@@ -203,6 +203,7 @@
       </div>
       <div class="optnote" id="providerNote"></div>
     </div>
+
   </div>
 
   <!-- ══════════ CENTRE: viewer ══════════ -->

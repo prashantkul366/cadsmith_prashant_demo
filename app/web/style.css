@@ -287,9 +287,14 @@ textarea.prompt::placeholder{color:#535E6E}
 .composer .opt{background:var(--panel);border-radius:var(--r-sm);
   padding:7px 10px;margin:0}
 
-.moremenu{position:absolute;left:12px;right:12px;bottom:96px;z-index:40;
+/* Opens upward, over the thread. It belongs to the composer, so covering
+   the composer - and with it the prompt the settings are for - was the one
+   place it must not go. */
+.composer{position:relative}
+.moremenu{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:40;
   background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r-lg);
-  box-shadow:0 18px 44px rgba(0,0,0,.55);padding:11px 12px}
+  box-shadow:0 18px 44px rgba(0,0,0,.55);padding:11px 12px;
+  max-height:60vh;overflow-y:auto}
 .moremenu[hidden]{display:none}
 .col.left{position:relative}
 
