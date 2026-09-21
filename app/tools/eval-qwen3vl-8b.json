@@ -1,0 +1,1143 @@
+{
+  "when": "2026-09-20 21:20:21",
+  "provider": "custom",
+  "generation_model": "Qwen/Qwen3-VL-8B-Instruct",
+  "judge_model": "Qwen/Qwen3-VL-8B-Instruct",
+  "effort": "",
+  "iterations": 3,
+  "summary": {
+    "cases": 32,
+    "built": 21,
+    "passed": 13,
+    "checks": 106,
+    "checks_passed": 89,
+    "mean_seconds": 60.4,
+    "mean_seconds_paid": 76.7,
+    "total_tokens": 310816,
+    "total_llm_calls": 124
+  },
+  "by_tier": {
+    "medium": {
+      "cases": 6,
+      "built": 6,
+      "passed": 1
+    },
+    "very hard": {
+      "cases": 6,
+      "built": 0,
+      "passed": 0
+    },
+    "easy": {
+      "cases": 7,
+      "built": 7,
+      "passed": 5
+    },
+    "hard": {
+      "cases": 6,
+      "built": 1,
+      "passed": 0
+    },
+    "catalogue": {
+      "cases": 7,
+      "built": 7,
+      "passed": 7
+    }
+  },
+  "cases": [
+    {
+      "id": "block-plain",
+      "prompt": "A rectangular block 50mm long, 30mm wide and 20mm tall.",
+      "tier": "easy",
+      "built": true,
+      "converged": true,
+      "catalogue": false,
+      "passed": true,
+      "matched": 6,
+      "total": 6,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "50.00 vs 50.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "30.00 vs 30.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "20.00 vs 20.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "0 vs 0"
+        },
+        {
+          "name": "volume",
+          "ok": true,
+          "detail": "30000 vs 30000 mm\u00b3 (0.0% off)"
+        }
+      ],
+      "seconds": 24.7,
+      "iterations": 1,
+      "llm_calls": 4,
+      "tokens": 5576,
+      "error": ""
+    },
+    {
+      "id": "cylinder-bore",
+      "prompt": "A cylinder 150mm diameter and 50mm long with a 5mm diameter hole through the centre.",
+      "tier": "easy",
+      "built": true,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 3,
+      "total": 6,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": false,
+          "detail": "100.00 vs 150.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": false,
+          "detail": "100.00 vs 150.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": false,
+          "detail": "75.00 vs 50.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "1 vs 1"
+        },
+        {
+          "name": "bore diameters",
+          "ok": true,
+          "detail": "all present"
+        }
+      ],
+      "seconds": 101.7,
+      "iterations": 4,
+      "llm_calls": 10,
+      "tokens": 22226,
+      "error": ""
+    },
+    {
+      "id": "plate-four-holes",
+      "prompt": "A flat plate 100mm by 60mm by 8mm thick with four 6mm holes, one 10mm in from each corner.",
+      "tier": "easy",
+      "built": true,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 3,
+      "total": 6,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "100.00 vs 100.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "60.00 vs 60.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": false,
+          "detail": "12.01 vs 8.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": false,
+          "detail": "0 vs 4"
+        },
+        {
+          "name": "bore diameters",
+          "ok": false,
+          "detail": "missing 6, 6, 6, 6 mm (measured none)"
+        }
+      ],
+      "seconds": 108.9,
+      "iterations": 4,
+      "llm_calls": 10,
+      "tokens": 23730,
+      "error": ""
+    },
+    {
+      "id": "plate-counterbore",
+      "prompt": "A steel plate 80mm square and 12mm thick with a single 8mm hole through the centre.",
+      "tier": "easy",
+      "built": true,
+      "converged": true,
+      "catalogue": false,
+      "passed": true,
+      "matched": 6,
+      "total": 6,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "80.00 vs 80.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "80.00 vs 80.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "12.00 vs 12.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "1 vs 1"
+        },
+        {
+          "name": "bore diameters",
+          "ok": true,
+          "detail": "all present"
+        }
+      ],
+      "seconds": 24.8,
+      "iterations": 1,
+      "llm_calls": 4,
+      "tokens": 5666,
+      "error": ""
+    },
+    {
+      "id": "tube",
+      "prompt": "A tube 40mm outside diameter, 30mm inside diameter and 60mm long.",
+      "tier": "easy",
+      "built": true,
+      "converged": false,
+      "catalogue": false,
+      "passed": true,
+      "matched": 6,
+      "total": 6,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "40.00 vs 40.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "40.00 vs 40.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "60.00 vs 60.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "1 vs 1"
+        },
+        {
+          "name": "bore diameters",
+          "ok": true,
+          "detail": "all present"
+        }
+      ],
+      "seconds": 110.1,
+      "iterations": 4,
+      "llm_calls": 12,
+      "tokens": 28783,
+      "error": ""
+    },
+    {
+      "id": "l-bracket",
+      "prompt": "An L-shaped bracket, 80mm by 60mm, 5mm wall thickness, 40mm wide.",
+      "tier": "medium",
+      "built": true,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 2,
+      "total": 4,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "80.00 vs 80.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": false,
+          "detail": "60.00 vs 40.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": false,
+          "detail": "40.00 vs 60.00 mm"
+        }
+      ],
+      "seconds": 159.4,
+      "iterations": 1,
+      "llm_calls": 9,
+      "tokens": 25469,
+      "error": ""
+    },
+    {
+      "id": "hex-prism",
+      "prompt": "A hexagonal prism 30mm across the flats and 25mm tall.",
+      "tier": "medium",
+      "built": true,
+      "converged": true,
+      "catalogue": false,
+      "passed": true,
+      "matched": 3,
+      "total": 3,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "25.00 vs 25.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "0 vs 0"
+        }
+      ],
+      "seconds": 24.4,
+      "iterations": 1,
+      "llm_calls": 4,
+      "tokens": 6218,
+      "error": ""
+    },
+    {
+      "id": "flange",
+      "prompt": "A round flange 120mm outside diameter, 15mm thick, with a 40mm bore and six 9mm bolt holes on a 90mm pitch circle.",
+      "tier": "medium",
+      "built": true,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 2,
+      "total": 6,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": false,
+          "detail": "99.00 vs 120.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": false,
+          "detail": "86.94 vs 120.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "15.00 vs 15.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": false,
+          "detail": "0 vs 7"
+        },
+        {
+          "name": "bore diameters",
+          "ok": false,
+          "detail": "missing 9, 9, 9, 9, 9, 9, 40 mm (measured none)"
+        }
+      ],
+      "seconds": 161.3,
+      "iterations": 2,
+      "llm_calls": 10,
+      "tokens": 24079,
+      "error": ""
+    },
+    {
+      "id": "shaft-step",
+      "prompt": "A stepped shaft: 20mm diameter for 40mm long, then 12mm diameter for 30mm long.",
+      "tier": "medium",
+      "built": true,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 4,
+      "total": 5,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "20.00 vs 20.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "20.00 vs 20.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": false,
+          "detail": "110.00 vs 70.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "0 vs 0"
+        }
+      ],
+      "seconds": 148.1,
+      "iterations": 4,
+      "llm_calls": 10,
+      "tokens": 25678,
+      "error": ""
+    },
+    {
+      "id": "spacer",
+      "prompt": "A spacer 25mm outside diameter, 10.5mm bore, 8mm long.",
+      "tier": "easy",
+      "built": true,
+      "converged": true,
+      "catalogue": false,
+      "passed": true,
+      "matched": 6,
+      "total": 6,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "25.00 vs 25.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "25.00 vs 25.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "8.00 vs 8.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "1 vs 1"
+        },
+        {
+          "name": "bore diameters",
+          "ok": true,
+          "detail": "all present"
+        }
+      ],
+      "seconds": 30.8,
+      "iterations": 1,
+      "llm_calls": 4,
+      "tokens": 7106,
+      "error": ""
+    },
+    {
+      "id": "cover-plate",
+      "prompt": "A cover plate 150mm by 100mm by 6mm with a 50mm diameter hole in the middle.",
+      "tier": "easy",
+      "built": true,
+      "converged": true,
+      "catalogue": false,
+      "passed": true,
+      "matched": 6,
+      "total": 6,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "150.00 vs 150.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "100.00 vs 100.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "6.00 vs 6.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "1 vs 1"
+        },
+        {
+          "name": "bore diameters",
+          "ok": true,
+          "detail": "all present"
+        }
+      ],
+      "seconds": 26.8,
+      "iterations": 1,
+      "llm_calls": 4,
+      "tokens": 6004,
+      "error": ""
+    },
+    {
+      "id": "angle-bar",
+      "prompt": "An equal angle bar, 50mm by 50mm legs, 6mm thick, 200mm long.",
+      "tier": "medium",
+      "built": true,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 3,
+      "total": 4,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "200.00 vs 200.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "50.00 vs 50.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": false,
+          "detail": "78.00 vs 50.00 mm"
+        }
+      ],
+      "seconds": 168.1,
+      "iterations": 4,
+      "llm_calls": 13,
+      "tokens": 35495,
+      "error": ""
+    },
+    {
+      "id": "washer-catalogue",
+      "prompt": "An M10 flat washer.",
+      "tier": "catalogue",
+      "built": true,
+      "converged": true,
+      "catalogue": true,
+      "passed": true,
+      "matched": 7,
+      "total": 7,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "20.00 vs 20.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "20.00 vs 20.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "2.00 vs 2.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "1 vs 1"
+        },
+        {
+          "name": "bore diameters",
+          "ok": true,
+          "detail": "all present"
+        },
+        {
+          "name": "served from the catalogue",
+          "ok": true,
+          "detail": "no model call"
+        }
+      ],
+      "seconds": 2.0,
+      "iterations": 1,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": ""
+    },
+    {
+      "id": "bearing-catalogue",
+      "prompt": "A 6203 ball bearing.",
+      "tier": "catalogue",
+      "built": true,
+      "converged": true,
+      "catalogue": true,
+      "passed": true,
+      "matched": 7,
+      "total": 7,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "40.00 vs 40.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "40.00 vs 40.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "12.00 vs 12.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "3 vs 3"
+        },
+        {
+          "name": "bore diameters",
+          "ok": true,
+          "detail": "all present"
+        },
+        {
+          "name": "served from the catalogue",
+          "ok": true,
+          "detail": "no model call"
+        }
+      ],
+      "seconds": 2.0,
+      "iterations": 1,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": ""
+    },
+    {
+      "id": "screw-catalogue",
+      "prompt": "An M8x30 socket head cap screw.",
+      "tier": "catalogue",
+      "built": true,
+      "converged": true,
+      "catalogue": true,
+      "passed": true,
+      "matched": 2,
+      "total": 2,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "served from the catalogue",
+          "ok": true,
+          "detail": "no model call"
+        }
+      ],
+      "seconds": 2.0,
+      "iterations": 1,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": ""
+    },
+    {
+      "id": "gear-catalogue",
+      "prompt": "A 20 tooth spur gear, module 2.",
+      "tier": "catalogue",
+      "built": true,
+      "converged": true,
+      "catalogue": true,
+      "passed": true,
+      "matched": 6,
+      "total": 6,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "44.00 vs 44.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "44.00 vs 44.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "10.00 vs 10.00 mm"
+        },
+        {
+          "name": "bore diameters",
+          "ok": true,
+          "detail": "all present"
+        },
+        {
+          "name": "served from the catalogue",
+          "ok": true,
+          "detail": "no model call"
+        }
+      ],
+      "seconds": 2.8,
+      "iterations": 1,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": ""
+    },
+    {
+      "id": "nut-catalogue",
+      "prompt": "An M12 hex nut.",
+      "tier": "catalogue",
+      "built": true,
+      "converged": true,
+      "catalogue": true,
+      "passed": true,
+      "matched": 3,
+      "total": 3,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "1 vs 1"
+        },
+        {
+          "name": "served from the catalogue",
+          "ok": true,
+          "detail": "no model call"
+        }
+      ],
+      "seconds": 2.0,
+      "iterations": 1,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": ""
+    },
+    {
+      "id": "pin-catalogue",
+      "prompt": "A 6mm dowel pin 30mm long.",
+      "tier": "catalogue",
+      "built": true,
+      "converged": true,
+      "catalogue": true,
+      "passed": true,
+      "matched": 6,
+      "total": 6,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "6.00 vs 6.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "6.00 vs 6.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "30.00 vs 30.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": true,
+          "detail": "0 vs 0"
+        },
+        {
+          "name": "served from the catalogue",
+          "ok": true,
+          "detail": "no model call"
+        }
+      ],
+      "seconds": 2.0,
+      "iterations": 1,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": ""
+    },
+    {
+      "id": "motor-mount",
+      "prompt": "A NEMA 17 motor mounting plate, 6mm thick, with the four mounting holes and a 23mm central clearance hole.",
+      "tier": "medium",
+      "built": true,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 1,
+      "total": 2,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "hole count",
+          "ok": false,
+          "detail": "9 vs 5"
+        }
+      ],
+      "seconds": 357.8,
+      "iterations": 4,
+      "llm_calls": 10,
+      "tokens": 33829,
+      "error": ""
+    },
+    {
+      "id": "pulley-catalogue",
+      "prompt": "A GT2 timing pulley with 20 teeth and a 5mm bore.",
+      "tier": "catalogue",
+      "built": true,
+      "converged": true,
+      "catalogue": true,
+      "passed": true,
+      "matched": 3,
+      "total": 3,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bore diameters",
+          "ok": true,
+          "detail": "all present"
+        },
+        {
+          "name": "served from the catalogue",
+          "ok": true,
+          "detail": "no model call"
+        }
+      ],
+      "seconds": 2.4,
+      "iterations": 1,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": ""
+    },
+    {
+      "id": "shaft-keyway",
+      "prompt": "A 25mm diameter shaft, 120mm long, with a 8mm wide by 4mm deep keyway 40mm long starting 10mm from one end.",
+      "tier": "hard",
+      "built": false,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 0,
+      "total": 0,
+      "checks": [],
+      "seconds": 80.4,
+      "iterations": 0,
+      "llm_calls": 5,
+      "tokens": 13193,
+      "error": "no version was produced"
+    },
+    {
+      "id": "bearing-housing",
+      "prompt": "A bearing housing block 90mm by 70mm by 40mm with a 47mm bore through the middle for a 6204 bearing and four M6 clearance holes on a 70mm by 50mm pattern.",
+      "tier": "hard",
+      "built": true,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 4,
+      "total": 6,
+      "checks": [
+        {
+          "name": "watertight",
+          "ok": true,
+          "detail": "valid solid"
+        },
+        {
+          "name": "bbox xlen",
+          "ok": true,
+          "detail": "90.00 vs 90.00 mm"
+        },
+        {
+          "name": "bbox ylen",
+          "ok": true,
+          "detail": "70.00 vs 70.00 mm"
+        },
+        {
+          "name": "bbox zlen",
+          "ok": true,
+          "detail": "40.00 vs 40.00 mm"
+        },
+        {
+          "name": "hole count",
+          "ok": false,
+          "detail": "2 vs 5"
+        },
+        {
+          "name": "bore diameters",
+          "ok": false,
+          "detail": "missing 6.6, 6.6, 6.6 mm (measured 6.60, 47.00)"
+        }
+      ],
+      "seconds": 203.3,
+      "iterations": 4,
+      "llm_calls": 10,
+      "tokens": 32477,
+      "error": ""
+    },
+    {
+      "id": "pipe-flange",
+      "prompt": "A pipe flange 165mm outside diameter, 20mm thick, with an 80mm bore and eight 18mm bolt holes on a 127mm pitch circle.",
+      "tier": "hard",
+      "built": false,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 0,
+      "total": 0,
+      "checks": [],
+      "seconds": 91.6,
+      "iterations": 0,
+      "llm_calls": 5,
+      "tokens": 11414,
+      "error": "no version was produced"
+    },
+    {
+      "id": "l-bracket-gussets",
+      "prompt": "An L bracket 100mm tall and 80mm deep, 60mm wide, 8mm thick, with two triangular gussets, and two 9mm holes in each leg.",
+      "tier": "hard",
+      "built": false,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 0,
+      "total": 0,
+      "checks": [],
+      "seconds": 88.0,
+      "iterations": 0,
+      "llm_calls": 0,
+      "tokens": 3873,
+      "error": "RuntimeError: custom returned 502 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html class=\"no-js ie8 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if gt IE 8]><!--> <html class=\"no-js\" lang=\"en-US\"> <!--<![endif]-->\n<head>\n\n<title>trycloudflare.com | 502: Bad gateway</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" c"
+    },
+    {
+      "id": "heat-sink",
+      "prompt": "A heat sink base 80mm by 80mm by 6mm with ten fins 2mm thick and 30mm tall running the full length, evenly spaced.",
+      "tier": "hard",
+      "built": false,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 0,
+      "total": 0,
+      "checks": [],
+      "seconds": 1.2,
+      "iterations": 0,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+    },
+    {
+      "id": "enclosure-lid",
+      "prompt": "A rectangular enclosure 120mm by 80mm by 40mm tall with 3mm walls, open at the top, with a 2mm lip around the inside of the opening and four M3 mounting bosses in the corners.",
+      "tier": "hard",
+      "built": false,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 0,
+      "total": 0,
+      "checks": [],
+      "seconds": 0.8,
+      "iterations": 0,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+    },
+    {
+      "id": "manifold",
+      "prompt": "A hydraulic manifold block 100mm by 60mm by 50mm with a 12mm bore running the full length, two 8mm cross drillings meeting it at right angles from the top, and four M8 mounting holes in the corners of the base.",
+      "tier": "very hard",
+      "built": false,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 0,
+      "total": 0,
+      "checks": [],
+      "seconds": 0.8,
+      "iterations": 0,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+    },
+    {
+      "id": "vee-pulley",
+      "prompt": "A vee belt pulley 100mm outside diameter and 20mm wide with a single 38 degree included angle groove, a 20mm bore and a 6mm keyway.",
+      "tier": "very hard",
+      "built": false,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 0,
+      "total": 0,
+      "checks": [],
+      "seconds": 0.8,
+      "iterations": 0,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+    },
+    {
+      "id": "planet-carrier",
+      "prompt": "A planetary gear carrier plate 90mm diameter and 10mm thick with three 12mm planet pin holes on a 55mm pitch circle and a 25mm central bore.",
+      "tier": "very hard",
+      "built": false,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 0,
+      "total": 0,
+      "checks": [],
+      "seconds": 1.2,
+      "iterations": 0,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+    },
+    {
+      "id": "helical-gear",
+      "prompt": "A helical gear, 24 teeth, module 2, 20mm face width, 15 degree helix angle, with a 12mm bore.",
+      "tier": "very hard",
+      "built": false,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 0,
+      "total": 0,
+      "checks": [],
+      "seconds": 1.2,
+      "iterations": 0,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+    },
+    {
+      "id": "moulded-cover",
+      "prompt": "An injection moulded cover 100mm by 60mm by 25mm deep with uniform 2.5mm walls, 1.5 degree draft on all vertical faces, three internal ribs and a snap fit lip around the rim.",
+      "tier": "very hard",
+      "built": false,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 0,
+      "total": 0,
+      "checks": [],
+      "seconds": 0.8,
+      "iterations": 0,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+    },
+    {
+      "id": "spline-hub",
+      "prompt": "A hub 60mm outside diameter and 30mm long with a 6 tooth straight sided involute spline bore of 26mm major diameter.",
+      "tier": "very hard",
+      "built": false,
+      "converged": false,
+      "catalogue": false,
+      "passed": false,
+      "matched": 0,
+      "total": 0,
+      "checks": [],
+      "seconds": 0.8,
+      "iterations": 0,
+      "llm_calls": 0,
+      "tokens": 0,
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+    }
+  ]
+}
