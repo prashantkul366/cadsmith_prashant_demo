@@ -1162,7 +1162,10 @@ function applyProvider(providerId) {
   $("#effortRow").hidden = !(provider.kind === "anthropic"
                              || provider.kind === "bedrock");
 
-  const needsSetup = !provider.ready;
+  // Bedrock is the one backend a key cannot fix: it authenticates with the
+  // AWS credential chain, so offering the box next to its setup warning
+  // invites a paste that is quietly ignored. The note says what to do.
+  const needsSetup = !provider.ready && provider.kind !== "bedrock";
   $("#keyRow").hidden = !(needsSetup || provider.key_from_session);
   $("#providerBase").hidden = provider.id !== "custom";
   $("#providerBase").value = provider.base_url || "";

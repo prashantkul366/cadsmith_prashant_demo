@@ -541,8 +541,20 @@ def list_providers(models: bool = False) -> JSONResponse:
     entries = providers.status()
     if models:
         for entry in entries:
-            if entry["ready"]:
-                entry["models"] = providers.list_models(entry["id"])
+            if not entry["ready"]:
+                continue
+            entry["models"] = providers.list_models(entry["id"])
+            # Bedrock's declared defaults are a guess about one account in
+            # one region, made before anything could be asked of AWS. Where
+            # a real list came back, choose from it - otherwise the model
+            # box shows an id that reads as chosen and fails at the first
+            # call, which is a twenty-minute run to find out.
+            if entry["kind"] == "bedrock":
+                generation, judge = providers.bedrock_defaults(entry["models"])
+                if generation:
+                    entry["default_generation_model"] = generation
+                if judge:
+                    entry["default_judge_model"] = judge
     return JSONResponse({"providers": entries,
                          "default": providers.DEFAULT_PROVIDER,
                          # The effort picker is built from what the API

@@ -129,13 +129,69 @@ touching the research code. Pick a provider in the app's left panel.
 | Provider | Needs | Notes |
 |---|---|---|
 | **Anthropic** | `ANTHROPIC_API_KEY` | Default. Uses the real SDK, so this path behaves exactly as the published pipeline does. |
+| **Bedrock** | AWS credentials + `AWS_REGION` | Same Claude models, billed through AWS. Needs `pip install "anthropic[bedrock]"`; see below. |
 | **OpenAI** | `OPENAI_API_KEY` | |
 | **Ollama** | Ollama running | Local Llama, Qwen, Mistral… `OLLAMA_BASE_URL` to move it off `localhost:11434`. |
 | **LM Studio** | its local server | `LMSTUDIO_BASE_URL` to relocate. |
 | **Custom** | `CADSMITH_LLM_BASE_URL` | Anything OpenAI-compatible: vLLM, llama.cpp, Together, Groq, OpenRouter. `CADSMITH_LLM_API_KEY` if it wants one. |
 
-Everything except Anthropic goes through one OpenAI-compatible adapter, so a
-new endpoint usually needs only a base URL.
+Everything except Anthropic and Bedrock goes through one OpenAI-compatible
+adapter, so a new endpoint usually needs only a base URL.
+
+### Claude on Amazon Bedrock
+
+Bedrock takes no API key — it uses the ambient AWS credential chain — but it
+does take two things that are easy to miss:
+
+```bash
+pip install "anthropic[bedrock]"      # the SDK reaches Bedrock through boto3
+export AWS_REGION=us-east-1           # or wherever your models are enabled
+```
+
+`pip install anthropic` alone does **not** bring boto3, and the app used to
+hide that: the health banner said Bedrock was ready, and the first Generate
+answered `503` blaming the AWS credentials. Both halves are fixed — the
+readiness shown in the picker is now the same question the job gate asks, and
+a refusal names what is actually wrong, whether that is the missing
+dependency, an expired session token, or a key and secret that do not belong
+together.
+
+Credentials come from wherever boto3 finds them:
+
+```powershell
+# short-lived portal credentials (Windows PowerShell)
+$Env:AWS_ACCESS_KEY_ID     = "..."
+$Env:AWS_SECRET_ACCESS_KEY = "..."
+$Env:AWS_SESSION_TOKEN     = "..."
+$Env:AWS_REGION            = "us-east-1"
+```
+
+```bash
+# or a named profile / SSO session, which does not expire mid-run
+aws sso login --profile my-profile
+export AWS_PROFILE=my-profile
+```
+
+Portal credentials are short-lived, so the check is made live rather than
+inferred from the presence of the variables: an expired token is reported
+before a long run starts rather than half way through one.
+
+**Model ids.** Bedrock's are not the first-party names — they carry a region
+prefix and a version suffix, and most recent Claude models can only be
+invoked through a cross-region *inference profile*
+(`us.anthropic.claude-sonnet-4-5-...`) rather than by the bare foundation id.
+The app asks your account for both lists and offers what you can actually
+invoke, so take the model box's suggestions rather than typing a name. For
+the command-line evaluations, name one explicitly:
+
+```bash
+python -m app.tools.eval_parts --provider bedrock \
+    --generation-model us.anthropic.claude-sonnet-4-5-20250929-v1:0 \
+    --judge-model us.anthropic.claude-opus-4-5-20251101-v1:0 \
+    --tier easy --out runs/bedrock-easy.json
+```
+
+Reasoning effort works on this path as it does on the first-party API.
 
 **Keys** come from `.env`, or you can paste one into the app for the current
 server process. A pasted key is held in memory only — never written to disk,

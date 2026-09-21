@@ -12,6 +12,7 @@ Run:  .venv/bin/python -m app.tests.test_providers
 
 from __future__ import annotations
 
+import builtins
 import json
 import shutil
 import sys
@@ -264,6 +265,43 @@ def main() -> int:
           any("AWS credentials" in p for p in providers.problems(bedrock))
           or providers._aws_identity() != "",
           "; ".join(providers.problems(bedrock)) or "credentials present")
+
+    # The likeliest way Bedrock fails is a virtualenv without boto3, which
+    # `pip install anthropic` leaves behind unless the [bedrock] extra is
+    # asked for. That used to be reported as bad AWS credentials, sending
+    # the reader off to rotate keys over a missing import - and, worse, the
+    # health banner announced Bedrock ready while the first Generate
+    # answered 503, because the picker and the gate asked different
+    # questions. Both halves are checked here.
+    real_import = builtins.__import__
+
+    def no_boto(name, *args, **kwargs):
+        if name.split(".")[0] in ("boto3", "botocore"):
+            raise ModuleNotFoundError("No module named 'boto3'")
+        return real_import(name, *args, **kwargs)
+
+    providers._aws_cache = (0.0, "", "")
+    builtins.__import__ = no_boto
+    try:
+        blind = providers.problems(bedrock)
+        blind_ready = next(p["ready"] for p in providers.status()
+                           if p["id"] == "bedrock")
+    finally:
+        builtins.__import__ = real_import
+        providers._aws_cache = (0.0, "", "")
+    check("without boto3 it names the dependency, not the credentials",
+          any("boto3" in issue for issue in blind), "; ".join(blind))
+    check("and the picker calls Bedrock unready rather than offering a 503",
+          blind_ready is False)
+
+    # Whatever this machine's credentials are, the banner and the gate have
+    # to give the same answer - that disagreement is what produced a ready
+    # health check and a refused job on the same server.
+    bedrock_ready = next(p["ready"] for p in providers.status()
+                         if p["id"] == "bedrock")
+    check("the picker's readiness and the job gate agree",
+          bedrock_ready == (not providers.problems(bedrock)),
+          f"ready={bedrock_ready} problems={providers.problems(bedrock)}")
 
     server.shutdown()
     shutil.rmtree(runs, ignore_errors=True)

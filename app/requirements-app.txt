@@ -23,6 +23,12 @@ vtk
 fastapi
 uvicorn[standard]
 
+# Claude on Amazon Bedrock. The Anthropic SDK reaches Bedrock through boto3,
+# and `pip install anthropic` alone does not bring it: without this the app
+# still starts, the health banner still says Bedrock is ready, and the first
+# Generate answers 503 blaming the AWS credentials - for a missing import.
+anthropic[bedrock]
+
 # Talks to OpenAI-compatible backends (OpenAI, Ollama, llama.cpp, vLLM,
 # LM Studio, and the hosted gateways that speak the same API). The Anthropic
 # path uses its own SDK, from requirements.txt.

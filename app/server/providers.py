@@ -272,9 +272,10 @@ def problems(config: LLMConfig) -> list[str]:
             f"No API key for {spec.label}. {spec.hint}, or paste one in the app.")
     if spec.kind == "openai_compatible" and not config.base_url:
         issues.append(f"No base URL for {spec.label}. {spec.hint}.")
-    if spec.kind == "bedrock" and not _aws_identity():
-        issues.append(
-            f"No usable AWS credentials for {spec.label}. {spec.hint}.")
+    if spec.kind == "bedrock":
+        why = _aws_check()[1]
+        if why:
+            issues.append(why)
     if not config.generation_model:
         issues.append(f"No generation model chosen for {spec.label}.")
     if not config.judge_model:
@@ -282,51 +283,183 @@ def problems(config: LLMConfig) -> list[str]:
     return issues
 
 
-_aws_cache: tuple[float, str] = (0.0, "")
+_aws_cache: tuple[float, str, str] = (0.0, "", "")
 _AWS_TTL = 30.0
 
 
-def _aws_identity(timeout: float = 4.0) -> str:
-    """The caller ARN if AWS credentials resolve, else "".
+def _aws_reason(exc: Exception) -> str:
+    """Why AWS would not confirm these credentials, in words worth reading.
 
-    Short-lived portal credentials expire mid-session, so this is checked live
-    (briefly cached) rather than assumed from the presence of env vars.
+    Empty means the check failed for a reason that is not the credentials'
+    fault - STS unreachable behind a firewall, or refused by a service
+    control policy - which is no grounds to refuse a run, since the same
+    credentials may invoke Bedrock perfectly well.  Anything non-empty is
+    reason to stop before a twenty-minute run starts on a token that has
+    already expired.
+    """
+    code = ""
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = str(response.get("Error", {}).get("Code", "") or "")
+    name = code or type(exc).__name__
+    lowered = name.lower()
+    if "expired" in lowered:
+        return (f"The AWS credentials have expired ({name}). Sign in again "
+                "with `aws sso login`, or set a fresh AWS_ACCESS_KEY_ID, "
+                "AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN.")
+    if "credentials" in lowered:        # NoCredentials, PartialCredentials
+        return (f"No usable AWS credentials were found ({name}). Set "
+                "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and "
+                "AWS_SESSION_TOKEN, or sign in with `aws sso login`.")
+    if ("invalidclienttoken" in lowered or "unrecognizedclient" in lowered
+            or "signaturedoesnotmatch" in lowered
+            or "invalidsignature" in lowered):
+        return (f"These AWS credentials were rejected by AWS ({name}). Check "
+                "that the key, the secret and the session token were pasted "
+                "whole and belong to the same set.")
+    return ""
+
+
+def _aws_check(timeout: float = 4.0) -> tuple[str, str]:
+    """``(caller ARN, why the credentials cannot be used)``.
+
+    Both halves are needed.  Reporting only the ARN made every failure read
+    the same way, so a virtualenv with no boto3 in it - which is what
+    ``pip install anthropic`` leaves behind without the ``[bedrock]`` extra -
+    was announced as bad AWS credentials, and the reader went off to rotate
+    keys over a missing dependency.
+
+    Portal credentials are short-lived and expire mid-session, so this asks
+    AWS rather than trusting the presence of environment variables.  It is
+    briefly cached because every request asks.
     """
     global _aws_cache
     now = time.monotonic()
     if now - _aws_cache[0] < _AWS_TTL:
-        return _aws_cache[1]
-    arn = ""
+        return _aws_cache[1], _aws_cache[2]
+
+    arn, why = "", ""
     try:
         import boto3
         from botocore.config import Config
-
+    except Exception:
+        why = ("boto3 is not installed, so AWS credentials cannot be read. "
+               "Install it with `pip install \"anthropic[bedrock]\"`.")
+    else:
         cfg = Config(connect_timeout=timeout, read_timeout=timeout,
                      retries={"max_attempts": 1})
         region = os.getenv("AWS_REGION") or "us-east-1"
-        arn = boto3.client("sts", region_name=region,
-                           config=cfg).get_caller_identity()["Arn"]
-    except Exception:
-        arn = ""
-    _aws_cache = (now, arn)
-    return arn
+        try:
+            arn = boto3.client("sts", region_name=region,
+                               config=cfg).get_caller_identity()["Arn"]
+        except Exception as exc:
+            why = _aws_reason(exc)
+            if not why:
+                # STS itself did not answer. Credentials that do not resolve
+                # at all are still a refusal; one that merely could not be
+                # confirmed is not, and is left to fail at the call site.
+                try:
+                    resolved = boto3.Session().get_credentials()
+                except Exception:
+                    resolved = None
+                if resolved is None:
+                    why = ("No usable AWS credentials were found in the "
+                           "environment, the shared config, or an instance "
+                           "role. Set AWS_ACCESS_KEY_ID, "
+                           "AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN, or "
+                           "sign in with `aws sso login`.")
+    _aws_cache = (now, arn, why)
+    return arn, why
+
+
+def _aws_identity(timeout: float = 4.0) -> str:
+    """The caller ARN if AWS credentials resolve, else ""."""
+    return _aws_check(timeout)[0]
 
 
 def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
-    """Anthropic models this account can actually invoke in this region."""
+    """Anthropic models this account can actually invoke in this region.
+
+    Two calls, not one, because "the region carries it" and "you may invoke
+    it by that id" are different questions.  ``list_foundation_models``
+    answers the first; a model whose ``inferenceTypesSupported`` omits
+    ON_DEMAND answers the second with no - invoking it by the bare id comes
+    back telling you to use an inference profile instead, and every recent
+    Claude is in that group.  So the profile ids are asked for as well, and
+    a foundation id that cannot be invoked on demand is left out rather than
+    offered as a choice that fails at the first call.
+    """
     try:
         import boto3
         from botocore.config import Config
-
-        cfg = Config(connect_timeout=timeout, read_timeout=timeout,
-                     retries={"max_attempts": 1})
-        region = os.getenv("AWS_REGION") or "us-east-1"
-        client = boto3.client("bedrock", region_name=region, config=cfg)
-        summaries = client.list_foundation_models().get("modelSummaries", [])
     except Exception:
         return []
-    return sorted({m["modelId"] for m in summaries
-                   if "anthropic" in m.get("modelId", "").lower()})
+
+    cfg = Config(connect_timeout=timeout, read_timeout=timeout,
+                 retries={"max_attempts": 1})
+    region = os.getenv("AWS_REGION") or "us-east-1"
+    try:
+        client = boto3.client("bedrock", region_name=region, config=cfg)
+    except Exception:
+        return []
+
+    ids: set[str] = set()
+    try:
+        for entry in client.list_foundation_models().get("modelSummaries", []):
+            model_id = entry.get("modelId", "")
+            if "anthropic" not in model_id.lower():
+                continue
+            # Absent the field, assume on-demand: an older control plane
+            # that does not report it predates the profile-only models.
+            kinds = entry.get("inferenceTypesSupported")
+            if kinds is None or "ON_DEMAND" in kinds:
+                ids.add(model_id)
+    except Exception:
+        pass
+    try:
+        for entry in client.list_inference_profiles().get(
+                "inferenceProfileSummaries", []):
+            profile_id = entry.get("inferenceProfileId", "")
+            if not profile_id:
+                continue
+            carries = " ".join(m.get("modelArn", "")
+                               for m in entry.get("models") or [])
+            if "anthropic" in (profile_id + carries).lower():
+                ids.add(profile_id)
+    except Exception:
+        pass
+    return sorted(ids)
+
+
+#: Which Claude each role wants, weakest acceptable first. The pipeline
+#: judges with a stronger, independent model on purpose, so the two roles
+#: look for different families rather than settling on one list's first entry.
+_BEDROCK_FAMILIES = {"generation": ("sonnet", "opus", "haiku"),
+                     "judge": ("opus", "sonnet", "haiku")}
+
+
+def bedrock_defaults(offered: list[str]) -> tuple[str, str]:
+    """``(generation, judge)`` ids picked from what Bedrock really serves.
+
+    ``ProviderSpec`` has to declare something without asking AWS anything,
+    and a declared id is a guess about one account in one region - a guess
+    that reads as a considered choice in the model box and then fails at the
+    first call.  Where a real list came back, choose from it.
+    """
+    if not offered:
+        return "", ""
+    picked: dict[str, str] = {}
+    for role, families in _BEDROCK_FAMILIES.items():
+        for family in families:
+            # A cross-region profile ("us.anthropic.claude-...") is invokable
+            # where the bare foundation id increasingly is not, so prefer one.
+            matches = sorted((m for m in offered if family in m.lower()),
+                             key=lambda m: (not m.startswith("anthropic."), m),
+                             reverse=True)
+            if matches:
+                picked[role] = matches[0]
+                break
+    return picked.get("generation", ""), picked.get("judge", "")
 
 
 def list_models(provider_id: str, timeout: float = 6.0) -> list[str]:
@@ -407,6 +540,13 @@ def status() -> list[dict]:
         # anything - ask whether it is running.
         if ready and spec.local:
             ready = _reachable(spec, base_url)
+        # Bedrock takes no key and defaults its region, so neither is
+        # evidence either. Ask the same question create_job asks, or the
+        # health banner says ready and the first Generate answers 503 -
+        # which is exactly what it did.
+        aws_reason = _aws_check()[1] if spec.kind == "bedrock" else ""
+        if spec.kind == "bedrock":
+            ready = not aws_reason
         with _keys_lock:
             from_session = spec.id in _session_keys or spec.id in _session_base_urls
         out.append({
@@ -419,13 +559,22 @@ def status() -> list[dict]:
             "key_from_session": from_session,
             "base_url": base_url,
             "ready": ready,
-            "hint": (f"Nothing is listening at {base_url}. {spec.hint}"
+            # Bedrock's live reason says which of a dozen things went
+            # wrong; the standing hint says only where to look. Prefer the
+            # one that answers the question.
+            "hint": (aws_reason if aws_reason
+                     else f"Nothing is listening at {base_url}. {spec.hint}"
                      if spec.local and not ready else spec.hint),
             # The same sentence as a key the browser can look up in whatever
             # language it is showing. `hint` stays as it is: it is also used
             # in the server's own refusal messages, and it is the fallback
             # for anything the browser dictionary has not got.
-            "hint_key": ("prov.hint.unreachable" if spec.local and not ready
+            # No key for the live AWS reason: it is composed at the moment
+            # it is read, so a translated generic sentence would be shown in
+            # place of the one that names the actual fault. An untranslated
+            # answer beats a translated evasion.
+            "hint_key": ("" if aws_reason
+                         else "prov.hint.unreachable" if spec.local and not ready
                          else f"prov.hint.{spec.id}"),
             "hint_params": {"url": base_url, "id": spec.id},
             "default_generation_model": spec.default_generation_model,
