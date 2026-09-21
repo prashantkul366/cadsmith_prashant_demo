@@ -59,7 +59,10 @@ const I18N = (function () {
     "view.code":        ["Code", "コード"],
     "view.params":      ["Parameters", "パラメーター"],
     "view.drawing":     ["Drawing", "図面"],
-    "view.think":       ["Reasoning", "推論"],
+    "think.showall":    ["Show the {n} characters above", "上の {n} 文字を表示"],
+    "think.showtail":   ["Show the latest only", "最新のみ表示"],
+    "think.dropped":    ["[ earlier reasoning dropped to keep the page responsive ]",
+                         "［ 動作を保つため、これより前の推論は省略されました ］"],
     "think.nostream":   ["This backend does not stream its reasoning. "
                          + "The Claude backends do; what the agents "
                          + "produced is in the plan, the code and the "

@@ -43,10 +43,6 @@
             data-i18n-title="view.params" title="Parameters">
       <svg class="icn" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 10h18M9.5 10v9.5"/></svg>
     </button>
-    <button class="vsegb" data-view="think" role="tab" aria-selected="false"
-            data-i18n-title="view.think" title="Reasoning">
-      <svg class="icn" viewBox="0 0 24 24"><path d="M9.5 21h5M12 3a6 6 0 0 0-3.5 10.9c.5.4.8 1 .8 1.6V17h5.4v-1.5c0-.6.3-1.2.8-1.6A6 6 0 0 0 12 3Z"/></svg>
-    </button>
     <button class="vsegb" data-view="drawing" role="tab" aria-selected="false"
             data-i18n-title="view.drawing" title="Drawing" disabled>
       <svg class="icn" viewBox="0 0 24 24"><rect x="3" y="3.5" width="18" height="17" rx="2"/><path d="M7 9h7M7 13h4.5M7 17h2.5M14.5 17H17"/></svg>
@@ -107,26 +103,30 @@
         </div>
       </section>
 
-      <section class="tsec think" id="thinkSec">
-        <!-- A line in the thread, not the reasoning itself. Five agents on
-             a hard part emit thousands of words, and a 296px rail with a
-             260px ceiling is not somewhere anyone can follow that - so this
-             opens it in the centre, where there is room to read. -->
-        <button class="thinkhead" id="thinkClear">
-          <svg class="icn chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
-          <span id="thinkSummary" data-i18n="think.heading">Reasoning</span>
-          <span class="livedot" id="thinkLive" hidden
-                data-i18n-label="think.working" aria-label="working"></span>
-        </button>
-      </section>
-
       <button class="verpill" id="verPill" hidden></button>
-
-      <div class="field" id="samplesField">
-        <span class="eyebrow" data-i18n="input.samples">Benchmark prompts</span>
-        <div class="samples" id="samples"></div>
-      </div>
     </div>
+
+    <!-- The reasoning, between what was asked and what is typed next. It
+         needs height more than anything else, so it takes what the thread
+         does not, scrolls on its own, and each agent folds away when it is
+         done talking. -->
+    <section class="thinksec" id="thinkSec">
+      <div class="thinkhd">
+        <button class="thinktoggle" id="thinkClear" aria-expanded="true">
+          <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+          <span id="thinkSummary" data-i18n="think.heading">Reasoning</span>
+        </button>
+        <span class="livedot" id="thinkLive" hidden
+              data-i18n-label="think.working" aria-label="working"></span>
+        <span class="eyebrow" id="thinkPhase"></span>
+      </div>
+      <div class="think-body" id="thinkBody">
+        <div class="await">
+          <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+          <span data-i18n="think.await">The agents' reasoning appears here as they work.</span>
+        </div>
+      </div>
+    </section>
 
     <!-- The one place anything is typed. -->
     <div class="composer">
@@ -297,25 +297,6 @@
 
     </div>
 
-    <!-- The reasoning, full width. During a run there is nothing in the
-         viewport to look at anyway, so this is where the wait is spent. -->
-    <div class="centrepane" id="thinkPane" hidden>
-      <div class="phead">
-        <h2 data-i18n="think.heading">Reasoning</h2>
-        <span class="eyebrow" id="thinkPhase"></span>
-        <div class="spacer" style="flex:1"></div>
-        <span class="eyebrow" id="thinkElapsed"></span>
-        <button class="btn ghost sm" id="thinkCollapse"
-                data-i18n="think.collapse">Collapse</button>
-      </div>
-      <div class="think-body" id="thinkBody">
-        <div class="await">
-          <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
-          <span data-i18n="think.await">The agents' reasoning appears here as they work.</span>
-        </div>
-      </div>
-    </div>
-
     <div class="centrepane" id="codeSec" hidden>
       <div class="phead">
         <h2 id="codeHeading" data-i18n="code.heading">Generated CadQuery</h2>
@@ -366,6 +347,14 @@
         <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       <div class="rbody"><div class="tiles" id="usage"></div></div>
+    </section>
+
+    <section class="rcard" data-card="prompts">
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="input.samples">Benchmark prompts</h2>
+        <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody"><div class="samples" id="samples"></div></div>
     </section>
 
     <section class="rcard" data-card="val">

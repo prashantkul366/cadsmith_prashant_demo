@@ -212,8 +212,15 @@ textarea.prompt::placeholder{color:#535E6E}
 
 /* ---------- left: the conversation ---------- */
 .col.left{display:flex;flex-direction:column;min-height:0}
-.thread{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:14px 12px 4px;
-  display:flex;flex-direction:column;gap:14px;min-height:0}
+/* Three bands: what has been said, what is being thought, what is being
+   typed. The middle one is the reasoning, and it needs height more than
+   the other two - so the conversation keeps enough to read and the rest
+   is the reasoning's. */
+/* Enough to read the plan, never more than it needs, and never more than
+   45% however long the plan runs - the rest is the reasoning's. */
+.thread{flex:0 1 auto;min-height:124px;max-height:45%;overflow-y:auto;
+  overscroll-behavior:contain;padding:14px 12px 4px;
+  display:flex;flex-direction:column;gap:14px}
 /* Every turn keeps its own height and the thread scrolls. Without this
    the column shares its height out and a section collapses to nothing
    while its contents spill over whatever is beneath. */
@@ -235,22 +242,30 @@ textarea.prompt::placeholder{color:#535E6E}
 .tsec .tmodel{opacity:.7;flex:none}
 .tsec .ai-body{padding:0;overflow:visible;max-height:none}
 
-/* The reasoning, shut. Italic and quiet because it is the model talking to
-   itself, not to the reader. */
-.tsec.think{border-top:1px solid var(--line-soft);padding-top:12px}
-.thinkhead{display:flex;align-items:center;gap:7px;width:100%;
-  font-size:12px;font-style:italic;color:var(--ink-dim);text-align:left}
-.thinkhead:hover{color:var(--ink-2)}
-/* Nothing will ever arrive on this backend, so the line does not
-   invite a click that opens an empty room. */
-.tsec.think.nostream{opacity:.5;pointer-events:none}
-/* Not .caret: that is the blinking text cursor in the thinking stream,
-   which paints a 1.5px blue bar - and painted it over every chevron. */
-.thinkhead .chev{transition:transform .15s;width:12px;height:12px}
-.tsec.think.open .thinkhead .chev{transform:rotate(90deg)}
-.tsec.think .think-body{display:none;font-style:italic;font-size:11.5px;
-  color:var(--ink-dim);line-height:1.6;max-height:260px;overflow-y:auto}
-.tsec.think.open .think-body{display:block}
+/* ---------- the reasoning, in the middle of the rail ---------- */
+/* Takes whatever the conversation does not need. An empty thread is two
+   lines, and giving it a fixed share of the column while the reasoning
+   scrolled in a slot was the whole complaint. */
+.thinksec{
+  flex:1 1 auto;min-height:140px;display:flex;flex-direction:column;
+  border-top:1px solid var(--line);background:var(--panel-2);
+}
+.thinksec.shut{flex:0 0 auto;min-height:0}
+.thinksec.shut .think-body{display:none}
+.thinkhd{
+  display:flex;align-items:center;gap:7px;padding:8px 12px;flex:none;
+  border-bottom:1px solid var(--line-soft);
+}
+.thinktoggle{
+  display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;
+  letter-spacing:.02em;color:var(--ink-2);
+}
+.thinktoggle:hover{color:var(--ink)}
+.thinktoggle .chev{width:12px;height:12px;transition:transform .16s;
+  color:var(--ink-dim)}
+.thinksec.shut .thinktoggle .chev{transform:rotate(-90deg)}
+.thinkhd .eyebrow{margin-left:auto;flex:none;font-size:9px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46%}
 
 .verpill{align-self:flex-start;padding:7px 14px;border-radius:var(--r);
   border:1px solid var(--line);background:var(--panel-2);color:var(--ink-2);
@@ -855,76 +870,73 @@ textarea.src{
    does not run the width of a monitor and a clear break between one agent
    and the next. */
 .think-body{
-  flex:1;min-height:0;overflow-y:auto;padding:16px 20px 40px;
+  flex:1;min-height:0;overflow-y:auto;padding:10px;
+  display:flex;flex-direction:column;gap:7px;
   scrollbar-width:thin;scrollbar-color:var(--line) transparent;
 }
-#thinkPane .think-body{display:flex;flex-direction:column;align-items:center}
-/* flex:0 0 auto or the column shares its height out among the blocks
-   and each one is shrunk below its own header, which .tblock's
-   overflow:hidden then clips. */
-#thinkPane .tblock{width:100%;max-width:820px;flex:0 0 auto}
-#thinkPane .await{max-width:820px;width:100%}
 .think-body::-webkit-scrollbar{width:8px}
 .think-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
-
-/* An author display declaration beats the browser's own [hidden] rule
-   whatever its specificity, so every class that sets display needs a
-   companion - this one was showing a blue square beside a heading it
-   was supposed to be absent from. */
-.livedot[hidden]{display:none}
-.livedot{
-  width:7px;height:7px;border-radius:50%;background:var(--accent);
-  margin-left:8px;flex:none;animation:breathe 1.4s ease-in-out infinite;
-}
+/* flex:0 0 auto, or the column shares its height among the blocks and
+   shrinks each below its own header for overflow:hidden to clip. */
+.think-body > *{flex:0 0 auto}
 
 .tblock{
   border:1px solid var(--line-soft);border-radius:var(--r);
-  background:var(--panel);margin-bottom:10px;overflow:hidden;
-  animation:fin .22s ease both;
+  background:var(--panel);overflow:hidden;animation:fin .22s ease both;
 }
-.tblock[data-state="run"]{border-color:var(--accent-dim)}
+.tblock[data-state="run"]{border-color:var(--amber)}
 .tblock[data-state="fail"]{border-color:var(--err)}
 
-/* Sticky, so you always know whose words you are reading however far down
-   a long stream you have scrolled. */
+/* The agent's name, what it is doing, and how long it took. The name and
+   the duration share the first line; the description wraps beneath, which
+   is the only way all three fit a column this narrow. */
 .tblock>summary{
-  display:flex;align-items:center;gap:8px;cursor:pointer;
-  padding:9px 12px;list-style:none;user-select:none;
-  font-size:12.5px;color:var(--ink-2);
-  position:relative;z-index:2;background:var(--panel);
-  border-bottom:1px solid transparent;
-}
-/* Sticky only while the block is open. Every closed header sticking to the
-   same top:0 stacked them all in one place, which hid the four they were
-   meant to distinguish. */
-.tblock[open]>summary{
-  position:sticky;top:0;border-bottom-color:var(--line-soft);
+  display:grid;grid-template-columns:11px 1fr auto;align-items:baseline;
+  gap:3px 7px;cursor:pointer;padding:8px 10px;list-style:none;
+  user-select:none;font-size:11.5px;color:var(--ink-2);
 }
 .tblock>summary::-webkit-details-marker{display:none}
 .tblock>summary:hover{background:var(--raise)}
-.tblock>summary b{color:var(--ink);font-weight:600}
-.tblock .tsub{color:var(--ink-dim);font-size:11px}
-.tblock .tms{margin-left:auto;color:var(--ink-dim);font-size:10.5px;font-family:var(--mono)}
-
-/* caret rotates when the block is open */
-.tcar{width:9px;height:9px;flex:none;transition:transform .16s ease;color:var(--ink-dim)}
+.tblock>summary b{color:var(--ink);font-weight:650;font-size:12px}
+.tblock .tsub{grid-column:2 / -1;color:var(--ink-dim);font-size:10.5px;
+  line-height:1.35}
+.tblock .tms{color:var(--ink-dim);font-size:10px;font-family:var(--mono)}
+.tcar{width:9px;height:9px;flex:none;transition:transform .16s ease;
+  color:var(--ink-dim);align-self:center}
 .tblock[open] .tcar{transform:rotate(90deg)}
+.tblock[data-state="run"] .tms::after{
+  content:"";display:inline-block;width:5px;height:5px;border-radius:50%;
+  background:var(--amber);margin-left:5px;animation:breathe 1.6s infinite;
+}
 
-.tstream{padding:10px 16px 14px}
+.tstream{padding:0 10px 10px;border-top:1px solid var(--line-soft)}
+.tlane{margin-top:9px}
+.tlane:first-child{margin-top:8px}
+
 /* Thinking is the model talking to itself; the output is what it decided.
-   They are different kinds of text and should not look alike. */
+   Different kinds of text, so they do not look alike. */
 .tthink{
-  font-size:13px;line-height:1.7;color:var(--ink-2);
-  white-space:pre-wrap;word-break:break-word;
-  border-left:2px solid var(--line);padding-left:12px;
+  font-size:11.5px;line-height:1.65;color:var(--ink-2);
+  white-space:pre-wrap;overflow-wrap:anywhere;
+  border-left:2px solid var(--line);padding-left:9px;
 }
 .ttext{
-  font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--ink);
-  white-space:pre-wrap;word-break:break-word;margin-top:12px;
-  background:var(--input);border-radius:var(--r-sm);padding:10px 12px;
+  font-family:var(--mono);font-size:10.5px;line-height:1.55;color:var(--ink);
+  white-space:pre-wrap;overflow-wrap:anywhere;
+  background:var(--input);border-radius:var(--r-sm);padding:8px 9px;
+  max-height:340px;overflow:auto;
 }
-/* the caret only shows on the block currently being written */
-.tblock[data-state="run"] .tstream>:last-child::after{
+/* How much is above the tail, and the way back to it. */
+.tmore{
+  display:block;width:100%;text-align:left;font-size:10px;letter-spacing:.02em;
+  color:var(--ink-dim);padding:3px 0 6px;
+}
+.tmore:hover{color:var(--amber);text-decoration:underline}
+.tmore[hidden]{display:none}
+
+/* the cursor only shows on the lane currently being written */
+.tblock[data-state="run"] .tstream>.tlane:last-child .tthink::after,
+.tblock[data-state="run"] .tstream>.tlane:last-child .ttext::after{
   content:"\258B";color:var(--amber);animation:blink 1s steps(1) infinite;
   margin-left:1px;
 }

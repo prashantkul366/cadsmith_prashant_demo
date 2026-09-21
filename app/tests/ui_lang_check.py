@@ -90,10 +90,11 @@ def main() -> int:
         check("the app opens in English",
               page.get_attribute("html", "lang") == "en",
               page.get_attribute("html", "lang"))
-        # Lower-cased because the eyebrows are upper-cased by CSS, and
-        # inner_text reports what is painted rather than what is written.
+        # The reasoning is the left rail's own heading now - the starting
+        # prompts moved to a card on the right. Lower-cased because CSS
+        # upper-cases the headings and inner_text reports what is painted.
         check("and reads as English",
-              "benchmark prompts" in page.inner_text(".col.left").lower())
+              "reasoning" in page.inner_text(".col.left").lower())
 
         print("\nSwitching to Japanese redraws the interface")
         page.click('#langSw .lang[data-lang="ja"]')

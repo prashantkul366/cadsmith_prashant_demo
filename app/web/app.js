@@ -441,23 +441,65 @@ function thinkBlock(agent, iteration) {
   return block;
 }
 
+/* How much of one lane is on screen while it is still arriving.
+   A Coder on a hard part can emit tens of thousands of characters, and in a
+   column this narrow that is hundreds of screens of scrollback nobody
+   reads - and a DOM node that grows without limit for the whole run. The
+   tail is what is being said now; everything above it is one click away. */
+const TAIL_CHARS = 1400;
+
+//: What is kept at all. Past this the oldest text is dropped and said so,
+//: because holding a megabyte per agent to scroll past is not a feature.
+const KEEP_CHARS = 400000;
+
+function laneNode(block, lane) {
+  let node = block.lanes[lane];
+  if (node) return node;
+  node = document.createElement("div");
+  node.className = "tlane";
+  node.innerHTML = `<button class="tmore" hidden></button>`
+    + `<div class="${lane === "thinking" ? "tthink" : "ttext"}"></div>`;
+  node.full = "";
+  node.expanded = false;
+  node.body = node.querySelector("div");
+  node.more = node.querySelector("button");
+  node.more.onclick = () => {
+    node.expanded = !node.expanded;
+    paintLane(node);
+  };
+  block.stream.appendChild(node);
+  block.lanes[lane] = node;
+  return node;
+}
+
+function paintLane(node) {
+  const full = node.full;
+  const hidden = Math.max(0, full.length - TAIL_CHARS);
+  if (!hidden || node.expanded) {
+    node.body.textContent = full;
+    node.more.hidden = !hidden;
+    node.more.textContent = hidden ? t("think.showtail") : "";
+    return;
+  }
+  // Start at a line break so the tail does not open mid-word.
+  const cut = full.length - TAIL_CHARS;
+  const nl = full.indexOf("\n", cut);
+  node.body.textContent = full.slice(nl > 0 && nl - cut < 200 ? nl + 1 : cut);
+  node.more.hidden = false;
+  node.more.textContent = t("think.showall", { n: hidden.toLocaleString() });
+}
+
 function thinkAppend(agent, iteration, lane, text) {
   if (!text) return;
   const block = thinkBlock(agent, iteration);
-  let node = block.lanes[lane];
-  if (!node) {
-    node = document.createElement("div");
-    node.className = lane === "thinking" ? "tthink" : "ttext";
-    block.stream.appendChild(node);
-    block.lanes[lane] = node;
+  const node = laneNode(block, lane);
+  node.full += text;
+  if (node.full.length > KEEP_CHARS) {
+    node.full = t("think.dropped") + "\n"
+      + node.full.slice(node.full.length - KEEP_CHARS);
   }
-  node.textContent += text;
+  paintLane(node);
 
-  /* The first words of reasoning are the moment the wait becomes worth
-     watching, and the viewport has nothing in it yet, so the centre turns
-     to the reasoning by itself - once, and never against a view the reader
-     picked. */
-  if (S.busy && !S.viewChosen && S.view !== "think") showView("think");
 
   // Follow the stream only while the reader is already at the bottom, so
   // scrolling back to read something is not yanked away.
@@ -605,9 +647,8 @@ $$(".rcard [data-card-toggle]").forEach(button => {
 function showAsk(text) {
   $("#askTurn").hidden = !text;
   $("#askText").textContent = text || "";
-  // The starting prompts are an empty state. Once there is a conversation
-  // they are clutter in the middle of it.
-  $("#samplesField").hidden = Boolean(text);
+  // The starting prompts live in a card on the right now, so a
+  // conversation no longer has to push past them.
 }
 
 function showVersionPill() {
@@ -627,8 +668,6 @@ function addVersion(version) {
   else S.versions.push(version);
   renderIterations();
   selectVersion(S.versions.length - 1, { quiet: true });
-  // There is a part now, which is what the reader came for.
-  if (!S.viewChosen && S.view === "think") showView("model");
   showVersionPill();
   refreshComposer();
 }
@@ -918,7 +957,6 @@ function startNewPart() {
   $("#planBody").innerHTML = waiting("plan.none");
   $("#valBody").innerHTML = waiting("val.none");
   thinkReset();
-  setThinkOpen(false);
   $("#thinkSummary").textContent = t("think.heading");
   resetUsage();
   $("#iters").innerHTML = "";
@@ -994,7 +1032,6 @@ async function generate() {
   showAsk(prompt);
   $("#prompt").value = "";
   $("#verPill").hidden = true;
-  setThinkOpen(false);
   S.versions = [];
   S.selected = -1;
   S.designPlan = null;
@@ -1268,23 +1305,22 @@ document.addEventListener("click", e => {
    spinning when somebody asks for a fixed view. */
 Viewer.onView = () => $("#spinBtn").classList.remove("on");
 // Collapse every finished step; the running one stays open.
-/* The line in the thread opens the reasoning where it can be read. It used
-   to expand a 260px box inside a 296px rail, which is not a window anyone
-   can follow five agents through. */
-$("#thinkClear").onclick = () => showView("think");
-
-$("#thinkCollapse").onclick = () => {
-  document.querySelectorAll(".tblock").forEach(el => {
-    if (el.dataset.state !== "run") el.open = false;
-  });
-};
-
-//: Kept for the callers that shut the reasoning when a run restarts.
+/* The whole region folds away, for anyone who would rather have the height
+   for the conversation. What is inside it folds per agent. */
 function setThinkOpen(open) {
-  if (!open) {
-    document.querySelectorAll(".tblock").forEach(el => { el.open = false; });
-  }
+  $("#thinkSec").classList.toggle("shut", !open);
+  $("#thinkClear").setAttribute("aria-expanded", String(open));
+  try {
+    localStorage.setItem(THINK_KEY, open ? "open" : "shut");
+  } catch (e) { /* a private window has no storage; it still folds */ }
 }
+
+const THINK_KEY = "cadsmith.reasoning";
+$("#thinkClear").onclick = () =>
+  setThinkOpen($("#thinkSec").classList.contains("shut"));
+try {
+  if (localStorage.getItem(THINK_KEY) === "shut") setThinkOpen(false);
+} catch (e) { /* fine */ }
 
 $("#fitBtn").onclick = () => Viewer.fit(true);
 $("#wireBtn").onclick = () => $("#wireBtn").classList.toggle("on", Viewer.toggleWire());
@@ -2160,7 +2196,7 @@ $("#back3d").onclick = () => showView("model");
    button on the viewport toolbar. They are the same kind of choice, so they
    are now the same control, and the old ones still work underneath it. */
 
-const VIEWS = ["model", "code", "think", "params", "drawing"];
+const VIEWS = ["model", "code", "params", "drawing"];
 
 function showView(which) {
   if (!VIEWS.includes(which)) which = "model";
@@ -2174,21 +2210,13 @@ function showView(which) {
   // Parameters are a card on the right now, not a view of the centre, so
   // asking for them leaves the model on screen - which is the point, since
   // they are controls for the thing you are looking at.
-  // Three things can fill the centre: the model, the source, the reasoning.
-  const pane = which === "code" || which === "think";
-  $("#stage").hidden = pane;
-  $(".vtools").hidden = pane;            // Spin/Fit mean nothing over text
-  $("#codeSec").hidden = which !== "code";
-  $("#thinkPane").hidden = which !== "think";
+  const source = which === "code";
+  $("#stage").hidden = source;
+  $(".vtools").hidden = source;          // Spin/Fit mean nothing over code
+  $("#codeSec").hidden = !source;
   $("#sheet").classList.toggle("on", which === "drawing");
   if (which === "drawing") openDrawing();
   if (which === "code") setStat();
-  if (which === "think") {
-    // Jump to the end: what the model is saying now is the reason anyone
-    // opens this while a run is going.
-    const body = $("#thinkBody");
-    body.scrollTop = body.scrollHeight;
-  }
   if (which === "params") chooseParamView("params");
   $$("#viewSeg .vsegb").forEach(button => {
     // "params" opens a card without changing the centre, so it flashes

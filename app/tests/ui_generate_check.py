@@ -199,11 +199,15 @@ def main() -> int:
         # The path a person actually takes: pick a listed prompt, run it,
         # then run another. Typing a prompt once is not the same journey.
         print("\nStarting from a benchmark prompt")
-        # The starting prompts are an empty state: once there is a
-        # conversation they are clutter in the middle of it, so they come
-        # back with a new part rather than sitting under an old one.
+        # Two things a person does here: start a fresh part, and open the
+        # prompts card if it is shut - they live on the right now.
         if page.locator("#verPill").is_visible():
             page.click("#newBtn")
+            page.wait_for_timeout(300)
+        if page.evaluate("""() => document
+                .querySelector('.rcard[data-card=\"prompts\"]')
+                .classList.contains('shut')"""):
+            page.click('.rcard[data-card="prompts"] [data-card-toggle]')
             page.wait_for_timeout(300)
         sample = page.locator("#samples .sample").first
         sample_id = sample.locator("b").inner_text()
