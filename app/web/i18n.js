@@ -59,6 +59,14 @@ const I18N = (function () {
     "view.code":        ["Code", "コード"],
     "view.params":      ["Parameters", "パラメーター"],
     "view.drawing":     ["Drawing", "図面"],
+    "view.think":       ["Reasoning", "推論"],
+    "think.nostream":   ["This backend does not stream its reasoning. "
+                         + "The Claude backends do; what the agents "
+                         + "produced is in the plan, the code and the "
+                         + "verdict.",
+                         "このバックエンドは推論を逐次送信しません。"
+                         + "Claude 系では表示されます。生成結果は設計プラン、"
+                         + "コード、検証に表示されます。"],
     "view.needpart":    ["Build a part first.", "先に部品を生成してください。"],
     "app.environment":  ["Environment", "実行環境"],
     "app.language":     ["Interface language", "表示言語"],

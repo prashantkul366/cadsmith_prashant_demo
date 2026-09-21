@@ -240,6 +240,11 @@ function renderExamples() {
 function renderStages(activeKey, detail) {
   S.stage = { key: activeKey, detail: detail || "" };
   const activeIndex = STAGES.findIndex(s => s.key === activeKey);
+  const phase = $("#thinkPhase");
+  if (phase) {
+    const stage = STAGES[activeIndex];
+    phase.textContent = stage ? t(stage.label) : "";
+  }
   $("#pipe").innerHTML = STAGES.map((stage, i) => {
     const state = i < activeIndex ? "done" : (i === activeIndex ? "act" : "");
     return `
@@ -448,6 +453,12 @@ function thinkAppend(agent, iteration, lane, text) {
   }
   node.textContent += text;
 
+  /* The first words of reasoning are the moment the wait becomes worth
+     watching, and the viewport has nothing in it yet, so the centre turns
+     to the reasoning by itself - once, and never against a view the reader
+     picked. */
+  if (S.busy && !S.viewChosen && S.view !== "think") showView("think");
+
   // Follow the stream only while the reader is already at the bottom, so
   // scrolling back to read something is not yanked away.
   const body = $("#thinkBody");
@@ -616,6 +627,8 @@ function addVersion(version) {
   else S.versions.push(version);
   renderIterations();
   selectVersion(S.versions.length - 1, { quiet: true });
+  // There is a part now, which is what the reader came for.
+  if (!S.viewChosen && S.view === "think") showView("model");
   showVersionPill();
   refreshComposer();
 }
@@ -977,6 +990,7 @@ async function generate() {
 
   S.busy = true;
   S.runStarted = Date.now();
+  S.viewChosen = false;      // a new run may move the centre again
   showAsk(prompt);
   $("#prompt").value = "";
   $("#verPill").hidden = true;
@@ -1254,21 +1268,23 @@ document.addEventListener("click", e => {
    spinning when somebody asks for a fixed view. */
 Viewer.onView = () => $("#spinBtn").classList.remove("on");
 // Collapse every finished step; the running one stays open.
-/* The reasoning is a disclosure now: shut by default once it has something
-   to disclose, because it is the longest thing in the thread and almost
-   never the thing being looked for. Opening it also tidies the finished
-   steps, which is what this button used to do on its own. */
+/* The line in the thread opens the reasoning where it can be read. It used
+   to expand a 260px box inside a 296px rail, which is not a window anyone
+   can follow five agents through. */
+$("#thinkClear").onclick = () => showView("think");
+
+$("#thinkCollapse").onclick = () => {
+  document.querySelectorAll(".tblock").forEach(el => {
+    if (el.dataset.state !== "run") el.open = false;
+  });
+};
+
+//: Kept for the callers that shut the reasoning when a run restarts.
 function setThinkOpen(open) {
-  $("#thinkSec").classList.toggle("open", open);
-  $("#thinkClear").setAttribute("aria-expanded", String(open));
-  if (open) {
-    document.querySelectorAll(".tblock").forEach(el => {
-      if (el.dataset.state !== "run") el.open = false;
-    });
+  if (!open) {
+    document.querySelectorAll(".tblock").forEach(el => { el.open = false; });
   }
 }
-$("#thinkClear").onclick = () =>
-  setThinkOpen(!$("#thinkSec").classList.contains("open"));
 
 $("#fitBtn").onclick = () => Viewer.fit(true);
 $("#wireBtn").onclick = () => $("#wireBtn").classList.toggle("on", Viewer.toggleWire());
@@ -1436,6 +1452,17 @@ function applyProvider(providerId) {
   $("#providerBase").value = provider.base_url || "";
   $("#providerKey").placeholder = t(provider.needs_key
     ? "ph.apikey.memory" : "ph.apikey.none");
+
+  /* Only the Claude backends stream their reasoning; the OpenAI-compatible
+     adapter returns a finished answer. Saying "appears here as they work"
+     under one of those is a promise the backend cannot keep. */
+  const streams = provider.kind === "anthropic" || provider.kind === "bedrock";
+  $("#thinkSec").classList.toggle("nostream", !streams);
+  const waiting = $("#thinkBody .await span");
+  if (waiting && !TH.order) {
+    waiting.textContent = t(streams ? "think.await" : "think.nostream");
+    waiting.setAttribute("data-i18n", streams ? "think.await" : "think.nostream");
+  }
 
   setModelLabels($("#optGenModel").value, $("#optJudgeModel").value);
   updateProviderNote();
@@ -2133,7 +2160,7 @@ $("#back3d").onclick = () => showView("model");
    button on the viewport toolbar. They are the same kind of choice, so they
    are now the same control, and the old ones still work underneath it. */
 
-const VIEWS = ["model", "code", "params", "drawing"];
+const VIEWS = ["model", "code", "think", "params", "drawing"];
 
 function showView(which) {
   if (!VIEWS.includes(which)) which = "model";
@@ -2147,13 +2174,21 @@ function showView(which) {
   // Parameters are a card on the right now, not a view of the centre, so
   // asking for them leaves the model on screen - which is the point, since
   // they are controls for the thing you are looking at.
-  const source = which === "code";
-  $("#stage").hidden = source;
-  $(".vtools").hidden = source;          // Spin/Fit mean nothing over code
-  $("#codeSec").hidden = !source;
+  // Three things can fill the centre: the model, the source, the reasoning.
+  const pane = which === "code" || which === "think";
+  $("#stage").hidden = pane;
+  $(".vtools").hidden = pane;            // Spin/Fit mean nothing over text
+  $("#codeSec").hidden = which !== "code";
+  $("#thinkPane").hidden = which !== "think";
   $("#sheet").classList.toggle("on", which === "drawing");
   if (which === "drawing") openDrawing();
   if (which === "code") setStat();
+  if (which === "think") {
+    // Jump to the end: what the model is saying now is the reason anyone
+    // opens this while a run is going.
+    const body = $("#thinkBody");
+    body.scrollTop = body.scrollHeight;
+  }
   if (which === "params") chooseParamView("params");
   $$("#viewSeg .vsegb").forEach(button => {
     // "params" opens a card without changing the centre, so it flashes
@@ -2167,7 +2202,12 @@ function showView(which) {
 }
 
 $$("#viewSeg .vsegb").forEach(button => {
-  button.onclick = () => showView(button.dataset.view);
+  button.onclick = () => {
+    // Choosing a view is a decision the app must not overrule: after this,
+    // a run may no longer move the centre out from under the reader.
+    S.viewChosen = true;
+    showView(button.dataset.view);
+  };
 });
 
 /* The drawing segment follows the button it replaces, which the run itself
