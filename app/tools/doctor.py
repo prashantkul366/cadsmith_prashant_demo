@@ -202,6 +202,12 @@ def check_configuration(args) -> dict:
     except Exception as exc:
         warn("certificate trust", f"could not configure: {exc}")
 
+    # Taken before .env is loaded, so each variable can be reported with
+    # where it came from. Without that, a value inherited from the terminal
+    # and a value read out of the file look identical - and editing the file
+    # does nothing to the first, which is a confusing half hour.
+    from_shell = set(os.environ)
+
     try:
         from dotenv import load_dotenv
 
@@ -232,12 +238,13 @@ def check_configuration(args) -> dict:
             if show_aws and name in aws:
                 print(f"  {DIM}....  {name}  not set{RESET}")
             continue
+        origin = "from the shell" if name in from_shell else "from .env"
         # Never the value itself: a session token is a credential, and this
         # output is the first thing anyone pastes into a chat for help.
         if any(word in name for word in ("KEY", "SECRET", "TOKEN")):
-            ok(name, f"set, {len(value)} chars, ends ...{value[-4:]}")
+            ok(name, f"set, {len(value)} chars, ends ...{value[-4:]}, {origin}")
         else:
-            ok(name, value)
+            ok(name, f"{value}  ({origin})")
 
     # Both set is the trap worth naming: the app passes AWS_PROFILE to the
     # SDK explicitly, and botocore then drops the environment provider
@@ -245,9 +252,11 @@ def check_configuration(args) -> dict:
     if show_aws and os.getenv("AWS_PROFILE") and os.getenv("AWS_ACCESS_KEY_ID"):
         warn("AWS_PROFILE and AWS_ACCESS_KEY_ID are both set",
              os.getenv("AWS_PROFILE", ""),
-             "The profile wins and the pasted keys are ignored. Remove the "
-             "AWS_PROFILE line - including from .env - if you mean to use "
-             "the keys.")
+             "The profile wins and the pasted keys are ignored. Clear it "
+             "with `Remove-Item Env:\\AWS_PROFILE` (PowerShell) or "
+             "`unset AWS_PROFILE`, and take it out of .env, if you mean to "
+             "use the keys. Editing .env does not change a terminal that "
+             "already has the variable.")
 
     try:
         from app.server import providers
