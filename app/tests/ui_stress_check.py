@@ -158,6 +158,11 @@ def main() -> int:
             # ---------------------------------------------------------
             print("\nDouble-firing the buttons")
             configure_mock(page, args.mock_port)
+            # One composer: without the +, this edits the part already
+            # on screen instead of starting another.
+            if page.locator("#verPill").is_visible():
+                page.click("#newBtn")
+                page.wait_for_timeout(300)
             page.fill("#prompt", "a 20 tooth spur gear, module 2")
             for _ in range(5):
                 page.evaluate("document.querySelector('#genBtn').click()")
@@ -171,6 +176,11 @@ def main() -> int:
 
             # ---------------------------------------------------------
             print("\nClicking through every stage of a slow run")
+            # One composer: without the +, this edits the part already
+            # on screen instead of starting another.
+            if page.locator("#verPill").is_visible():
+                page.click("#newBtn")
+                page.wait_for_timeout(300)
             page.fill("#prompt", "an L-shaped mounting bracket with a gusset")
             page.click("#genBtn")
             page.wait_for_selector("#ovPipe:not([hidden])", timeout=20000)
@@ -211,6 +221,11 @@ def main() -> int:
 
             # ---------------------------------------------------------
             print("\nSwitching provider mid-run")
+            # One composer: without the +, this edits the part already
+            # on screen instead of starting another.
+            if page.locator("#verPill").is_visible():
+                page.click("#newBtn")
+                page.wait_for_timeout(300)
             page.fill("#prompt", "a hydraulic manifold block")
             page.click("#genBtn")
             page.wait_for_selector("#ovPipe:not([hidden])", timeout=20000)
@@ -262,6 +277,11 @@ def main() -> int:
             page.fill("#optGenModel", "mock-coder")
             page.fill("#optJudgeModel", "mock-judge")
             page.wait_for_timeout(300)
+            # One composer: without the +, this edits the part already
+            # on screen instead of starting another.
+            if page.locator("#verPill").is_visible():
+                page.click("#newBtn")
+                page.wait_for_timeout(300)
             page.fill("#prompt", "a pillow block bearing housing")
             page.click("#genBtn")
             page.wait_for_selector("#ovPipe:not([hidden])", timeout=20000)

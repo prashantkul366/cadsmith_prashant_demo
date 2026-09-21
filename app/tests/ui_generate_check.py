@@ -14,6 +14,7 @@ Needs a running server and a running mock provider:
 from __future__ import annotations
 
 import argparse
+import atexit
 import subprocess
 import sys
 import time
@@ -70,11 +71,19 @@ def configure_provider(page, base_url: str) -> None:
 
 
 def start_mock(port: int, mode: str) -> subprocess.Popen:
+    """Start a mock provider, and make sure it dies with us.
+
+    Without the atexit, a run that raises anywhere between here and
+    stop_mock leaves the provider listening - and, once init adopts it, not
+    obviously anyone's. The next run then reports "port busy" and reads
+    like a fault in the app rather than the tail of the last attempt.
+    """
     process = subprocess.Popen(
         [sys.executable, "-m", "app.tools.mock_provider",
          "--port", str(port), "--fail", mode],
         cwd=str(Path(__file__).resolve().parents[2]),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    atexit.register(lambda: process.poll() is None and process.kill())
     time.sleep(2.0)
     if process.poll() is not None:
         raise RuntimeError(
@@ -188,6 +197,12 @@ def main() -> int:
         # The path a person actually takes: pick a listed prompt, run it,
         # then run another. Typing a prompt once is not the same journey.
         print("\nStarting from a benchmark prompt")
+        # The starting prompts are an empty state: once there is a
+        # conversation they are clutter in the middle of it, so they come
+        # back with a new part rather than sitting under an old one.
+        if page.locator("#verPill").is_visible():
+            page.click("#newBtn")
+            page.wait_for_timeout(300)
         sample = page.locator("#samples .sample").first
         sample_id = sample.locator("b").inner_text()
         sample.click()
@@ -223,6 +238,9 @@ def main() -> int:
 
         # ---------------------------------------------------------------
         print("\nA third run, straight after")
+        if page.locator("#verPill").is_visible():
+            page.click("#newBtn")
+            page.wait_for_timeout(300)
         page.locator("#samples .sample").nth(1).click()
         page.wait_for_timeout(400)
         page.click("#genBtn")

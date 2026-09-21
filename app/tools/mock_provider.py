@@ -217,6 +217,10 @@ def main() -> int:
     Handler.fail = args.fail
     Handler.delay = args.delay
 
+    # A test that crashes leaves its socket in TIME_WAIT for a minute, and
+    # without this the next run reports "port busy" and looks like a defect
+    # in the app rather than the tail of the last run.
+    ThreadingHTTPServer.allow_reuse_address = True
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"Mock provider on http://127.0.0.1:{args.port}/v1  "
           f"(fail={args.fail}, delay={args.delay}s)")
