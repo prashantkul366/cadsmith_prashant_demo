@@ -43,11 +43,29 @@ fi
 # Load ANTHROPIC_API_KEY (and anything else) from .env if present. The agents
 # read it through python-dotenv too, but exporting it here means the health
 # check reports the truth before the first run starts.
+#
+# A variable already exported wins over the file, so a stale value in .env
+# cannot quietly replace one just set in this shell - which, for short-lived
+# AWS credentials, reads as an expired token with no explanation. That is
+# also python-dotenv's own default, which the agents load with.
 if [ -f "$ROOT/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . "$ROOT/.env"
-  set +a
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ""|\#*) continue ;; esac
+    name=${line%%=*}
+    [ "$name" = "$line" ] && continue
+    name=$(printf '%s' "$name" | tr -d '[:space:]')
+    printf '%s' "$name" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$' || continue
+    eval "current=\${$name-}"
+    [ -n "$current" ] && continue
+    value=${line#*=}
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    case "$value" in
+      \"*\") value=${value#\"}; value=${value%\"} ;;
+      \'*\') value=${value#\'}; value=${value%\'} ;;
+    esac
+    export "$name=$value"
+  done < "$ROOT/.env"
 fi
 
 echo "CADSmith → http://${HOST}:${PORT}"

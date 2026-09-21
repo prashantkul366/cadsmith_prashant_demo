@@ -174,7 +174,16 @@ export AWS_PROFILE=my-profile
 
 Portal credentials are short-lived, so the check is made live rather than
 inferred from the presence of the variables: an expired token is reported
-before a long run starts rather than half way through one.
+before a long run starts rather than half way through one. A variable set in
+your shell wins over the same name in `.env`, so a stale token left in the
+file cannot quietly replace the one you just pasted.
+
+Check the whole path before starting anything long — it runs the same calls
+the pipeline does, one at a time, with short timeouts:
+
+```powershell
+.venv\Scripts\python -m app.tools.doctor --provider bedrock
+```
 
 **Model ids.** Bedrock's are not the first-party names — they carry a region
 prefix and a version suffix, and most recent Claude models can only be

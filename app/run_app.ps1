@@ -65,6 +65,12 @@ if ($probeText -notmatch "CADSMITH_IMPORT_OK") {
 # Load .env into this process. The agents read it through python-dotenv too,
 # but setting it here means the health check reports the truth before the
 # first run starts.
+#
+# A variable already set in this shell wins. Someone who just typed
+# `$Env:AWS_SESSION_TOKEN = "..."` means it, and a stale value left in .env
+# should not quietly replace a fresh one - which, for short-lived AWS
+# credentials, reads as an expired token with no explanation. This is also
+# python-dotenv's own default, so both halves now agree.
 $envFile = Join-Path $root ".env"
 if (Test-Path $envFile) {
     foreach ($line in Get-Content $envFile) {
@@ -73,6 +79,7 @@ if (Test-Path $envFile) {
         $split = $trimmed.IndexOf("=")
         if ($split -lt 1) { continue }
         $name = $trimmed.Substring(0, $split).Trim()
+        if ([Environment]::GetEnvironmentVariable($name, "Process")) { continue }
         $value = $trimmed.Substring($split + 1).Trim().Trim('"').Trim("'")
         [Environment]::SetEnvironmentVariable($name, $value, "Process")
     }

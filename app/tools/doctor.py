@@ -247,6 +247,16 @@ def check_configuration(args) -> dict:
         judge_model=args.judge_model,
     )
     issues = providers.problems(config)
+    # Bedrock's declared default is a guess made before AWS can be asked
+    # anything. Check what you would actually invoke: unless a model was
+    # named on the command line, take one from the live list.
+    if not issues and config.kind == "bedrock":
+        offered = providers.list_models("bedrock", timeout=args.timeout)
+        generation, judge = providers.bedrock_defaults(offered)
+        if generation and not args.generation_model:
+            config.generation_model = generation
+        if judge and not args.judge_model:
+            config.judge_model = judge
     print()
     if issues:
         for issue in issues:
@@ -310,8 +320,8 @@ def check_models(args, resolved: dict) -> None:
         warn("model checks", "skipped - provider is not configured")
         return
 
-    if config.kind == "anthropic":
-        _check_anthropic(config, args)
+    if config.kind in ("anthropic", "bedrock"):
+        _check_claude(config, args, providers)
         return
 
     # 1. Can we reach it at all?
@@ -383,27 +393,72 @@ def check_models(args, resolved: dict) -> None:
              "vision-capable model.")
 
 
-def _check_anthropic(config, args) -> None:
+def _check_claude(config, args, providers) -> None:
+    """The Messages API, first-party or on Bedrock.
+
+    Both are the same surface and differ only in how the client is built, so
+    the app builds it. That also keeps Bedrock off the OpenAI-compatible
+    path, where its ``base_url`` is an AWS region and the request would be
+    posted to ``us-east-1/chat/completions`` - a failure that says nothing
+    about the thing being checked.
+    """
     try:
-        import anthropic
+        client = providers._build_sdk_client(config)
     except Exception as exc:
-        fail("anthropic SDK", str(exc))
-        return
-    client = anthropic.Anthropic(api_key=config.api_key)
-    started = time.time()
-    try:
-        response = client.messages.create(
-            model=config.generation_model, max_tokens=16,
-            messages=[{"role": "user", "content": "Reply with exactly: ok"}])
-        ok("generation model answers",
-           f"{time.time() - started:.1f}s, {response.content[0].text.strip()[:20]!r}")
-    except Exception as exc:
-        fail("generation model answers", f"{type(exc).__name__}: {exc}",
+        fail("Anthropic SDK client", f"{type(exc).__name__}: {exc}",
              _advice(str(exc)))
+        return
+
+    if config.kind == "bedrock":
+        offered = providers.list_models("bedrock", timeout=args.timeout)
+        if offered:
+            ok("models this account can invoke", f"{len(offered)} offered")
+            for role, name in (("generation", config.generation_model),
+                               ("judge", config.judge_model)):
+                if name not in offered:
+                    warn(f"{role} model is not in the list", name,
+                         "Bedrock ids carry a region prefix and a version "
+                         "suffix, and most recent Claude models are invokable "
+                         "only through a cross-region inference profile "
+                         "(us.anthropic.claude-...). Name one from the list.")
+        else:
+            warn("model list", "empty or unavailable",
+                 "Check AWS_REGION, and that Claude is enabled for this "
+                 "account under Bedrock > Model access in that region.")
+
+    roles = [("generation", config.generation_model)]
+    if config.judge_model and config.judge_model != config.generation_model:
+        roles.append(("judge", config.judge_model))
+    for role, model in roles:
+        started = time.time()
+        try:
+            response = client.messages.create(
+                model=model, max_tokens=16,
+                messages=[{"role": "user", "content": "Reply with exactly: ok"}])
+            text = next((block.text for block in response.content
+                         if getattr(block, "text", "")), "")
+            ok(f"{role} model answers",
+               f"{model} - {time.time() - started:.1f}s, {text.strip()[:20]!r}")
+        except Exception as exc:
+            fail(f"{role} model answers", f"{model} - {type(exc).__name__}: {exc}",
+                 _advice(str(exc)))
+            if role == "generation":
+                return
 
 
 def _advice(error: str) -> str:
     lowered = error.lower()
+    if "inference profile" in lowered or "on-demand throughput" in lowered:
+        return ("This Bedrock model cannot be invoked by its bare id. Use the "
+                "cross-region inference profile - the same model with a "
+                "region prefix, us.anthropic.claude-... - which the model box "
+                "and this check both list.")
+    if "accessdenied" in lowered or "access to the model" in lowered:
+        return ("The account reaches Bedrock but not this model. Enable it "
+                "under Bedrock > Model access, in the region AWS_REGION names.")
+    if "validationexception" in lowered:
+        return ("Bedrock rejected the request as malformed; the model id is "
+                "the usual cause. Take one from the list above.")
     if "certificate_verify_failed" in lowered or "certificate verify" in lowered:
         return ("Your network is inspecting TLS and re-signing it with a "
                 "certificate authority Python does not know. Install "
