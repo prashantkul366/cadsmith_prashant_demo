@@ -303,6 +303,11 @@ def _aws_reason(exc: Exception) -> str:
         code = str(response.get("Error", {}).get("Code", "") or "")
     name = code or type(exc).__name__
     lowered = name.lower()
+    if "profilenotfound" in lowered:
+        return (f"AWS_PROFILE names a profile that does not exist ({name}). "
+                "`aws configure list-profiles` lists the real ones, or unset "
+                "AWS_PROFILE and use AWS_ACCESS_KEY_ID, "
+                "AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN instead.")
     if "expired" in lowered:
         return (f"The AWS credentials have expired ({name}). Sign in again "
                 "with `aws sso login`, or set a fresh AWS_ACCESS_KEY_ID, "
@@ -339,6 +344,16 @@ def _aws_check(timeout: float = 4.0) -> tuple[str, str]:
         return _aws_cache[1], _aws_cache[2]
 
     arn, why = "", ""
+    # A profile name copied out of documentation is not a profile name, and
+    # boto3 reads AWS_PROFILE whether or not anything passes it on - so this
+    # has to be refused here rather than quietly skipped at the call site.
+    profile = (os.getenv("AWS_PROFILE") or "").strip()
+    if profile.startswith("<") and profile.endswith(">"):
+        _aws_cache = (now, "", f"AWS_PROFILE is still the placeholder "
+                               f"{profile}. Put a real profile name in it, or "
+                               f"remove the line and set AWS_ACCESS_KEY_ID, "
+                               f"AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN.")
+        return _aws_cache[1], _aws_cache[2]
     try:
         import boto3
         from botocore.config import Config
@@ -880,6 +895,9 @@ def _build_sdk_client(config: "LLMConfig"):
         kwargs: dict[str, Any] = {"aws_region": region}
         profile = (os.getenv("AWS_PROFILE") or "").strip()
         # A placeholder copied out of documentation is not a profile name.
+        # Not passing it on does not neutralise it - boto3's own default
+        # session reads AWS_PROFILE regardless - so _aws_check refuses one
+        # before a run can start. This is belt and braces.
         if profile and not (profile.startswith("<") and profile.endswith(">")):
             kwargs["aws_profile"] = profile
         return AnthropicBedrockMantle(**kwargs)

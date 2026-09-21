@@ -217,11 +217,23 @@ def check_configuration(args) -> dict:
     interesting = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CADSMITH_LLM_API_KEY",
                    "CADSMITH_LLM_BASE_URL", "OLLAMA_BASE_URL",
                    "LMSTUDIO_BASE_URL", "CADSMITH_LLM_TIMEOUT"]
-    for name in interesting:
+    # Bedrock's variables are reported whether or not they are set, because
+    # "no usable AWS credentials" and "you are in a different terminal from
+    # the one you typed them in" look identical from the outside - and the
+    # second is the common one. A $Env: or export lives in that window only,
+    # so the window you installed from is not the window you run from.
+    aws = ["AWS_REGION", "AWS_PROFILE", "AWS_ACCESS_KEY_ID",
+           "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
+    show_aws = args.provider == "bedrock"
+    for name in interesting + (aws if show_aws else []):
         value = os.getenv(name)
         if not value:
+            if show_aws and name in aws:
+                print(f"  {DIM}....  {name}  not set{RESET}")
             continue
-        if name.endswith("KEY"):
+        # Never the value itself: a session token is a credential, and this
+        # output is the first thing anyone pastes into a chat for help.
+        if any(word in name for word in ("KEY", "SECRET", "TOKEN")):
             ok(name, f"set, {len(value)} chars, ends ...{value[-4:]}")
         else:
             ok(name, value)
