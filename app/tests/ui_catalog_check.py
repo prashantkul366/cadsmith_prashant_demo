@@ -182,10 +182,10 @@ def main() -> int:
 
         # -----------------------------------------------------------------
         print("\nA catalogue part is still editable")
-        check("the edit bar is available", not page.locator("#cmdIn").is_disabled())
-        page.fill("#cmdIn", "make it 40 teeth")
+        check("the edit bar is available", not page.locator("#prompt").is_disabled())
+        page.fill("#prompt", "make it 40 teeth")
         started = time.time()
-        page.click("#applyBtn")
+        page.click("#genBtn")
         page.wait_for_function(
             "() => S.busy === false && S.versions.length >= 2", timeout=120000)
         page.wait_for_timeout(1200)

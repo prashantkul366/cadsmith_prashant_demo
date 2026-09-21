@@ -291,8 +291,8 @@ def main() -> int:
         # Length is unambiguous: in this attempt the walls stand 45mm from
         # z=0, so thickening the base would not change the overall height.
         before = page.evaluate("Viewer.extents.x")
-        page.fill("#cmdIn", "make the base length 140mm")
-        page.click("#applyBtn")
+        page.fill("#prompt", "make the base length 140mm")
+        page.click("#genBtn")
         page.wait_for_function(
             "() => document.querySelectorAll('#iters .iter').length === 3",
             timeout=180000)

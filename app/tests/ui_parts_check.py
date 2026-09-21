@@ -235,8 +235,8 @@ def main() -> int:
             check("the drawing button is locked while busy",
                   page.locator('#viewSeg .vsegb[data-view="drawing"]').is_disabled())
             check("the edit bar is locked while busy",
-                  page.locator("#cmdIn").is_disabled()
-                  and page.locator("#applyBtn").is_disabled())
+                  page.locator("#prompt").is_disabled()
+                  and page.locator("#genBtn").is_disabled())
 
             # Force the clicks anyway: a disabled button a person can still
             # reach through the keyboard must not start a second run.
@@ -307,7 +307,7 @@ def main() -> int:
 
             check("the controls unlock once the run is done",
                   not page.locator("#genBtn").is_disabled()
-                  and not page.locator("#cmdIn").is_disabled())
+                  and not page.locator("#prompt").is_disabled())
 
             print("\nDrawing the finished part")
             page.locator('.iter[data-i="1"]').click()

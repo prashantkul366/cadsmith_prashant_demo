@@ -69,9 +69,9 @@ def apply_edit(page, instruction: str, expect_new_version: bool = True
     """
     before = page.evaluate("S.versions.length")
     before_code = page.locator("#codeScroll").inner_text()
-    page.fill("#cmdIn", instruction)
+    page.fill("#prompt", instruction)
     started = time.time()
-    page.click("#applyBtn")
+    page.click("#genBtn")
     if expect_new_version:
         try:
             page.wait_for_function(
@@ -131,7 +131,7 @@ def main() -> int:
               page.evaluate("S.versions.length") == 1
               and abs(page.evaluate("Viewer.extents.x") - 44.0) < 0.3,
               f"{page.evaluate('Viewer.extents.x'):.2f} mm across")
-        check("the edit bar is ready", not page.locator("#cmdIn").is_disabled())
+        check("the edit bar is ready", not page.locator("#prompt").is_disabled())
 
         # -----------------------------------------------------------------
         print("\nSix changes in a row, each on top of the last")
@@ -145,8 +145,8 @@ def main() -> int:
                   f"{across:.2f} mm across, want {expected_dia:g} "
                   f"· {seconds:.1f}s" if across else "no geometry")
             check("   the box clears for the next change",
-                  page.locator("#cmdIn").input_value() == "",
-                  repr(page.locator("#cmdIn").input_value()))
+                  page.locator("#prompt").input_value() == "",
+                  repr(page.locator("#prompt").input_value()))
 
         check("every step is a version in the timeline",
               page.locator("#iters .iter").count() == len(CHAIN) + 1,
@@ -190,8 +190,8 @@ def main() -> int:
             ("set the diameter to 50mm", "bore_diameter"),
         ]:
             before = page.evaluate("S.versions.length")
-            page.fill("#cmdIn", instruction)
-            page.click("#applyBtn")
+            page.fill("#prompt", instruction)
+            page.click("#genBtn")
             page.wait_for_function("() => S.busy === false", timeout=120000)
             page.wait_for_timeout(1200)
             toast = page.locator("#toast").inner_text()
@@ -203,8 +203,8 @@ def main() -> int:
 
         print("\nAnd the part still works afterwards")
         check("the edit bar is usable again",
-              not page.locator("#cmdIn").is_disabled()
-              and not page.locator("#applyBtn").is_disabled())
+              not page.locator("#prompt").is_disabled()
+              and not page.locator("#genBtn").is_disabled())
         added, _ = apply_edit(page, "make the face width 15mm")
         check("a good edit still applies after refusals", added)
 

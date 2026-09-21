@@ -179,8 +179,8 @@ def main() -> int:
         # -----------------------------------------------------------
         print("\nSelecting an older attempt exports THAT attempt")
         generate(page, "a 20 tooth spur gear, module 2")
-        page.fill("#cmdIn", "make it 40 teeth")
-        page.click("#applyBtn")
+        page.fill("#prompt", "make it 40 teeth")
+        page.click("#genBtn")
         page.wait_for_function("() => S.busy === false && S.versions.length >= 2",
                                timeout=180000)
         page.wait_for_timeout(1200)

@@ -36,6 +36,8 @@ const I18N = (function () {
                          "プランナー · コーダー · 実行 · 検証 · リファイナー"],
     "app.history":      ["History", "履歴"],
     "app.fullscreen":   ["Fullscreen", "全画面"],
+    "opt.more":         ["Model and run settings", "モデルと実行の設定"],
+    "think.workedfor":  ["worked for {time}", "{time} 思考しました"],
     "export.label":     ["Export", "書き出し"],
     "export.step":      ["solid, for CAD", "ソリッド（CAD 用）"],
     "export.stl":       ["mesh, for printing", "メッシュ（造形用）"],

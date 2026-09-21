@@ -176,7 +176,7 @@ def main() -> int:
                     except Exception:
                         pass
                 page.evaluate("document.querySelector('#viewSeg .vsegb[data-view=\\"drawing\\"]').click()")
-                page.evaluate("document.querySelector('#applyBtn').click()")
+                page.evaluate("document.querySelector('#genBtn').click()")
                 page.evaluate("document.querySelector('#genBtn').click()")
                 for key in ("w", "h", "d", "f", "Escape"):
                     page.keyboard.press(key)
@@ -226,14 +226,14 @@ def main() -> int:
             check("Escape closes the history drawer",
                   page.locator("#hist").evaluate(
                       "el => !el.classList.contains('open')"))
-            page.fill("#cmdIn", "")
-            page.click("#applyBtn")
+            page.fill("#prompt", "")
+            page.click("#genBtn")
             page.wait_for_timeout(900)
             check("an empty edit is refused", page.evaluate("S.busy") is not True)
 
-            page.fill("#cmdIn", "make it 15mm thick")
+            page.fill("#prompt", "make it 15mm thick")
             for _ in range(4):
-                page.evaluate("document.querySelector('#applyBtn').click()")
+                page.evaluate("document.querySelector('#genBtn').click()")
             settle(page)
             check("four rapid Apply clicks do not double-apply",
                   not js_errors(), "; ".join(js_errors()[:2]))

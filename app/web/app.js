@@ -536,12 +536,35 @@ function handleEvent(event) {
 
 /* ═══════════════════════ versions ═══════════════════════ */
 
+/* ── the thread ──────────────────────────────────────────────────────── */
+
+function showAsk(text) {
+  $("#askTurn").hidden = !text;
+  $("#askText").textContent = text || "";
+  // The starting prompts are an empty state. Once there is a conversation
+  // they are clutter in the middle of it.
+  $("#samplesField").hidden = Boolean(text);
+}
+
+function showVersionPill() {
+  const pill = $("#verPill");
+  const version = S.versions[S.selected];
+  if (!version) { pill.hidden = true; return; }
+  pill.hidden = false;
+  pill.textContent = version.source === "catalog"
+    ? t("iter.catalog")
+    : t(version.source === "edit" ? "iter.edit" : "iter.iteration",
+        { n: version.iteration });
+}
+
 function addVersion(version) {
   const existing = S.versions.findIndex(v => v.iteration === version.iteration);
   if (existing >= 0) S.versions[existing] = version;
   else S.versions.push(version);
   renderIterations();
   selectVersion(S.versions.length - 1, { quiet: true });
+  showVersionPill();
+  refreshComposer();
 }
 
 function renderIterations() {
@@ -602,8 +625,7 @@ async function selectVersion(index, options) {
   // stays available without an API key; the agent path reports its own need.
   const canRebuild = !!(S.health && S.health.checks
                         && S.health.checks.cadquery.ok);
-  $("#cmdIn").disabled = !canRebuild;
-  $("#applyBtn").disabled = !canRebuild;
+  setComposerEnabled(canRebuild);
 }
 
 /* ═══════════════════════ panels ═══════════════════════ */
@@ -776,12 +798,78 @@ function renderValidation(version) {
 
 /* ═══════════════════════ run lifecycle ═══════════════════════ */
 
+/* ── one composer ────────────────────────────────────────────────────
+   There was a box on the left to describe a part and a second box across
+   the foot of the app to change one. Two inputs for what is, to the person
+   typing, the same act: say what you want. The composer decides which it
+   is from whether there is a part on screen, so nobody has to learn the
+   difference between describing and editing. */
+
+function setComposerEnabled(on) {
+  $("#prompt").disabled = !on;
+  $("#genBtn").disabled = !on;
+}
+
+//: True once there is something to change, which is what makes this an edit.
+function editing() {
+  return Boolean(S.jobId) && S.versions.length > 0 && !S.busy;
+}
+
+function submitComposer() {
+  if (S.busy) return;
+  if (editing()) applyEdit();
+  else generate();
+}
+
+/* The placeholder is the only thing that says which of the two will happen,
+   so it changes rather than staying a compromise between them. */
+function refreshComposer() {
+  const box = $("#prompt");
+  const key = editing() ? "edit.placeholder" : "input.placeholder";
+  box.placeholder = t(key);
+  box.setAttribute("data-i18n-ph", key);
+  $("#genBtn").title = t(editing() ? "edit.apply" : "input.generate");
+}
+
+$("#prompt").addEventListener("keydown", event => {
+  // Enter sends. A part description is a sentence, not a document, and
+  // shift-Enter is there for the rare one that wants two lines.
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    submitComposer();
+  }
+});
+
+/* ── the settings behind the kebab ───────────────────────────────────── */
+
+function closeMore() {
+  $("#moreMenu").hidden = true;
+  $("#moreBtn").setAttribute("aria-expanded", "false");
+}
+function toggleMore(event) {
+  if (event) event.stopPropagation();
+  const open = $("#moreMenu").hidden;
+  $("#moreMenu").hidden = !open;
+  $("#moreBtn").setAttribute("aria-expanded", String(open));
+}
+$("#moreBtn").onclick = toggleMore;
+$("#modelChip").onclick = toggleMore;
+document.addEventListener("click", event => {
+  if (!event.target.closest("#moreMenu") && !event.target.closest("#moreBtn")
+      && !event.target.closest("#modelChip")) closeMore();
+});
+
 async function generate() {
   const prompt = $("#prompt").value.trim();
   if (!prompt) { warnToast(t("run.needprompt")); return; }
   if (S.busy) return;
 
   S.busy = true;
+  S.runStarted = Date.now();
+  showAsk(prompt);
+  $("#prompt").value = "";
+  $("#verPill").hidden = true;
+  setThinkOpen(false);
   S.versions = [];
   S.selected = -1;
   S.designPlan = null;
@@ -805,8 +893,7 @@ async function generate() {
   $("#valBody").innerHTML = `<div class="await">${esc(t("val.waiting"))}</div>`;
   sheetSvg = null;
   $("#drawBtn").disabled = true;
-  $("#cmdIn").disabled = true;
-  $("#applyBtn").disabled = true;
+  setComposerEnabled(false);
   showOverlay("pipe");
   renderStages("plan", t("detail.sending"));
 
@@ -847,7 +934,20 @@ function follow(jobId, fromSeq) {
   });
 }
 
+/* "worked for 1m 33s" - the disclosure's own summary, so the reasoning can
+   stay shut and still say what it cost in time. */
+function thinkSummary() {
+  if (!S.runStarted) return;
+  const seconds = Math.max(1, Math.round((Date.now() - S.runStarted) / 1000));
+  const text = seconds >= 60
+    ? `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`
+    : `${seconds}s`;
+  $("#thinkSummary").textContent = t("think.workedfor", { time: text });
+}
+
 function finishRun(data) {
+  thinkSummary();
+  refreshComposer();
   S.busy = false;
   Viewer.building = false;
   thinkIdle();
@@ -1009,7 +1109,7 @@ async function openJob(jobId) {
 
 /* ═══════════════════════ wiring ═══════════════════════ */
 
-$("#genBtn").onclick = generate;
+$("#genBtn").onclick = submitComposer;
 $("#prompt").addEventListener("keydown", e => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) generate();
 });
@@ -1038,11 +1138,21 @@ document.addEventListener("click", e => {
    spinning when somebody asks for a fixed view. */
 Viewer.onView = () => $("#spinBtn").classList.remove("on");
 // Collapse every finished step; the running one stays open.
-$("#thinkClear").onclick = () => {
-  document.querySelectorAll(".tblock").forEach(el => {
-    if (el.dataset.state !== "run") el.open = false;
-  });
-};
+/* The reasoning is a disclosure now: shut by default once it has something
+   to disclose, because it is the longest thing in the thread and almost
+   never the thing being looked for. Opening it also tidies the finished
+   steps, which is what this button used to do on its own. */
+function setThinkOpen(open) {
+  $("#thinkSec").classList.toggle("open", open);
+  $("#thinkClear").setAttribute("aria-expanded", String(open));
+  if (open) {
+    document.querySelectorAll(".tblock").forEach(el => {
+      if (el.dataset.state !== "run") el.open = false;
+    });
+  }
+}
+$("#thinkClear").onclick = () =>
+  setThinkOpen(!$("#thinkSec").classList.contains("open"));
 
 $("#fitBtn").onclick = () => Viewer.fit(true);
 $("#wireBtn").onclick = () => $("#wireBtn").classList.toggle("on", Viewer.toggleWire());
@@ -1226,6 +1336,10 @@ function setModelLabels(generation, judge) {
     t("label.planner.model", { model: short(generation) });
   $("#judgeModelLabel").textContent =
     t("label.judge.model", { model: short(judge) });
+  // The composer names the model that will do the work, the way the design
+  // does. The full set is one click away behind the kebab.
+  const chip = $("#modelChipName");
+  if (chip) chip.textContent = (generation || "").split("/").pop() || "—";
 }
 
 /* Whether the catalogue can serve a part right now. Two callers depend on
@@ -1455,8 +1569,7 @@ function finishEdit(ok, data, message) {
   const fromPanel = S.editFromPanel;
   S.editing = false;
   S.busy = false;
-  $("#applyBtn").disabled = false;
-  $("#cmdIn").disabled = false;
+  setComposerEnabled(true);
   endParameterRebuild();
 
   if (!ok) {
@@ -1465,7 +1578,7 @@ function finishEdit(ok, data, message) {
   }
   // A parameter the panel set did not come from the instruction box, so
   // whatever is half-typed in there is still the person's.
-  if (!fromPanel) $("#cmdIn").value = "";
+  if (!fromPanel) $("#prompt").value = "";
   const method = t(data.method === "parameter patch"
     ? "edit.method.patch" : "edit.method.agent");
   const seconds = data.total_ms
@@ -1474,15 +1587,15 @@ function finishEdit(ok, data, message) {
 }
 
 async function applyEdit() {
-  const instruction = $("#cmdIn").value.trim();
+  const instruction = $("#prompt").value.trim();
+  if (instruction) showAsk(instruction);
   if (!instruction) { warnToast(t("edit.needinstruction")); return; }
   if (S.busy || !S.jobId || !S.versions.length) return;
 
   S.busy = true;
   S.editing = true;
   S.editSkipValidate = false;
-  $("#applyBtn").disabled = true;
-  $("#cmdIn").disabled = true;
+  setComposerEnabled(false);
   $("#actDiff").innerHTML = "";
   $("#act").hidden = false;
   renderEditSteps("read", false);
@@ -1498,10 +1611,6 @@ async function applyEdit() {
   }
 }
 
-$("#applyBtn").onclick = applyEdit;
-$("#cmdIn").addEventListener("keydown", e => {
-  if (e.key === "Enter") applyEdit();
-});
 
 /* ═══════════════════════ the parameters view ═══════════════════════
    The same script the Code view shows, as one control per dimension it

@@ -69,82 +69,132 @@
 <div class="work">
 
   <!-- ══════════ LEFT: input ══════════ -->
+  <!-- ══════════ LEFT: the conversation ══════════ -->
+  <!-- What was an input panel is a thread: what was asked, what was planned,
+       what the model was thinking while it worked, and which version came
+       out. One composer at the foot of it does both jobs - describing a part
+       and changing one - because from where the reader sits those are the
+       same act, and two text boxes made it look like two applications. -->
   <div class="col left">
-    <div class="phead"><h2 data-i18n="input.heading">Design Input</h2></div>
-    <div class="pbody">
+    <div class="thread" id="thread">
 
       <div class="banner" id="keyBanner" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 8v5M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
         <span id="keyBannerText"></span>
       </div>
 
-      <div class="field">
-        <span class="eyebrow" data-i18n="input.describe">Describe part</span>
-        <textarea class="prompt" id="prompt" data-i18n-ph="input.placeholder"
-                  placeholder="Describe the part you want to generate…"></textarea>
+      <div class="turn" id="askTurn" hidden>
+        <div class="bubble" id="askText"></div>
+        <div class="avatar" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>
+        </div>
       </div>
 
-      <button class="btn primary" style="width:100%" id="genBtn">
-        <svg class="icn" viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.6"/></svg>
-        <span data-i18n="input.generate">Generate CAD</span>
-      </button>
+      <section class="tsec" id="planSec">
+        <div class="tsechd">
+          <span class="eyebrow" data-i18n="plan.heading">Design plan</span>
+          <span class="eyebrow tmodel" id="genModelLabel" data-i18n="label.planner">PLANNER</span>
+        </div>
+        <div class="ai-body" id="planBody">
+        <div class="await">
+        <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+        <span data-i18n="plan.none">No part planned yet.</span>
+        </div>
+        </div>
+      </section>
 
+      <section class="tsec think" id="thinkSec">
+        <button class="thinkhead" id="thinkClear" aria-expanded="false">
+          <svg class="icn caret" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
+          <span id="thinkSummary" data-i18n="think.heading">Reasoning</span>
+          <span class="livedot" id="thinkLive" hidden
+                data-i18n-label="think.working" aria-label="working"></span>
+        </button>
+        <div class="think-body" id="thinkBody">
+        <div class="await">
+        <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+        <span data-i18n="think.await">The agents' reasoning appears here as they work.</span>
+        </div>
+        </div>
+      </section>
+
+      <button class="verpill" id="verPill" hidden></button>
+
+      <div class="field" id="samplesField">
+        <span class="eyebrow" data-i18n="input.samples">Benchmark prompts</span>
+        <div class="samples" id="samples"></div>
+      </div>
+    </div>
+
+    <!-- The one place anything is typed. -->
+    <div class="composer">
+      <textarea class="prompt" id="prompt" data-i18n-ph="input.placeholder"
+                placeholder="Describe the part you want to generate…"></textarea>
+      <div class="crow">
+        <button class="kebab" id="moreBtn" aria-haspopup="menu" aria-expanded="false"
+                data-i18n-title="opt.more" title="Model and run settings">
+          <svg class="icn" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
+        </button>
+        <div class="effortchip" id="effortRow">
+          <select id="optEffort" data-i18n-title="opt.effort.tip"
+                  title="How hard the model is asked to think."></select>
+        </div>
+        <button class="modelchip" id="modelChip">
+          <span id="modelChipName">—</span>
+          <svg class="icn caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <button class="send" id="genBtn" data-i18n-title="input.generate" title="Generate">
+          <svg class="icn" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
       <div class="opts">
-        <div class="opt" id="effortRow">
-          <span data-i18n="opt.effort" data-i18n-title="opt.effort.tip"
-                title="How hard the model is asked to think. Low answers a simple part in a fraction of the time; High is worth the wait on a difficult one. Claude backends only.">Reasoning effort</span>
-          <select id="optEffort"></select>
-        </div>
-        <div class="opt">
-          <span data-i18n="opt.iterations">Refinement iterations</span>
-          <span style="display:flex;align-items:center;gap:7px">
-            <input type="range" id="optIters" min="0" max="5" step="1" value="3" />
-            <output id="optItersOut">3</output>
-          </span>
-        </div>
         <div class="opt">
           <span data-i18n="opt.vision">Vision Judge</span>
           <span class="sw on" id="optVision" role="switch" aria-checked="true" tabindex="0"></span>
         </div>
         <div class="opt">
           <span data-i18n="opt.grounding" data-i18n-title="opt.grounding.tip"
-                title="Give the Planner the published dimensions for any standard part the request names — thread sizes, bearings, NEMA frames. Off reproduces the pipeline as published.">Standard dimensions</span>
+                title="Give the Planner the published dimensions for any standard part the request names.">Standard dimensions</span>
           <span class="sw on" id="optGround" role="switch" aria-checked="true" tabindex="0"></span>
         </div>
         <div class="opt">
           <span data-i18n="opt.catalog" data-i18n-title="opt.catalog.tip"
-                title="Answer an unambiguous standard-part request from the catalogue instead of generating it — exact dimensions, no model call. Off reproduces the pipeline as published.">Standard parts</span>
+                title="Answer an unambiguous standard-part request from the catalogue instead of generating it.">Standard parts</span>
           <span class="sw on" id="optCatalog" role="switch" aria-checked="true" tabindex="0"></span>
         </div>
       </div>
+    </div>
 
-      <div class="opts" id="llmOpts">
-        <div class="opt">
-          <span data-i18n="opt.provider">Provider</span>
-          <select id="optProvider"></select>
-        </div>
-        <div class="opt">
-          <span data-i18n="opt.genmodel">Generation model</span>
-          <input id="optGenModel" list="genModels" data-i18n-ph="ph.modelid" placeholder="model id" />
-          <datalist id="genModels"></datalist>
-        </div>
-        <div class="opt">
-          <span data-i18n="opt.judgemodel">Judge model</span>
-          <input id="optJudgeModel" list="judgeModels" data-i18n-ph="ph.modelid" placeholder="model id" />
-          <datalist id="judgeModels"></datalist>
-        </div>
-        <div class="keyrow" id="keyRow" hidden>
-          <input id="providerBase" type="text" data-i18n-ph="ph.baseurl" placeholder="Base URL" hidden />
-          <input id="providerKey" type="password" data-i18n-ph="ph.apikey" placeholder="API key" autocomplete="off" />
-          <button class="btn sm" id="saveKeyBtn" data-i18n="btn.usekey">Use</button>
-        </div>
-        <div class="optnote" id="providerNote"></div>
+    <!-- Everything that decides how a run is made, one click from the
+         composer rather than always on screen. -->
+    <div class="moremenu" id="moreMenu" role="menu" hidden>
+      <div class="opt">
+        <span data-i18n="opt.provider">Provider</span>
+        <select id="optProvider"></select>
       </div>
-
-      <div class="field" style="margin:16px 0 0">
-        <span class="eyebrow" data-i18n="input.samples">Benchmark prompts</span>
-        <div class="samples" id="samples"></div>
+      <div class="opt">
+        <span data-i18n="opt.genmodel">Generation model</span>
+        <input id="optGenModel" list="genModels" data-i18n-ph="ph.modelid" placeholder="model id" />
+        <datalist id="genModels"></datalist>
       </div>
+      <div class="opt">
+        <span data-i18n="opt.judgemodel">Judge model</span>
+        <input id="optJudgeModel" list="judgeModels" data-i18n-ph="ph.modelid" placeholder="model id" />
+        <datalist id="judgeModels"></datalist>
+      </div>
+      <div class="opt">
+        <span data-i18n="opt.iterations">Refinement iterations</span>
+        <span style="display:flex;align-items:center;gap:7px">
+          <input type="range" id="optIters" min="0" max="5" step="1" value="3" />
+          <output id="optItersOut">3</output>
+        </span>
+      </div>
+      <div class="keyrow" id="keyRow" hidden>
+        <input id="providerBase" type="text" data-i18n-ph="ph.baseurl" placeholder="Base URL" hidden />
+        <input id="providerKey" type="password" data-i18n-ph="ph.apikey" placeholder="API key" autocomplete="off" />
+        <button class="btn sm" id="saveKeyBtn" data-i18n="btn.usekey">Use</button>
+      </div>
+      <div class="optnote" id="providerNote"></div>
     </div>
   </div>
 
@@ -283,38 +333,6 @@
   <div class="col right">
     <div class="rsplit">
 
-      <div class="rsec think" id="thinkSec">
-        <div class="phead">
-          <h2 data-i18n="think.heading">Reasoning</h2>
-          <span class="livedot" id="thinkLive" hidden
-                data-i18n-label="think.working" aria-label="working"></span>
-          <div class="spacer" style="flex:1"></div>
-          <button class="btn ghost sm" id="thinkClear" data-i18n="think.collapse"
-                  data-i18n-title="think.collapse.tip"
-                  title="Collapse finished steps">Collapse</button>
-        </div>
-        <div class="think-body" id="thinkBody">
-          <div class="await">
-            <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
-            <span data-i18n="think.await">The agents' reasoning appears here as they work.</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="rsec ai">
-        <div class="phead">
-          <h2 data-i18n="plan.heading">Design Plan</h2>
-          <div class="spacer" style="flex:1"></div>
-          <span class="eyebrow" id="genModelLabel" data-i18n="label.planner">PLANNER</span>
-        </div>
-        <div class="ai-body" id="planBody">
-          <div class="await">
-            <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
-            <span data-i18n="plan.none">No part planned yet.</span>
-          </div>
-        </div>
-      </div>
-
       <div class="rsec val">
         <div class="phead">
           <h2 data-i18n="val.heading">Validation</h2>
@@ -334,22 +352,12 @@
 </div>
 
 <!-- ══════════ command bar ══════════ -->
-<div class="cmd">
-  <div class="act" id="act" hidden>
-    <div class="act-steps" id="actSteps"></div>
-    <div id="actDiff"></div>
-  </div>
-  <div class="cmd-side">
-    <span class="eyebrow" data-i18n="edit.heading">Natural-language editor</span>
-    <span style="font-size:10.5px;color:var(--ink-dim)" data-i18n="edit.sub">Edits the current model</span>
-  </div>
-  <div class="cmd-in">
-    <svg class="icn" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></svg>
-    <input id="cmdIn" data-i18n-ph="edit.placeholder"
-           placeholder="Ask for a change…  e.g. make it 15 mm thick, or add a reinforcing gusset" disabled />
-  </div>
-  <button class="btn primary" id="applyBtn" disabled style="height:36px;padding:0 16px"
-          data-i18n="edit.apply">Apply change</button>
+<!-- The edit steps and the diff an edit produced. They were part of a
+     second, full-width text box at the foot of the app; the box is gone and
+     this reports into the thread. -->
+<div class="act" id="act" hidden>
+  <div class="act-steps" id="actSteps"></div>
+  <div id="actDiff"></div>
 </div>
 </div>
 
