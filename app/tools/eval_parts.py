@@ -159,8 +159,19 @@ def score(expect: dict, measured: dict, catalogue_served: bool) -> list[dict]:
     return checks
 
 
-def run_case(manager: JobManager, case: dict, options: JobOptions,
+def run_case(runs_dir: Path, case: dict, options: JobOptions,
              timeout: float) -> CaseResult:
+    """One case, in a JobManager of its own.
+
+    Not a shared manager, because ``JobManager`` runs one job at a time and
+    abandoning a case on timeout does not release its worker - the next case
+    would queue behind the very run the timeout was meant to escape, and
+    ``--timeout`` would bound the report without bounding the clock. A
+    manager per case makes it mean what it says. The abandoned run keeps
+    going in its own thread, but it is bounded by the token ceiling and the
+    iteration limit and ends on its own.
+    """
+    manager = JobManager(runs_dir)
     result = CaseResult(id=case["id"], prompt=case["prompt"],
                         tier=case.get("tier", "easy"))
     started = time.time()
@@ -336,7 +347,7 @@ def main() -> int:
         baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
 
     from app.server.app import RUNS_DIR      # the app's own runs directory
-    manager = JobManager(Path(args.runs_dir) if args.runs_dir else RUNS_DIR)
+    runs_dir = Path(args.runs_dir) if args.runs_dir else RUNS_DIR
 
     kwargs: dict[str, Any] = {
         "max_iterations": args.iterations,
@@ -357,7 +368,7 @@ def main() -> int:
     results = []
     for index, case in enumerate(cases, 1):
         print(f"\n[{index}/{len(cases)}] {case['id']}: {case['prompt'][:64]}")
-        result = run_case(manager, case, options, args.timeout)
+        result = run_case(runs_dir, case, options, args.timeout)
         results.append(result)
         state = "PASS" if result.passed else ("built" if result.built else "FAILED")
         print(f"      {state} in {result.seconds:.1f}s"

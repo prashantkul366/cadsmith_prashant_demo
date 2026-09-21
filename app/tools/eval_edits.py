@@ -177,8 +177,16 @@ def _drift(before: dict, after: dict, expect: dict) -> list[str]:
     return moved
 
 
-def run_chain(manager: JobManager, chain: dict, options: JobOptions,
+def run_chain(runs_dir: Path, chain: dict, options: JobOptions,
               timeout: float) -> ChainResult:
+    """One chain, in a JobManager of its own.
+
+    A chain has to share a manager across its own steps - the edits land on
+    the job the base prompt created - but not across chains: JobManager runs
+    one job at a time, so abandoning a chain on timeout would leave the next
+    one queued behind the run the timeout was meant to escape.
+    """
+    manager = JobManager(runs_dir)
     out = ChainResult(id=chain["id"], prompt=chain["prompt"])
     job = manager.create(chain["prompt"], options)
     if not _wait(job, timeout):
@@ -250,7 +258,7 @@ def main() -> int:
         return 2
 
     from app.server.app import RUNS_DIR
-    manager = JobManager(Path(args.runs_dir) if args.runs_dir else RUNS_DIR)
+    runs_dir = Path(args.runs_dir) if args.runs_dir else RUNS_DIR
 
     kwargs: dict[str, Any] = {
         "max_iterations": args.iterations,
@@ -267,7 +275,7 @@ def main() -> int:
     results = []
     for index, chain in enumerate(chains, 1):
         print(f"\n[{index}/{len(chains)}] {chain['id']}: {chain['prompt'][:60]}")
-        results.append(run_chain(manager, chain, options, args.timeout))
+        results.append(run_chain(runs_dir, chain, options, args.timeout))
 
     print(f"\n{'=' * 72}")
     print(f"{'chain':<12} {'base':<6} {'steps held':<12} {'model calls':<12} detail")
