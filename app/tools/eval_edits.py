@@ -39,9 +39,21 @@ from typing import Any, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.server import spec  # noqa: E402
+from app.server.events import (  # noqa: E402
+    PHASE_CODE, PHASE_ERROR_FIX, PHASE_JUDGE, PHASE_PLAN, PHASE_REFINE,
+    STATUS_STARTED)
 from app.server.jobs import (  # noqa: E402
     JobManager, JobOptions, STATUS_DONE, STATUS_ERROR)
 from app.tools.eval_parts import score  # noqa: E402
+
+#: The phases that mean a model was asked something. Counted from the event
+#: log rather than read off ``job.llm_calls``, which the edit path never
+#: updates - only generation sets it - so every edit read as free, including
+#: ones that spent ten Judge calls over two minutes. A cost signal that is
+#: wrong in the cheap direction is worse than none: it says the expensive
+#: path is free.
+MODEL_PHASES = (PHASE_PLAN, PHASE_CODE, PHASE_JUDGE, PHASE_REFINE,
+                PHASE_ERROR_FIX)
 
 #: Chains an engineer would plausibly work through. Each step's ``expect``
 #: describes the whole part after that step, not just what changed, so a step
@@ -142,6 +154,15 @@ def _wait(job, timeout: float) -> bool:
     return job.status == STATUS_DONE
 
 
+def _calls(manager: JobManager, job) -> int:
+    """How many times a model has been asked something in this job so far."""
+    sink = manager.sink(job.id)
+    if sink is None:
+        return 0
+    return sum(1 for event in sink.all()
+               if event.phase in MODEL_PHASES and event.status == STATUS_STARTED)
+
+
 def _measure(manager: JobManager, job) -> Optional[dict]:
     if not job.versions:
         return None
@@ -205,7 +226,7 @@ def run_chain(runs_dir: Path, chain: dict, options: JobOptions,
     for raw in chain["steps"]:
         result = StepResult(say=raw["say"])
         before = measured
-        calls_before = int(job.llm_calls or 0)
+        calls_before = _calls(manager, job)
         started = time.time()
         try:
             manager.submit_edit(job, raw["say"], len(job.versions) - 1)
@@ -215,7 +236,7 @@ def run_chain(runs_dir: Path, chain: dict, options: JobOptions,
             break
         finished = _wait(job, timeout)
         result.seconds = time.time() - started
-        result.llm_calls = int(job.llm_calls or 0) - calls_before
+        result.llm_calls = _calls(manager, job) - calls_before
         if not finished:
             result.error = job.error or "the edit did not finish"
             out.steps.append(result)
