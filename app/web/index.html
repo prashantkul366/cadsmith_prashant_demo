@@ -289,32 +289,18 @@
 
     <div class="centrepane" id="codeSec" hidden>
       <div class="phead">
-        <h2 id="codeHeading" data-i18n="params.heading">Part parameters</h2>
+        <h2 id="codeHeading" data-i18n="code.heading">Generated CadQuery</h2>
         <div class="spacer" style="flex:1"></div>
-        <!-- Two views of the same script. Parameters opens first: it is
-             the one someone who does not read Python can work in, and the
-             source is one click away for anyone who wants it. -->
-        <div class="seg" id="codeViews" role="tablist">
-          <button class="segb" id="viewCodeBtn" role="tab"
-                  aria-selected="false" data-i18n="code.view.code">Code</button>
-          <button class="segb on" id="viewParamsBtn" role="tab"
-                  aria-selected="true" data-i18n="code.view.params">Parameters</button>
-        </div>
         <span class="eyebrow" id="codeStat">— — —</span>
       </div>
 
-      <div class="codewrap" id="codeView" hidden>
+      <div class="codewrap" id="codeView">
         <div class="code-scroll" id="codeScroll">
           <div class="code-inner">
             <pre class="hl" id="hl"></pre>
           </div>
         </div>
       </div>
-
-      <div class="codewrap" id="paramsView">
-        <div class="params-body" id="paramsBody"></div>
-      </div>
-
     </div>
     <!-- The filmstrip: one thumbnail per version, scrolling sideways. The
          spend that used to share this row is a card of its own now. -->
@@ -333,7 +319,7 @@
         <h2 data-i18n="params.heading">Part parameters</h2>
         <svg class="icn caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
       </button>
-      <div class="rbody"><div class="sliders" id="sliderBody"></div></div>
+      <div class="rbody"><div class="params-body" id="paramsBody"></div></div>
     </section>
 
     <section class="rcard" id="cardProps" data-card="props" hidden>
@@ -369,6 +355,17 @@
       </div>
     </section>
   </div>
+
+</div><!-- /.work -->
+</div><!-- /.shell -->
+
+<!-- The steps an edit goes through and the diff it produced. This used to
+     live in a second, full-width text box across the foot of the app; the
+     box is gone and this reports on its own. -->
+<div class="act" id="act" hidden>
+  <div class="act-steps" id="actSteps"></div>
+  <div id="actDiff"></div>
+</div>
 
 <!-- ══════════ history drawer ══════════ -->
 <aside class="hist" id="hist">

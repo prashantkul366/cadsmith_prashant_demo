@@ -1759,9 +1759,13 @@ function renderParameters() {
     return;
   }
   if (!S.params.length) {
+    // Nothing to put a control on, so nothing to show: an empty card is
+    // worse than no card.
+    showCard("params", false);
     body.innerHTML = `<div class="await"><span>${esc(t("params.none"))}</span></div>`;
     return;
   }
+  showCard("params", true);
 
   body.innerHTML =
     `<div class="params-hint">${esc(t("params.hint"))}</div>`
@@ -1929,68 +1933,36 @@ function paramsReset() {
   setStat();
 }
 
-/* ── the toggle ─────────────────────────────────────────────────────── */
+/* ── code and parameters ─────────────────────────────────────────────
+   They were two tabs of one panel. They are not two views of one thing:
+   the source is a document to read, and the dimensions are controls to
+   move, and the second is wanted far more often than the first. So the
+   dimensions live in a card on the right, where they are visible beside
+   the model they change, and the source has the centre to itself. */
 
 function setStat() {
-  // Hidden rather than emptied in the Parameters view: the controls are
-  // their own count, and the header is only 36px tall with a toggle in it.
   const stat = $("#codeStat");
-  stat.hidden = S.paramView === "params";
+  stat.hidden = false;
   stat.textContent = S.codeLines
     ? t("code.stat", { n: S.codeLines }) : t("code.empty");
 }
 
+//: Kept as the one entry point the header switch and the old callers share.
 function showParamView(which) {
   S.paramView = which === "params" ? "params" : "code";
-  const params = S.paramView === "params";
-  $("#codeView").hidden = params;
-  $("#paramsView").hidden = !params;
-  // The download row belongs to both: a .py, a STEP and an STL are of the
-  // part, not of the view. Only Copy is about the source.
-  $("#copyBtn").hidden = params;
-  $("#viewCodeBtn").classList.toggle("on", !params);
-  $("#viewParamsBtn").classList.toggle("on", params);
-  $("#viewCodeBtn").setAttribute("aria-selected", String(!params));
-  $("#viewParamsBtn").setAttribute("aria-selected", String(params));
-  $("#codeHeading").textContent = t(params ? "params.heading" : "code.heading");
-  $("#codeHeading").setAttribute("data-i18n",
-                                 params ? "params.heading" : "code.heading");
-  if (params) renderParameters();
+  if (S.paramView === "params") {
+    // Parameters are not a view of the centre any more. Asking for them
+    // opens their card and puts it where the eye is.
+    showCard("params", true);
+    setCardOpen("params", true);
+    renderParameters();
+    const card = document.querySelector('.rcard[data-card="params"]');
+    if (card) card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
   setStat();
 }
 
-/* Remembered, like the language switch, so someone who prefers one view does
-   not have to say so again for every part or every visit.
-
-   Parameters is the default. The generated source is the more striking thing
-   to open on, but it is not the thing most people came to change, and it is
-   one click away; opening on controls means a part can be adjusted without
-   ever being told there is Python behind it. */
-const PARAM_VIEW_KEY = "cadsmith.codeview";
-
-$("#viewCodeBtn").onclick = () => chooseParamView("code");
-$("#viewParamsBtn").onclick = () => chooseParamView("params");
-
-function chooseParamView(which) {
-  showParamView(which);
-  // The right column's toggle and the header's switch are two doors into
-  // the same room, so opening one moves the other.
-  $$("#viewSeg .vsegb").forEach(button => {
-    if (button.dataset.view === "code" || button.dataset.view === "params") {
-      const on = button.dataset.view === which;
-      button.classList.toggle("on", on);
-      button.setAttribute("aria-selected", String(on));
-    }
-  });
-  const model = $('#viewSeg .vsegb[data-view="model"]');
-  if (model) { model.classList.remove("on"); model.setAttribute("aria-selected", "false"); }
-  try { localStorage.setItem(PARAM_VIEW_KEY, S.paramView); } catch (e) { /* fine */ }
-}
-
-try {
-  const remembered = localStorage.getItem(PARAM_VIEW_KEY);
-  if (remembered === "code") showParamView("code");
-} catch (e) { /* a private window has no storage; the default is fine */ }
+function chooseParamView(which) { showParamView(which); }
 
 /* ═══════════════════════ drawing sheet ═══════════════════════ */
 
@@ -2112,15 +2084,23 @@ function showView(which) {
   }
   S.view = which;
   // The stage and the code panel are the same slot in the centre column.
-  const source = which === "code" || which === "params";
+  // Parameters are a card on the right now, not a view of the centre, so
+  // asking for them leaves the model on screen - which is the point, since
+  // they are controls for the thing you are looking at.
+  const source = which === "code";
   $("#stage").hidden = source;
-  $(".vtools").hidden = source;          // ISO/FIT/SPIN mean nothing over code
-  $("#codeSec").hidden = !(which === "code" || which === "params");
+  $(".vtools").hidden = source;          // Spin/Fit mean nothing over code
+  $("#codeSec").hidden = !source;
   $("#sheet").classList.toggle("on", which === "drawing");
   if (which === "drawing") openDrawing();
-  if (which === "code" || which === "params") chooseParamView(which);
+  if (which === "code") setStat();
+  if (which === "params") chooseParamView("params");
   $$("#viewSeg .vsegb").forEach(button => {
-    const on = button.dataset.view === which;
+    // "params" opens a card without changing the centre, so it flashes
+    // rather than latches: the centre is still the model.
+    const on = which === "params"
+      ? button.dataset.view === "model"
+      : button.dataset.view === which;
     button.classList.toggle("on", on);
     button.setAttribute("aria-selected", String(on));
   });

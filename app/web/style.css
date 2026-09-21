@@ -323,6 +323,24 @@ textarea.prompt::placeholder{color:#535E6E}
   font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);padding-top:2px}
 .tilenote.unone{font-style:italic;font-family:var(--ui);font-size:11.5px}
 
+/* ---------- the filmstrip ---------- */
+/* One card per version, scrolling sideways. Amber marks the one on screen,
+   the same amber that marks everything else you are holding. */
+.iters{display:flex;gap:9px;padding:10px 12px;flex:none;min-height:0;
+  background:var(--panel);border-top:1px solid var(--line-soft);
+  overflow-x:auto;overflow-y:hidden;align-items:center;scrollbar-width:thin}
+.iters:empty{display:none}
+.iter{flex:none;width:112px;border:1px solid var(--line);border-radius:var(--r);
+  background:var(--panel-2);cursor:pointer;overflow:hidden;transition:.14s}
+.iter:hover{border-color:var(--ink-dim)}
+.iter.sel{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber)}
+.iter img{width:100%;height:52px;object-fit:cover;object-position:center;
+  background:#fff;display:block}
+.iter .ilabel{display:flex;align-items:center;gap:5px;padding:5px 7px;
+  font-size:10px;letter-spacing:.04em;color:var(--ink-2);white-space:nowrap}
+.iter.sel .ilabel{color:var(--amber)}
+.iter .ilabel i{width:5px;height:5px;border-radius:50%;flex:none}
+
 /* ---------- viewport ---------- */
 .col.center{background:var(--void);position:relative}
 .vtools[hidden]{display:none}
@@ -634,8 +652,11 @@ textarea.src{
   background:var(--raise);border:1px solid var(--line);cursor:pointer;transition:.16s}
 .sw:after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;
   border-radius:50%;background:var(--ink-dim);transition:.16s}
-.sw.on{background:var(--accent-dim);border-color:var(--accent)}
-.sw.on:after{left:16px;background:#fff}
+/* Amber, not blue: a switch is state you are holding, the same as a slider
+   or the selected version, and blue is reserved for the one action a region
+   is for. */
+.sw.on{background:var(--amber);border-color:var(--amber)}
+.sw.on:after{left:16px;background:var(--bubble)}
 
 /* ---------- design plan rows ---------- */
 .plan-desc{font-size:11.5px;color:var(--ink-2);line-height:1.5;margin-bottom:10px}
@@ -662,20 +683,6 @@ textarea.src{
   color:var(--ink-dim);margin:6px 0 12px;line-height:1.5}
 
 /* ---------- iteration timeline ---------- */
-.iters{display:flex;gap:8px;padding:9px 12px;border-top:1px solid var(--line);
-  background:var(--panel);overflow-x:auto;flex:none;min-height:64px;align-items:center}
-.iters:empty{display:none}
-.iter{flex:none;width:104px;border:1px solid var(--line);border-radius:var(--r);
-  background:var(--panel-2);cursor:pointer;overflow:hidden;transition:.14s}
-.iter:hover{border-color:var(--accent-dim)}
-.iter.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-dim)}
-.iter img{width:100%;height:40px;object-fit:cover;object-position:center;
-  background:#fff;display:block}
-.iter .ilabel{display:flex;align-items:center;gap:4px;padding:4px 6px;
-  font-family:var(--mono);font-size:9px;letter-spacing:.06em;color:var(--ink-2)}
-.iter .ilabel i{width:5px;height:5px;border-radius:50%;flex:none}
-.iter .ilabel i.pass{background:var(--valid)} .iter .ilabel i.fail{background:var(--warn)}
-.iter .ilabel i.edit{background:var(--accent)}
 .ihint{font-family:var(--mono);font-size:9px;letter-spacing:.08em;
   color:var(--ink-dim);padding-left:2px;flex:none}
 
@@ -757,7 +764,7 @@ textarea.src{
    shadows at the very top and very bottom -- which means a shadow shows
    exactly when there is something past that edge. No script, no resize
    observer, and correct while content is still streaming in. */
-.ai-body,.think-body,.code-scroll,.params-body{
+.ai-body,.think-body,.code-scroll{
   /* --fade is the body's own background, so the cover layers match it
      exactly; the code panel sits on the darker void. */
   --fade:#12161D;--fade-0:rgba(18,22,29,0);
@@ -775,11 +782,8 @@ textarea.src{
 }
 .code-scroll{--fade:var(--void);--fade-0:rgba(76,76,76,0)}
 .ai-body::-webkit-scrollbar,.code-scroll::-webkit-scrollbar,
-.params-body::-webkit-scrollbar{width:8px;height:8px}
 .ai-body::-webkit-scrollbar-thumb,.code-scroll::-webkit-scrollbar-thumb,
-.params-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
 .ai-body::-webkit-scrollbar-thumb:hover,.code-scroll::-webkit-scrollbar-thumb:hover,
-.params-body::-webkit-scrollbar-thumb:hover{background:var(--line)}
 
 /* The bodies that were only as tall as their content could not scroll at
    all inside a clamped section -- they overflowed it and were clipped. */
@@ -920,11 +924,6 @@ html[lang="ja"] .thead span{letter-spacing:.02em}
    Per-agent, because the interesting number is not the total but which agent
    is costing it: a Judge re-reading a render five times looks nothing like a
    Coder that needed one attempt. */
-.itersrow{display:flex;align-items:center;gap:12px;flex:none;
-  border-top:1px solid var(--line);background:var(--panel);min-height:64px}
-.itersrow:has(.iters:empty):has(.usage[hidden]){display:none}
-.itersrow:has(.iters:empty) .usage{padding-left:14px}
-.itersrow .iters{flex:1;border-top:none;min-height:0}
 .usage{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
   color:var(--ink-dim);padding:6px 14px;display:flex;gap:14px;
   flex-wrap:wrap;justify-content:flex-end;align-items:baseline;
@@ -984,10 +983,10 @@ html[lang="ja"] .speclabel,html[lang="ja"] .specwant{letter-spacing:0}
 .segb.on{background:var(--raise);color:var(--ink)}
 .segb:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 
-.params-body{
-  position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;
-  padding:10px 14px 16px 12px;
-}
+/* Was position:absolute;inset:0 to fill the centre pane it used to live
+   in. In a card it simply flows, and filling the page from a card is what
+   it did instead. */
+.params-body{display:flex;flex-direction:column;gap:2px}
 
 .params-hint{font-size:10.5px;line-height:1.45;color:var(--ink-dim);
   padding:0 0 9px;border-bottom:1px solid var(--line-soft);margin-bottom:9px}
@@ -1010,12 +1009,12 @@ html[lang="ja"] .speclabel,html[lang="ja"] .specwant{letter-spacing:0}
   box-shadow:0 0 0 3px rgba(59,130,246,.12)}
 .prow-unit{font-family:var(--mono);font-size:10px;color:var(--ink-dim);width:20px;padding-left:3px;flex:none}
 
-.prow input[type=range]{width:100%;display:block;accent-color:var(--accent);cursor:grab}
+.prow input[type=range]{width:100%;display:block;accent-color:var(--amber);cursor:grab}
 .prow input[type=range]:active{cursor:grabbing}
 .prow input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:2px}
 
 /* Changed from what the built part declares, and not yet rebuilt. */
-.prow.dirty .prow-name{color:var(--accent)}
+.prow.dirty .prow-name{color:var(--amber)}
 .prow.dirty .prow-num{border-color:var(--accent-dim)}
 .prow-was{font-family:var(--mono);font-size:10px;color:var(--ink-dim);
   margin-left:6px;flex:none}
