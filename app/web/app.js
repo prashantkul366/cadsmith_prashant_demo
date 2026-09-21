@@ -269,7 +269,10 @@ function showOverlay(which) {
   $("#ovEmpty").hidden = which !== "empty";
   $("#ovPipe").hidden = which !== "pipe";
   $("#ovErr").hidden = which !== "error";
-  if (which !== "none") $("#minfo").hidden = true;
+  // The properties used to float on the model and had to be got out of
+  // the way of an overlay. They are a card now, and a card does not
+  // cover anything.
+  if (which !== "none") showCard("props", false);
 }
 
 /* ═══════════════════════ event handling ═══════════════════════ */
@@ -343,10 +346,10 @@ function renderUsage() {
     // A catalogue part costs nothing, and saying so is the point - it is the
     // difference between the two paths made visible.
     if (S.catalog) {
-      strip.hidden = false;
-      strip.innerHTML = `<span class="unone">${esc(t("usage.free"))}</span>`;
+      showCard("tokens", true);
+      strip.innerHTML = `<div class="tilenote unone">${esc(t("usage.free"))}</div>`;
     } else {
-      strip.hidden = true;
+      showCard("tokens", false);
     }
     return;
   }
@@ -355,8 +358,8 @@ function renderUsage() {
     .filter(name => byAgent[name] && (byAgent[name].input + byAgent[name].output))
     .map(name => {
       const a = byAgent[name];
-      return `<span class="uagent"><b>${compact(a.input + a.output)}</b>`
-           + `<span>${esc(agentLabel(name))}${a.calls > 1 ? ` ×${a.calls}` : ""}</span></span>`;
+      return `<div class="tile"><b>${compact(a.input + a.output)}</b>`
+           + `<span>${esc(agentLabel(name))}${a.calls > 1 ? ` ×${a.calls}` : ""}</span></div>`;
     });
 
   // On a metered backend the useful number is not just what this run spent
@@ -372,15 +375,20 @@ function renderUsage() {
   const costNote = S.spend && S.spend.estimated_cost !== undefined
     ? `<span class="ucost">≈ $${S.spend.estimated_cost.toFixed(4)}</span>` : "";
 
-  strip.hidden = false;
-  strip.innerHTML =
-    `<span class="utot">${esc(t("usage.total", {
-        total: total.toLocaleString(),
-        in: seen.input.toLocaleString(),
-        out: seen.output.toLocaleString(),
-        calls: I18N.plural("usage.calls", "usage.calls.pl", seen.calls),
-      }))}</span>`
-    + costNote + budgetNote + parts.join("");
+  // Four totals and one tile per agent, which is the breakdown the app has
+  // always computed and never shown as anything but a line of text.
+  const totals = [
+    [t("usage.tok"), total.toLocaleString()],
+    [t("usage.in"), seen.input.toLocaleString()],
+    [t("usage.out"), seen.output.toLocaleString()],
+    [t("usage.callst"), String(seen.calls)],
+  ].map(([label, value]) =>
+    `<div class="tile"><b>${esc(value)}</b><span>${esc(label)}</span></div>`);
+
+  showCard("tokens", true);
+  strip.innerHTML = totals.join("") + parts.join("")
+    + (costNote || budgetNote
+        ? `<div class="tilenote">${costNote}${budgetNote}</div>` : "");
 }
 
 const TH = { blocks: new Map(), order: 0 };
@@ -536,6 +544,51 @@ function handleEvent(event) {
 
 /* ═══════════════════════ versions ═══════════════════════ */
 
+/* ── the four cards on the right ─────────────────────────────────────
+   Each shuts away on its own. Which one matters depends on what you are
+   doing: checking a dimension does not need the token bill on screen, and
+   watching the spend does not need the verdict. What is shut is remembered,
+   because it is a preference about how you work rather than about this run. */
+
+const CARD_KEY = "cadsmith.cards";
+
+function cardState() {
+  try { return JSON.parse(localStorage.getItem(CARD_KEY) || "{}"); }
+  catch (e) { return {}; }
+}
+
+function setCardOpen(name, open) {
+  const card = document.querySelector(`.rcard[data-card="${name}"]`);
+  if (!card) return;
+  card.classList.toggle("shut", !open);
+  card.querySelector("[data-card-toggle]").setAttribute("aria-expanded", String(open));
+  try {
+    const state = cardState();
+    state[name] = open;
+    localStorage.setItem(CARD_KEY, JSON.stringify(state));
+  } catch (e) { /* a private window has no storage; the card still works */ }
+}
+
+//: Present or absent, which is not the same as open or shut. A card with
+//: nothing in it yet should not be a row of empty tiles.
+function showCard(name, present) {
+  const card = document.querySelector(`.rcard[data-card="${name}"]`);
+  if (card) card.hidden = !present;
+}
+
+$$(".rcard [data-card-toggle]").forEach(button => {
+  const card = button.closest(".rcard");
+  button.onclick = () => setCardOpen(card.dataset.card,
+                                     card.classList.contains("shut"));
+});
+
+(function restoreCards() {
+  const state = cardState();
+  $$(".rcard").forEach(card => {
+    if (state[card.dataset.card] === false) setCardOpen(card.dataset.card, false);
+  });
+})();
+
 /* ── the thread ──────────────────────────────────────────────────────── */
 
 function showAsk(text) {
@@ -610,7 +663,7 @@ async function selectVersion(index, options) {
     if (!options || !options.quiet) Viewer.fit(true);
     else Viewer.fit(false);
     showOverlay("none");
-    $("#minfo").hidden = false;
+    showCard("props", true);
   } catch (error) {
     warnToast(error.message);
   }
@@ -674,18 +727,21 @@ function renderKernelFacts(version) {
     version.source === "catalog" ? t("facts.standard")
     : version.source === "edit" ? t("facts.updated")
     : t(version.passed ? "facts.validated" : "facts.unvalidated");
-  $("#mfacts").innerHTML = [
+  const tiles = [
     [t("facts.bbox"), `${fmt(bbox.xlen)}×${fmt(bbox.ylen)}×${fmt(bbox.zlen)}`],
     [t("facts.volume"), fmt(Math.round(geometry.volume || 0))],
     [t("facts.faces"), geometry.num_faces],
     [t("facts.edges"), geometry.num_edges],
-    [t("facts.solid"), t(geometry.is_valid ? "facts.watertight" : "facts.invalid")],
-  ].map(([label, value]) =>
-    `<div class="fact"><b>${esc(String(value ?? "—"))}</b><span>${esc(label)}</span></div>`
+    // A part that is not watertight is not a part, so this tile carries the
+    // warning rather than reading like another number.
+    [t("facts.solid"), t(geometry.is_valid ? "facts.watertight" : "facts.invalid"),
+     geometry.is_valid ? "" : "warn"],
+  ];
+  $("#mfacts").innerHTML = tiles.map(([label, value, tone]) =>
+    `<div class="tile ${tone || ""}"><b>${esc(String(value ?? "—"))}</b>`
+    + `<span>${esc(label)}</span></div>`
   ).join("");
-
-  const icon = $("#mIcon");
-  if (icon) icon.style.color = version.passed ? "var(--valid)" : "var(--warn)";
+  showCard("props", true);
 }
 
 function specLabel(check) {

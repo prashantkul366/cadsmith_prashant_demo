@@ -285,13 +285,6 @@
         </div>
       </div>
 
-      <div class="minfo" id="minfo" hidden>
-        <div class="mstat">
-          <svg class="icn" viewBox="0 0 24 24" id="mIcon" style="color:var(--valid)"><path d="M20 6 9 17l-5-5"/></svg>
-          <span id="mtitle">Model generated</span>
-        </div>
-        <div class="mfacts" id="mfacts"></div>
-      </div>
     </div>
 
     <div class="centrepane" id="codeSec" hidden>
@@ -323,22 +316,50 @@
       </div>
 
     </div>
-    <div class="itersrow">
-      <div class="iters" id="iters"></div>
-      <div class="usage" id="usage" hidden></div>
-    </div>
+    <!-- The filmstrip: one thumbnail per version, scrolling sideways. The
+         spend that used to share this row is a card of its own now. -->
+    <div class="iters" id="iters"></div>
   </div>
 
-  <!-- ══════════ RIGHT: plan, code, validation ══════════ -->
+  <!-- ══════════ RIGHT: four cards, each one shut away ══════════ -->
+  <!-- Detached cards with gaps rather than a flush split column, and each
+       collapses to its own title bar. Which of the four matters depends on
+       what you are doing: somebody checking a dimension does not need the
+       token bill on screen, and somebody watching the spend does not need
+       the verdict. Neither should have to scroll past the other. -->
   <div class="col right">
-    <div class="rsplit">
+    <section class="rcard" id="cardParams" data-card="params" hidden>
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="params.heading">Part parameters</h2>
+        <svg class="icn caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody"><div class="sliders" id="sliderBody"></div></div>
+    </section>
 
-      <div class="rsec val">
-        <div class="phead">
-          <h2 data-i18n="val.heading">Validation</h2>
-          <div class="spacer" style="flex:1"></div>
-          <span class="eyebrow" id="judgeModelLabel" data-i18n="label.judge">JUDGE</span>
-        </div>
+    <section class="rcard" id="cardProps" data-card="props" hidden>
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="props.heading">Properties</h2>
+        <span class="eyebrow" id="mtitle"></span>
+        <svg class="icn caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody"><div class="tiles" id="mfacts"></div></div>
+    </section>
+
+    <section class="rcard" id="cardTokens" data-card="tokens" hidden>
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="usage.heading">Token tracking</h2>
+        <svg class="icn caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody"><div class="tiles" id="usage"></div></div>
+    </section>
+
+    <section class="rcard" data-card="val">
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="val.heading">Validation</h2>
+        <span class="eyebrow" id="judgeModelLabel" data-i18n="label.judge">JUDGE</span>
+        <svg class="icn caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody">
         <div class="ai-body" id="valBody">
           <div class="await">
             <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
@@ -346,20 +367,8 @@
           </div>
         </div>
       </div>
-
-    </div>
+    </section>
   </div>
-</div>
-
-<!-- ══════════ command bar ══════════ -->
-<!-- The edit steps and the diff an edit produced. They were part of a
-     second, full-width text box at the foot of the app; the box is gone and
-     this reports into the thread. -->
-<div class="act" id="act" hidden>
-  <div class="act-steps" id="actSteps"></div>
-  <div id="actDiff"></div>
-</div>
-</div>
 
 <!-- ══════════ history drawer ══════════ -->
 <aside class="hist" id="hist">

@@ -293,6 +293,36 @@ textarea.prompt::placeholder{color:#535E6E}
 .moremenu[hidden]{display:none}
 .col.left{position:relative}
 
+/* ---------- right: four cards, each one shut away ---------- */
+.col.right{display:flex;flex-direction:column;gap:10px;padding:12px;
+  overflow-y:auto;overscroll-behavior:contain;background:var(--void)}
+.rcard{flex:0 0 auto;background:var(--panel);border:1px solid var(--line-soft);
+  border-radius:var(--r-lg);overflow:hidden}
+.rcard[hidden]{display:none}
+.rhead{display:flex;align-items:center;gap:9px;width:100%;padding:11px 13px;
+  text-align:left}
+.rhead h2{font-size:13px;font-weight:650;flex:1;min-width:0}
+.rhead .eyebrow{flex:none;opacity:.75}
+.rhead .caret{flex:none;transition:transform .16s;color:var(--ink-dim)}
+.rhead:hover .caret{color:var(--ink)}
+.rcard.shut .caret{transform:rotate(-90deg)}
+.rbody{padding:0 13px 13px}
+.rcard.shut .rbody{display:none}
+
+/* Two columns of tiles, lighter than the card they sit in - the design's
+   recessed convention, the same as the page-to-panel step. */
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{background:var(--raise);border-radius:var(--r);padding:9px 11px;min-width:0}
+.tile b{display:block;font-size:13px;font-weight:650;color:var(--ink);
+  font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.tile span{display:block;font-size:9.5px;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--ink-dim);margin-top:2px}
+.tile.warn b{color:var(--warn)}
+.tilenote{grid-column:1 / -1;display:flex;gap:10px;align-items:baseline;
+  font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);padding-top:2px}
+.tilenote.unone{font-style:italic;font-family:var(--ui);font-size:11.5px}
+
 /* ---------- viewport ---------- */
 .col.center{background:var(--void);position:relative}
 .vtools[hidden]{display:none}
@@ -341,7 +371,9 @@ textarea.prompt::placeholder{color:#535E6E}
 
 /* The gizmo replaced ISO/FRONT/TOP/RIGHT, so it has to be clickable - and
    bigger than a decoration, because it is now a control. */
-.axes{position:absolute;left:18px;bottom:18px;width:82px;height:82px;cursor:pointer}
+/* Under the chips, not tucked in a corner: it is the view control now,
+   and a control belongs where the hand already is. */
+.axes{position:absolute;left:18px;top:52px;width:88px;height:88px;cursor:pointer}
 .axes .axhit{fill:transparent;stroke:none;cursor:pointer}
 .axes .axhit:hover{fill:rgba(255,190,68,.22)}
 .scalebar{

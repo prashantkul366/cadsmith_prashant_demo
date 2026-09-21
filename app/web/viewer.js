@@ -28,7 +28,7 @@ const Viewer = (() => {
   scene.add(new THREE.HemisphereLight(0xEAEEF5, 0x4A4A4A, 0.85));
   const key = new THREE.DirectionalLight(0xffffff, 0.95);
   key.position.set(1, 0.7, 1.4); scene.add(key);
-  const fill = new THREE.DirectionalLight(0x9FC0EA, 0.4);
+  const fill = new THREE.DirectionalLight(0xC9CFD8, 0.4);
   fill.position.set(-1.2, -0.6, 0.4); scene.add(fill);
   const rim = new THREE.DirectionalLight(0xffffff, 0.28);
   rim.position.set(0, -1, -1); scene.add(rim);
@@ -176,7 +176,7 @@ const Viewer = (() => {
 
     const group = new THREE.Group();
     const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
-      color: 0x8FB4E8, metalness: 0.22, roughness: 0.55,
+      color: 0xE8E8E6, metalness: 0.08, roughness: 0.62,
       flatShading: false, side: THREE.DoubleSide,
     }));
     group.add(mesh);
@@ -185,7 +185,7 @@ const Viewer = (() => {
     const edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(geometry, 22),
       new THREE.LineBasicMaterial({
-        color: 0xD6E2F2, transparent: true, opacity: 0.32,
+        color: 0x8A8A88, transparent: true, opacity: 0.38,
       }));
     group.add(edges);
 
@@ -309,23 +309,29 @@ const Viewer = (() => {
   const axisGroup = document.querySelector("#axG");
   const AXIS_VIEW = { X: "right", Y: "front", Z: "top" };
   function drawAxes() {
-    const R = 20, cx = 30, cy = 30;
+    const R = 23, cx = 30, cy = 30;
     const dirs = [
       ["X", new THREE.Vector3(1, 0, 0), "#F2606A"],
       ["Y", new THREE.Vector3(0, 1, 0), "#3DD68C"],
       ["Z", new THREE.Vector3(0, 0, 1), "#4D8DF6"],
     ];
-    let svg = `<circle cx="${cx}" cy="${cy}" r="8.5" fill="#FFBE44" stroke="none"/>`
-            + `<circle cx="${cx}" cy="${cy}" r="4.6" fill="#1E1E1E" stroke="none"/>`;
+    let svg = `<circle cx="${cx}" cy="${cy}" r="6" fill="#FFBE44" stroke="none"/>`
+            + `<circle cx="${cx}" cy="${cy}" r="3" fill="#1E1E1E" stroke="none"/>`;
     for (const [name, vector, colour] of dirs) {
+      // The raw projection foreshortens an axis pointing at the camera down
+      // to almost nothing, which left the arms shorter than the hub drawn
+      // over them. Keep the direction, keep some foreshortening, but never
+      // let an arm disappear under its own origin.
       const p = vector.clone().project(cam);
-      const x = cx + p.x * R, y = cy - p.y * R;
-      const lx = cx + (x - cx) * 1.32, ly = cy + (y - cy) * 1.32;
+      const len = Math.hypot(p.x, p.y) || 1e-6;
+      const reach = R * Math.min(1, 0.55 + 0.45 * len);
+      const x = cx + (p.x / len) * reach, y = cy - (p.y / len) * reach;
+      const lx = cx + (x - cx) * 1.22, ly = cy + (y - cy) * 1.22;
       svg += `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${colour}"/>`;
       svg += `<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" fill="${colour}" font-size="8" font-family="monospace" text-anchor="middle" stroke="none">${name}</text>`;
-      svg += `<circle class="axhit" data-view="${AXIS_VIEW[name]}" cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="7.5"><title>${name}</title></circle>`;
+      svg += `<circle class="axhit" data-view="${AXIS_VIEW[name]}" cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="6.5"><title>${name}</title></circle>`;
     }
-    svg += `<circle class="axhit" data-view="iso" cx="${cx}" cy="${cy}" r="8.5"><title>ISO</title></circle>`;
+    svg += `<circle class="axhit" data-view="iso" cx="${cx}" cy="${cy}" r="6"><title>ISO</title></circle>`;
     axisGroup.innerHTML = svg;
   }
 
@@ -377,7 +383,7 @@ const Viewer = (() => {
       const url = renderer.domElement.toDataURL("image/png");
       if (white) {
         scene.background = background;
-        eachMaterial((m, isLine) => { if (isLine) m.color.set(0xD6E2F2); });
+        eachMaterial((m, isLine) => { if (isLine) m.color.set(0x8A8A88); });
         applyModes();
       }
       return url;
