@@ -420,7 +420,7 @@ def nearest_shaft(diameter: float) -> float:
 
 
 def gear_teeth_for_diameter(diameter: float, kind: str = "tip",
-                            min_teeth: int = 10) -> tuple[int, float] | None:
+                            min_teeth: int = 17) -> tuple[int, float] | None:
     """A whole tooth count and preferred module giving this gear diameter.
 
     A gear asked for by diameter alone is not under-specified, it is
@@ -430,6 +430,14 @@ def gear_teeth_for_diameter(diameter: float, kind: str = "tip",
     module that lands on a whole tooth count, because for a given diameter a
     coarser module is a stronger tooth - which is the choice a gear cutter
     makes too.
+
+    ``min_teeth`` defaults to 17 because that is where a 20 degree involute
+    starts to undercut: below it the cutter removes part of the flank at the
+    root and the tooth is weaker than its numbers say. Coarsest-first would
+    otherwise answer a 60mm gear with ten teeth, which builds and measures
+    correctly and is a worse gear than the eighteen-tooth module 3 sitting
+    one row down. Pass a lower floor when the module is the caller's choice
+    rather than this function's.
 
     Returns ``(teeth, module)``, or None if no preferred module gets within
     a tenth of a millimetre with at least ``min_teeth`` teeth.

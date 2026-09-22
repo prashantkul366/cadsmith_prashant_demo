@@ -68,6 +68,12 @@ _TIP_DIA = re.compile(
 _ANY_DIA = re.compile(
     r"(\d+(?:\.\d+)?)\s*(?:mm)?\s*dia(?:meter)?\b"
     r"|dia(?:meter)?\.?\s*(?:of\s*|=\s*)?(\d+(?:\.\d+)?)", re.I)
+#: "a 100mm spur gear" - a size sitting in front of the noun, with no word
+#: saying which size it is. It is the diameter; nothing else about a gear is
+#: quoted that way. The mm is required, so "a 20 tooth spur gear" cannot
+#: match its own tooth count here.
+_GEAR_SIZED = re.compile(
+    r"(\d+(?:\.\d+)?)\s*mm\s+(?:\w+\s+){0,2}?(?:gear|pinion)\b", re.I)
 
 
 def _first_group(pattern, text):
@@ -125,6 +131,7 @@ def _gear(text: str) -> Optional[CatalogPart]:
     module = _number(_MODULE, text)
     face_width = _number(_FACE_WIDTH, text)
     bore = _number(_BORE, text)
+    from_diameter = False
 
     if "sprocket" in lowered:
         if not library.HAVE_WAREHOUSE or teeth is None:
@@ -143,15 +150,16 @@ def _gear(text: str) -> Optional[CatalogPart]:
         # and the Planner should size it. See gear_teeth_for_diameter.
         pitch_dia = _first_group(_PITCH_DIA, text)
         tip_dia = _first_group(_TIP_DIA, text)
-        plain_dia = _first_group(_ANY_DIA, text)
-        if plain_dia is not None and plain_dia == bore:
+        plain_dia = (_first_group(_ANY_DIA, text)
+                     or _number(_GEAR_SIZED, text))
+        if plain_dia is not None and plain_dia in (bore, face_width, module):
             plain_dia = None         # "12mm bore diameter" is not the gear
         wanted, kind = ((pitch_dia, "pitch") if pitch_dia is not None
                         else (tip_dia, "tip") if tip_dia is not None
                         else (plain_dia, "tip"))
         if wanted is not None and wanted >= 8.0:
             derived = standards.gear_teeth_for_diameter(
-                wanted, kind, min_teeth=10 if module is None else 5)
+                wanted, kind, min_teeth=17 if module is None else 5)
             if module is not None:
                 # An explicit module is not ours to round away.
                 offset = 2 if kind == "tip" else 0
@@ -161,6 +169,7 @@ def _gear(text: str) -> Optional[CatalogPart]:
                            else None)
             if derived:
                 teeth, module = derived
+                from_diameter = True
 
     if teeth is None:
         # Neither a tooth count nor a diameter that lands on one. The Planner
@@ -188,10 +197,19 @@ def _gear(text: str) -> Optional[CatalogPart]:
                                      face_width=face_width or 10.0,
                                      bore=bore or 8.0)
         chosen = module or 2.0
-        return parts.spur_gear(
-            teeth=teeth, module=chosen,
-            face_width=face_width or max(4.0, round(chosen * 4.0 * 2) / 2.0),
-            bore=bore or standards.nearest_shaft(chosen * (teeth + 2) / 4.0))
+        # A gear asked for by tooth count keeps the defaults it always had -
+        # five modules of face and an 8mm bore - because changing them would
+        # quietly resize every gear anyone already asks for. A gear derived
+        # from a diameter has no such history and nothing else to go on, so
+        # it is proportioned to the size that was asked for: a 50mm gear on
+        # an 8mm shaft is not what anyone means.
+        if from_diameter:
+            face_width = face_width or max(4.0, round(chosen * 4.0 * 2) / 2.0)
+            bore = bore or standards.nearest_shaft(
+                chosen * (teeth + 2) / 4.0)
+        return parts.spur_gear(teeth=teeth, module=chosen,
+                               face_width=face_width or 10.0,
+                               bore=bore or 8.0)
     return None
 
 

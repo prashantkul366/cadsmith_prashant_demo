@@ -97,11 +97,35 @@ def test_a_gear_can_be_asked_for_by_diameter() -> None:
     check("the answer is instant, not a five minute pipeline run",
           report.build_ms < 10000, f"{report.build_ms:.0f} ms")
 
+    check("and its teeth are above the undercut limit",
+          routed.part.parameters["teeth"] >= 17,
+          f"{routed.part.parameters['teeth']:g} teeth")
+
+
+def test_a_named_tooth_count_keeps_the_defaults_it_had() -> None:
+    """Proportional defaults are for a gear derived from a diameter, which
+    has nothing else to go on. A gear asked for by tooth count already
+    worked, and quietly resizing those is a regression, not a fix."""
+    print("\nA gear named by tooth count is unchanged")
+    routed = router.select("A 20 tooth spur gear, module 2.")
+    check("still answered", routed is not None)
+    if routed is None:
+        return
+    check("with the face width it always had",
+          near(routed.part.parameters["face_width"], 10.0),
+          str(routed.part.parameters["face_width"]))
+    check("and the bore it always had",
+          near(routed.part.parameters["bore"], 8.0),
+          str(routed.part.parameters["bore"]))
+    check("a gear sized from a diameter is proportioned to it instead",
+          router.select("spur gear 50mm diameter").part.parameters["bore"] > 8.0,
+          str(router.select("spur gear 50mm diameter").part.parameters["bore"]))
+
 
 def test_gear_sizing_is_exact_or_refused() -> None:
     print("\nA diameter either lands on a real gear or is handed back")
-    for diameter, expected in ((50.0, (18, 2.5)), (60.0, (10, 5.0)),
-                               (100.0, (18, 5.0))):
+    for diameter, expected in ((50.0, (18, 2.5)), (60.0, (18, 3.0)),
+                               (100.0, (18, 5.0)), (44.0, (20, 2.0))):
         got = standards.gear_teeth_for_diameter(diameter)
         check(f"{diameter:g}mm tip diameter", got == expected,
               f"{got} (wanted {expected})")
@@ -115,9 +139,24 @@ def test_gear_sizing_is_exact_or_refused() -> None:
     check("and so is one too small to be a gear",
           standards.gear_teeth_for_diameter(4.0) is None)
 
+    # Coarsest-first alone answers 60mm with ten teeth: it measures right
+    # and undercuts, because a 20 degree involute needs seventeen.
+    bad = [(d, standards.gear_teeth_for_diameter(float(d)))
+           for d in range(20, 220, 2)]
+    check("no gear is offered below the undercut limit",
+          all(got is None or got[0] >= 17 for _, got in bad),
+          str([(d, g) for d, g in bad if g and g[0] < 17][:4]))
+
+    # 45 is module 3 by fifteen teeth and module 2.5 by eighteen; the
+    # undercut floor picks the second, and both are exactly 45mm.
     check("a pitch diameter is read as a pitch diameter",
-          standards.gear_teeth_for_diameter(45.0, "pitch") == (15, 3.0),
+          standards.gear_teeth_for_diameter(45.0, "pitch") == (18, 2.5),
           str(standards.gear_teeth_for_diameter(45.0, "pitch")))
+    check("and read as a pitch diameter it is not a tip diameter",
+          standards.gear_teeth_for_diameter(45.0, "pitch")
+          != standards.gear_teeth_for_diameter(45.0, "tip"),
+          f'pitch {standards.gear_teeth_for_diameter(45.0, "pitch")}, '
+          f'tip {standards.gear_teeth_for_diameter(45.0, "tip")}')
 
 
 def test_every_new_part_builds() -> None:
@@ -250,6 +289,8 @@ def test_the_router_knows_what_it_is_being_asked_for() -> None:
     serve = [
         ("spur gear 50mm diameter", "spur gear"),
         ("a 50 mm diameter spur gear", "spur gear"),
+        ("a 100mm spur gear", "spur gear"),
+        ("a 44mm pinion", "spur gear"),
         ("spur gear, 45mm pitch diameter", "spur gear"),
         ("a 20 tooth spur gear module 2", "spur gear"),
         ("a 20mm shaft 150mm long", "shaft"),
@@ -286,6 +327,8 @@ def test_the_router_knows_what_it_is_being_asked_for() -> None:
         "a shaft",                       # no size at all
         "a coupling",
         "a 31.4mm spur gear",            # no preferred module reaches it
+        "a 12mm bore gear",              # the bore is not the gear
+        "a 10mm thick gear",             # nor is the face width
         "a flexible jaw coupling for a 10mm shaft",
         "a woodruff key for a 20mm shaft",
         "an internal retaining ring for a 40mm bore",
@@ -330,6 +373,7 @@ def test_the_new_parts_are_editable() -> None:
 
 def main() -> int:
     test_a_gear_can_be_asked_for_by_diameter()
+    test_a_named_tooth_count_keeps_the_defaults_it_had()
     test_gear_sizing_is_exact_or_refused()
     test_every_new_part_builds()
     test_every_listed_family_builds_at_its_defaults()
