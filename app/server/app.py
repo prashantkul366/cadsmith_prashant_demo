@@ -678,13 +678,27 @@ def get_artifact(job_id: str, version: int, artifact: str, request: Request):
         if not version_dir.is_dir():
             raise HTTPException(status_code=404,
                                 detail=i18n.t("http.noversion", lang))
+        # The lettering is part of the drawing, so the sheet is built and
+        # cached in the language it was asked for. English keeps the plain
+        # filename, which is what every sheet already on disk is.
         build = ensure_sheet if artifact == "drawing.svg" else ensure_dxf
         try:
-            build(version_dir, job.prompt, job.id, int(version))
+            built = build(version_dir, job.prompt, job.id, int(version),
+                          lang=lang)
         except Exception as exc:
             raise HTTPException(
                 status_code=500,
                 detail=i18n.t("http.nodrawing", lang, error=exc)) from exc
+        # A localised sheet is cached under its own name, so it is served
+        # from here rather than through the lookup below, which resolves the
+        # plain one.
+        if built is not None and built.name != artifact:
+            return FileResponse(
+                built,
+                media_type=MEDIA_TYPES.get(built.suffix,
+                                           "application/octet-stream"),
+                filename=(f"{job_id}_v{version}_{artifact}"
+                          if artifact == "drawing.dxf" else None))
 
     path = manager.artifact_path(job_id, version, artifact)
     if path is None:

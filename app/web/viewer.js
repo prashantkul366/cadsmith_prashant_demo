@@ -317,12 +317,26 @@ const Viewer = (() => {
     ];
     let svg = `<circle cx="${cx}" cy="${cy}" r="6" fill="#FFBE44" stroke="none"/>`
             + `<circle cx="${cx}" cy="${cy}" r="3" fill="#1E1E1E" stroke="none"/>`;
+    // Rotate each axis into camera space, rather than projecting a point.
+    //
+    // This used to call project() on the world points (1,0,0), (0,1,0) and
+    // (0,0,1) - absolute positions, not directions. Their screen positions
+    // converge as the camera pulls away from the origin, so the three arms
+    // collapsed towards a single spot and the labels stacked on top of each
+    // other: on a 44mm part 300 units out, every arm came back at the 12.65
+    // floor and the gizmo read as one smudged glyph. It also depended on
+    // where `target` happened to be, so the same camera angle drew a
+    // different gizmo for a part modelled away from the origin.
+    //
+    // A direction has no position, so the rotation is the whole answer: x is
+    // rightwards on screen and y upwards, foreshortening falls out of their
+    // magnitude, and the result is the same at any distance.
+    const toView = new THREE.Matrix4().extractRotation(cam.matrixWorldInverse);
     for (const [name, vector, colour] of dirs) {
-      // The raw projection foreshortens an axis pointing at the camera down
-      // to almost nothing, which left the arms shorter than the hub drawn
-      // over them. Keep the direction, keep some foreshortening, but never
-      // let an arm disappear under its own origin.
-      const p = vector.clone().project(cam);
+      // An axis pointing straight at the camera still foreshortens to almost
+      // nothing, so keep the direction and keep some foreshortening, but
+      // never let an arm disappear under the hub drawn over it.
+      const p = vector.clone().applyMatrix4(toView);
       const len = Math.hypot(p.x, p.y) || 1e-6;
       const reach = R * Math.min(1, 0.55 + 0.45 * len);
       const x = cx + (p.x / len) * reach, y = cy - (p.y / len) * reach;
@@ -343,13 +357,44 @@ const Viewer = (() => {
   }
   let lastAxes = "";
 
-  document.querySelector("#axes").addEventListener("click", event => {
+  /* The gizmo orbits as well as snaps.
+     It is the part of the viewport a hand already goes to, and dragging it
+     is how every CAD tool spins a model - so it drives the same theta/phi
+     the canvas does. A press that does not move is still a click: release
+     within a few pixels and the axis under it snaps the view, which is what
+     the hit circles are for. Anything further is a turn, and the click is
+     swallowed so the view does not jump at the end of it. */
+  const gizmo = document.querySelector("#axes");
+  let spun = null;
+  gizmo.addEventListener("pointerdown", event => {
+    // Which arm was under the finger, read now: capturing the pointer
+    // retargets every later event to the gizmo itself, so by pointerup the
+    // circle that was pressed is no longer the event's target.
     const hit = event.target.closest(".axhit");
-    if (!hit) return;
+    gizmo.setPointerCapture(event.pointerId);
+    spun = { x: event.clientX, y: event.clientY, moved: 0, hit };
     spin = false;
-    if (api.onView) api.onView(hit.dataset.view);
-    view(hit.dataset.view, true);
+    document.querySelector("#spinBtn").classList.remove("on");
+    event.preventDefault();
   });
+  gizmo.addEventListener("pointermove", event => {
+    if (!spun) return;
+    const dx = event.clientX - spun.x, dy = event.clientY - spun.y;
+    spun.x = event.clientX; spun.y = event.clientY;
+    spun.moved += Math.abs(dx) + Math.abs(dy);
+    // Faster than the canvas: the gizmo is 116px across, so the same wrist
+    // movement has a tenth of the room and would barely turn the part.
+    theta -= dx * 0.022;
+    phi = Math.max(0.02, Math.min(Math.PI - 0.02, phi - dy * 0.022));
+  });
+  gizmo.addEventListener("pointerup", () => {
+    const press = spun;
+    spun = null;
+    if (!press || press.moved > 4 || !press.hit) return;
+    if (api.onView) api.onView(press.hit.dataset.view);
+    view(press.hit.dataset.view, true);
+  });
+  gizmo.addEventListener("pointercancel", () => { spun = null; });
 
   (function loop() {
     requestAnimationFrame(loop);

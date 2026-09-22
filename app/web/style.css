@@ -439,7 +439,11 @@ textarea.prompt::placeholder{color:#535E6E}
    bigger than a decoration, because it is now a control. */
 /* Under the chips, not tucked in a corner: it is the view control now,
    and a control belongs where the hand already is. */
-.axes{position:absolute;left:18px;top:52px;width:88px;height:88px;cursor:pointer}
+/* Big enough to grab. It is a control you drag, not a badge you read, and
+   88px of it was a small target for a wrist. */
+.axes{position:absolute;left:18px;top:64px;width:116px;height:116px;
+  cursor:grab;touch-action:none;user-select:none}
+.axes:active{cursor:grabbing}
 .axes .axhit{fill:transparent;stroke:none;cursor:pointer}
 .axes .axhit:hover{fill:rgba(255,190,68,.22)}
 .scalebar{
@@ -678,6 +682,14 @@ textarea.src{
   font-size:9.5px;letter-spacing:.1em;color:var(--ink-dim);padding:0 9px;
   height:24px;border:1px solid var(--line);border-radius:var(--r);cursor:pointer}
 .health:hover{border-color:var(--accent-dim);color:var(--ink-2)}
+/* A menu row that acts rather than sets something. */
+.moremenu .optlink{width:100%;justify-content:space-between;text-align:left;
+  color:var(--ink-2);border-radius:var(--r-sm)}
+.moremenu .optlink:hover{background:var(--panel-2);color:var(--ink)}
+.moremenu .optlink .icn{width:14px;height:14px;color:var(--ink-dim)}
+/* An author display beats the browser's own [hidden] rule, so the chip
+   needs this to be hideable at all. */
+.health[hidden]{display:none}
 .health i{width:6px;height:6px;border-radius:50%;background:var(--ink-dim);flex:none}
 .health.ok i{background:var(--valid);box-shadow:0 0 6px rgba(0,201,80,.6)}
 .health.warn i{background:var(--warn)}

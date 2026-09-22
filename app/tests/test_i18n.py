@@ -36,7 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from app.catalog import japanese  # noqa: E402
+from app.catalog import japanese, router  # noqa: E402
 from app.server import edits, i18n  # noqa: E402
 from app.server.jobs import JobOptions  # noqa: E402
 
@@ -309,6 +309,80 @@ def main() -> int:  # noqa: C901 - a checklist, not a branchy function
               not found, ", ".join(found[:3]))
     check("the rewriter's output is a lookup key, not a translation",
           not CJK.search(japanese.to_english_instruction("厚さを 5mm にする")))
+
+    # ------------------------------------------------------------------
+    print("\nEvery measured check can name itself in Japanese")
+    # The verdict panel falls back to the server's English label when the
+    # browser has no entry for a check, so a check added on the server and
+    # not here reads in English inside a Japanese panel - which is how
+    # "holes at stock drill sizes" and "components that do not overlap"
+    # were found. The list is derived rather than written down, so a new
+    # check is caught the day it is added.
+    spec_source = (ROOT / "app" / "server" / "spec.py").read_text(encoding="utf-8")
+    dictionary = (ROOT / "app" / "web" / "i18n.js").read_text(encoding="utf-8")
+    emitted = sorted(set(re.findall(r'key="([a-z_]+)"', spec_source)))
+    check("spec.py emits checks to name", len(emitted) >= 5, str(len(emitted)))
+    missing = [k for k in emitted if f'"spec.{k}"' not in dictionary]
+    check("each one has a name in the browser dictionary",
+          not missing, ", ".join(missing))
+
+    # ------------------------------------------------------------------
+    print("\nA number belongs to the label it is written against")
+    # Both orders are ordinary Japanese, and both used to go wrong: one
+    # label reached across a space and took the next one's number, so the
+    # same spring came out differently depending on the order it was
+    # described in. Every ordering has to give the same part.
+    orders = [
+        "2mm線径 外径20mm 自由長50mm の圧縮ばね",
+        "線径2mm 外径20mm 自由長50mm の圧縮ばね",
+        "外径20mm 線径2mm 自由長50mm の圧縮ばね",
+        "自由長50mm 線径2mm 外径20mm の圧縮ばね",
+    ]
+    built = []
+    for text in orders:
+        routed = router.select(text)
+        built.append(routed.part.id if routed else None)
+        check(f"  {text[:22]}", routed is not None,
+              routed.part.title if routed else japanese.to_english(text)[:60])
+    check("every ordering describes the same spring",
+          len(set(built)) == 1 and built[0] is not None, str(set(built)))
+
+    # ------------------------------------------------------------------
+    print("\nThe transmission families answer in Japanese too")
+    # These went in after the Japanese table was written, so for a while a
+    # Japanese user got none of them - the request fell through to the
+    # agents and was built from scratch.
+    for text, want in (
+        ("20mmのシャフト", "shaft"),
+        ("20mm のキー溝付きシャフト", "keyway"),
+        ("全長150mmの20mmシャフト", "150"),
+        ("12mm シャフト用のシャフトカラー", "collar"),
+        ("10mm シャフト用の軸継手", "coupling"),
+        ("20mm シャフト用の平行キー", "key"),
+        ("12mmのすべり軸受", "bushing"),
+        ("12mmのブッシュ", "bushing"),
+        ("20mm シャフト用の止め輪", "retaining ring"),
+        ("M6の止めねじ 長さ10mm", "set screw"),
+        ("M8の全ねじ 長さ200mm", "threaded rod"),
+        ("直径50mmの平歯車", "spur gear"),
+    ):
+        routed = router.select(text)
+        title = routed.part.title.lower() if routed else ""
+        check(f"  {text}", want.lower() in title,
+              routed.part.title if routed else
+              f"declined - rewrote to {japanese.to_english(text)!r}")
+
+    # 軸 is the character in 軸受 and 軸継手, and also the 軸 of Z軸. A
+    # coordinate direction must never be rewritten into a part.
+    for text in ("Z軸方向に50mm押し出した三角柱",
+                 "20mm シャフトを保持するブラケット",
+                 "6203 ベアリング用のハウジング",
+                 "20歯の歯車を入れるギヤボックス",
+                 "Oリング用の溝",
+                 "シャフト"):
+        routed = router.select(text)
+        check(f"  {text} goes to the pipeline", routed is None,
+              routed.part.title if routed else "")
 
     print(f"\n{'=' * 58}")
     if failures:

@@ -100,8 +100,16 @@ def main() -> int:
         check("viewer initialised", page.evaluate("typeof Viewer !== 'undefined'"))
         check("canvas present", page.locator("#gl canvas").count() == 1)
 
+        # The chip is only on screen when it has something to report. Here
+        # there is no model backend, so it should be showing and saying so;
+        # the ready state is checked further down, where it is hidden.
         health = page.locator("#healthChip span").inner_text()
-        check("health chip reports state", health not in ("", "CHECKING…"), health)
+        check("the chip reports a state", health not in ("", "CHECKING…"), health)
+        check("and only shows itself when there is something to say",
+              page.evaluate("() => !S.health.ok")
+              == (not page.locator("#healthChip").is_hidden()),
+              f'ok={page.evaluate("() => S.health.ok")}, '
+              f'shown={not page.locator("#healthChip").is_hidden()}')
         check("benchmark prompts listed",
               page.locator("#samples .sample").count() > 0,
               f"{page.locator('#samples .sample').count()} prompts")
@@ -235,9 +243,13 @@ def main() -> int:
         page.wait_for_timeout(400)
 
         print("\nEnvironment panel")
-        page.click("#healthChip")
+        # Reachable from the settings menu whether or not the chip is up -
+        # the chip used to be the only way in, and it is usually hidden now.
+        settings(page)
+        page.click("#optDiag")
         page.wait_for_timeout(400)
-        check("diagnostics open", page.locator("#diag").is_visible())
+        check("diagnostics open from the settings menu",
+              page.locator("#diag").is_visible())
         check("all checks listed", page.locator("#diag .drow").count() >= 4,
               f"{page.locator('#diag .drow').count()} rows")
         page.screenshot(path=str(out / "02-diagnostics.png"))

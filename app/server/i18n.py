@@ -33,6 +33,23 @@ LANGS = ("en", "ja")
 MESSAGES: dict[str, dict[str, str]] = {
 
     # -- dimensions read straight out of the request ------------------------
+    # -- the drawing sheet -------------------------------------------------
+    # A drawing is read by whoever makes the part, so its lettering follows
+    # the interface. The JIS names are the ones a Japanese drawing office
+    # uses; the title-block fields follow 表題欄 practice.
+    "sheet.view.front": {"en": "FRONT", "ja": "正面図"},
+    "sheet.view.left": {"en": "VIEW FROM LEFT", "ja": "左側面図"},
+    "sheet.view.top": {"en": "VIEW FROM ABOVE", "ja": "平面図"},
+    "sheet.view.iso": {"en": "ISOMETRIC", "ja": "等角図"},
+    "sheet.owner": {"en": "LEGAL OWNER", "ja": "所有者"},
+    "sheet.title": {"en": "TITLE", "ja": "図面名称"},
+    "sheet.date": {"en": "DATE OF ISSUE", "ja": "発行日"},
+    "sheet.scale": {"en": "SCALE", "ja": "尺度"},
+    "sheet.units": {"en": "UNITS", "ja": "単位"},
+    "sheet.projection": {"en": "PROJECTION", "ja": "投影法"},
+    "sheet.sheet": {"en": "SHEET", "ja": "用紙"},
+    "sheet.overall": {"en": "OVERALL", "ja": "全体寸法"},
+
     "stated.read": {
         "en": "{n} dimension(s) stated in the request, held fixed",
         "ja": "リクエストに明記された寸法 {n} 件を固定値として使用します",

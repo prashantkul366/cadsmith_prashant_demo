@@ -133,6 +133,15 @@ function setCode(code, highlightKeys) {
     ? t("code.stat", { n: S.codeLines }) : t("code.empty");
 }
 
+/* A date is the one thing in this app that a browser will localise to
+   somewhere other than the interface. Left to itself, toLocaleString reads
+   the browser's own language, so a Japanese interface on an English machine
+   dated its runs "9/22/2026, 11:30:24 AM". The interface's language decides,
+   as it does for every other word on the page. */
+function localeTag() {
+  return I18N.current === "ja" ? "ja-JP" : "en-GB";
+}
+
 /* ═══════════════════════ health ═══════════════════════ */
 
 async function loadHealth() {
@@ -148,6 +157,12 @@ async function loadHealth() {
   const checks = S.health.checks;
   const canGenerate = S.health.can_generate;
   chip.className = "health " + (S.health.ok ? "ok" : (canGenerate ? "warn" : "bad"));
+  // ALL SYSTEMS READY told you the setup worked, which was worth saying while
+  // the setup was the hard part. It is not news any more, and a badge that is
+  // always green is one people stop reading - so it appears only when it has
+  // something to report. Environment on the settings menu opens the same
+  // panel whether or not the chip is showing.
+  chip.hidden = S.health.ok === true;
   chip.querySelector("span").textContent =
     S.health.ok ? t("health.ready")
     : canGenerate ? t("health.degraded") : t("health.notready");
@@ -899,6 +914,18 @@ function renderKernelFacts(version) {
 
 function specLabel(check) {
   const advisory = check.hard === false;
+  // A check that names a dimension carries it in its key - stated_8,
+  // stated_adv_30, stated_bore_10.5 - so there is no fixed entry for it and
+  // the label fell through to the server's English. The number is the
+  // parameter and the words around it are always the same.
+  const stated = /^stated_(?:adv_)?(\d+(?:\.\d+)?)$/.exec(check.key || "");
+  if (stated) {
+    return t(advisory ? "spec.stated.advisory" : "spec.stated",
+             { n: stated[1] });
+  }
+  const bore = /^stated_bore_(\d+(?:\.\d+)?)$/.exec(check.key || "");
+  if (bore) return t("spec.stated_bore", { n: bore[1] });
+
   const key = "spec." + check.key + (advisory ? ".advisory" : "");
   if (I18N.has(key)) return t(key);
   if (I18N.has("spec." + check.key)) return t("spec." + check.key);
@@ -1315,7 +1342,7 @@ async function loadHistory() {
 
   $("#hlist").innerHTML = jobs.length ? jobs.map(job => {
     const when = job.created_at
-      ? new Date(job.created_at * 1000).toLocaleString() : "";
+      ? new Date(job.created_at * 1000).toLocaleString(localeTag()) : "";
     const badge = job.status === "error"
       ? `<span class="hbadge fail">${esc(t("hist.failed"))}</span>`
       : job.converged ? `<span class="hbadge pass">${esc(t("hist.converged"))}</span>`
@@ -1423,13 +1450,16 @@ for (const id of ["#optVision", "#optCatalog", "#optGround"]) {
   };
 }
 
-$("#healthChip").onclick = () => {
+function toggleDiag() {
   const panel = $("#diag");
   panel.hidden = !panel.hidden;
-};
+}
+$("#healthChip").onclick = toggleDiag;
+$("#optDiag").onclick = () => { closeMore(); toggleDiag(); };
 document.addEventListener("click", e => {
   if (!$("#diag").hidden && !$("#diag").contains(e.target)
-      && e.target.closest("#healthChip") === null) {
+      && e.target.closest("#healthChip") === null
+      && e.target.closest("#optDiag") === null) {
     $("#diag").hidden = true;
   }
 });
@@ -2451,6 +2481,7 @@ function relocalise() {
   if (!S.health) chip.textContent = t("health.unreachable");
   else chip.textContent = S.health.ok ? t("health.ready")
     : S.health.can_generate ? t("health.degraded") : t("health.notready");
+  $("#healthChip").hidden = !!(S.health && S.health.ok);
   if (S.health && S.health.checks && !S.health.checks.model_backend.ok) {
     const c = S.health.checks.catalog;
     $("#keyBannerText").textContent = t(c && c.ok ? "banner.catalog"
@@ -2463,6 +2494,22 @@ function relocalise() {
   // defaults and would silently discard a model id someone had typed. Only
   // the text it writes is redrawn.
   renderEffort(null, $("#optEffort").value);
+  // The provider list is built once from the server's reply and carries a
+  // translated "needs setup" on every entry that is not configured, so it
+  // went stale on a switch exactly as the effort picker used to - a
+  // Japanese interface listing five backends in English. Rewritten from the
+  // data already held rather than refetched, so the selection stands.
+  if (S.providers && S.providers.length) {
+    const select = $("#optProvider");
+    const chosen = select.value;
+    [...select.options].forEach(option => {
+      const spec = S.providers.find(p => p.id === option.value);
+      if (spec) {
+        option.textContent = spec.label + (spec.ready ? "" : t("prov.needssetup"));
+      }
+    });
+    select.value = chosen;
+  }
   if (S.provider) {
     const models = S.provider.models || [];
     $("#optGenModel").placeholder = models.length

@@ -381,12 +381,30 @@ def _family_of(text: str) -> Optional[str]:
     return best
 
 
+#: A size and its optional unit, used to scan the words in front of a noun.
+_SIZE_NEAR = re.compile(r"(\d+(?:\.\d+)?)\s*(?:mm)?", re.I)
+
+
 def _sized_for(text: str, nouns: tuple[str, ...]) -> Optional[float]:
-    """The size given for one of these nouns, however it was worded."""
+    """The size given for one of these nouns, however it was worded.
+
+    The one nearest the noun wins. Taking the first number in the sentence
+    read "150mm long 20mm shaft" as a 150mm shaft and declined it for being
+    off the end of the table - which is what 「全長150mmの20mmシャフト」
+    becomes, so the Japanese word order met an English pattern that had only
+    ever been given the English one. The size that describes a noun is the
+    size written against it.
+    """
+    lowered = text.lower()
     for noun in nouns:
-        match = re.search(_SIZED % re.escape(noun.strip()), text, re.I)
-        if match:
-            return float(match.group(1))
+        at = lowered.find(noun.strip().lower())
+        if at < 0:
+            continue
+        # Far enough back for "20 mm keyed", not so far that it reaches the
+        # size of whatever the sentence was talking about before this.
+        found = _SIZE_NEAR.findall(text[max(0, at - 28):at])
+        if found:
+            return float(found[-1])
     return (_first_group(_BORE_WORD, text)
             or _first_group(_DIAMETER, text)
             or _number(_ANY_MM, text))

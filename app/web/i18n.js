@@ -253,6 +253,20 @@ const I18N = (function () {
     "spec.num_holes.advisory": ["hole count (advisory)", "穴の数（参考）"],
     "spec.hole_diameter": ["hole diameter", "穴径"],
     "spec.volume_estimate": ["volume (advisory)", "体積（参考）"],
+    "spec.thin_section": ["thinnest overall dimension", "最小の外形寸法"],
+    "spec.drill_sizes": ["holes at stock drill sizes", "標準ドリル径の穴"],
+    "spec.drill_sizes.advisory": ["holes at stock drill sizes (advisory)",
+                                  "標準ドリル径の穴（参考）"],
+    "spec.clash": ["components that do not overlap", "干渉のない構成要素"],
+    // The checks that name a dimension carry it in their key - stated_8,
+    // stated_bore_10.5 - so there is no fixed key to look up. The number is
+    // the parameter; the words around it never change.
+    "spec.stated":      ["stated {n} mm", "指定寸法 {n} mm"],
+    "spec.stated.advisory": ["stated {n} mm (advisory)",
+                             "指定寸法 {n} mm（参考）"],
+    "spec.stated_bore": ["stated {n} mm hole", "指定穴径 {n} mm"],
+    "spec.stated_hole_count": ["holes the request asked for",
+                               "リクエストが求めた穴の数"],
 
     "val.refused":      ["Refused on measurement", "実測により却下"],
     "val.refused.judgepassed": ["The Judge accepted this, but the kernel disagrees: ",

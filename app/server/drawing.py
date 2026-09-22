@@ -51,6 +51,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
+from app.server import i18n
+
 # ---------------------------------------------------------------------------
 # Sheet geometry, in millimetres (= SVG user units)
 # ---------------------------------------------------------------------------
@@ -72,14 +74,16 @@ CELL_H = (CELLS_B - CELLS_T) / 2.0
 
 VIEWS = {
     #                 line of sight      u axis on the sheet   cell (col, row)
+    # ``label`` is a dictionary key, not the words. A drawing is read by
+    # whoever makes the part, so its lettering follows the interface.
     "FRONT":  {"dir": (0, -1, 0), "x": (1, 0, 0),  "cell": (0, 0),
-               "label": "FRONT"},
+               "label": "sheet.view.front"},
     "LEFT":   {"dir": (-1, 0, 0), "x": (0, -1, 0), "cell": (1, 0),
-               "label": "VIEW FROM LEFT"},
+               "label": "sheet.view.left"},
     "TOP":    {"dir": (0, 0, 1),  "x": (1, 0, 0),  "cell": (0, 1),
-               "label": "VIEW FROM ABOVE"},
+               "label": "sheet.view.top"},
     "ISO":    {"dir": (1, 1, 1),  "x": (-1, 1, 0), "cell": (1, 1),
-               "label": "ISOMETRIC"},
+               "label": "sheet.view.iso"},
 }
 
 # Room a view may occupy inside its cell, leaving space for the dimensions
@@ -668,7 +672,7 @@ def plan_sheet(views: dict) -> dict:
     }
 
 
-def _render_view(plan: dict) -> list[str]:
+def _render_view(plan: dict, lang: str = "en") -> list[str]:
     """One planned view, as SVG."""
     out: list[str] = []
 
@@ -705,8 +709,8 @@ def _render_view(plan: dict) -> list[str]:
                          call.get("label") or f"Ø{_num(call['measure'])}",
                          anchor="start" if shoulder > 0 else "end"))
 
-    out.append(_text(plan["label_at"][0], plan["label_at"][1], plan["label"],
-                     TEXT_SMALL, fill="#000"))
+    out.append(_text(plan["label_at"][0], plan["label_at"][1],
+                     i18n.t(plan["label"], lang), TEXT_SMALL, fill="#000"))
     return out
 
 
@@ -738,7 +742,7 @@ def _projection_symbol(x: float, y: float) -> list[str]:
 
 
 def _title_block(prompt: str, geometry: dict, job_id: str, version: int,
-                 scale: float) -> list[str]:
+                 scale: float, lang: str = "en") -> list[str]:
     """An ISO 7200 title block: who, what, which sheet, and at what scale."""
     bbox = geometry.get("bounding_box", {})
     title = " ".join(prompt.split()).rstrip(".")
@@ -765,31 +769,31 @@ def _title_block(prompt: str, geometry: dict, job_id: str, version: int,
         out.append(_text(x + 2.0, y_top + 11.4, value, size, anchor="start"))
 
     # Row 1 - who owns the drawing, and what it is
-    field(TITLE_L, TITLE_T, TITLE_W, "LEGAL OWNER", "CADSmith")
+    field(TITLE_L, TITLE_T, TITLE_W, i18n.t('sheet.owner', lang), "CADSmith")
     out.append(_line(TITLE_L + 60, TITLE_T, TITLE_L + 60, edges[0], W_THIN))
-    field(TITLE_L + 60, TITLE_T, TITLE_W - 60, "TITLE", title)
+    field(TITLE_L + 60, TITLE_T, TITLE_W - 60, i18n.t('sheet.title', lang), title)
 
     # Row 2 - the drawing's own identity
     field(TITLE_L, edges[0], 110, "DRAWING No.", f"{job_id}-{version:02d}")
     out.append(_line(TITLE_L + 110, edges[0], TITLE_L + 110, edges[1], W_THIN))
-    field(TITLE_L + 110, edges[0], 70, "DATE OF ISSUE",
+    field(TITLE_L + 110, edges[0], 70, i18n.t('sheet.date', lang),
           time.strftime("%Y-%m-%d"))
 
     # Row 3 - how to read the views
-    field(TITLE_L, edges[1], 40, "SCALE", _scale_label(scale))
+    field(TITLE_L, edges[1], 40, i18n.t('sheet.scale', lang), _scale_label(scale))
     out.append(_line(TITLE_L + 40, edges[1], TITLE_L + 40, edges[2], W_THIN))
-    field(TITLE_L + 40, edges[1], 40, "UNITS", "mm")
+    field(TITLE_L + 40, edges[1], 40, i18n.t('sheet.units', lang), "mm")
     out.append(_line(TITLE_L + 80, edges[1], TITLE_L + 80, edges[2], W_THIN))
-    out.append(_text(TITLE_L + 82, edges[1] + 4.6, "PROJECTION", TEXT_SMALL,
+    out.append(_text(TITLE_L + 82, edges[1] + 4.6, i18n.t('sheet.projection', lang), TEXT_SMALL,
                      anchor="start", fill="#555"))
     out += _projection_symbol(TITLE_L + 84, edges[1] + 9.6)
     out.append(_line(TITLE_L + 122, edges[1], TITLE_L + 122, edges[2], W_THIN))
-    field(TITLE_L + 122, edges[1], 58, "SHEET", "1 / 1  A3")
+    field(TITLE_L + 122, edges[1], 58, i18n.t('sheet.sheet', lang), "1 / 1  A3")
 
     # Row 4 - what the kernel measured, which is the part of a title block
     # this app can fill in honestly
     volume = geometry.get("volume")
-    field(TITLE_L, edges[2], 110, "OVERALL",
+    field(TITLE_L, edges[2], 110, i18n.t('sheet.overall', lang),
           "{:g} x {:g} x {:g}".format(
               round(bbox.get("xlen", 0), 2), round(bbox.get("ylen", 0), 2),
               round(bbox.get("zlen", 0), 2)))
@@ -846,16 +850,16 @@ def _notes(geometry: dict, spec: Any = None) -> list[str]:
 
 def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
                 version: int, projection: Optional[Path] = None,
-                spec: Any = None) -> str:
+                spec: Any = None, lang: str = "en") -> str:
     """Compose the drawing as a standalone SVG document."""
     sheet = plan_sheet(_project(step_path, cache=projection))
     scale = sheet["scale"]
 
     body: list[str] = []
     for view in sheet["views"]:
-        body += _render_view(view)
+        body += _render_view(view, lang)
 
-    body += _title_block(prompt, geometry, job_id, version, scale)
+    body += _title_block(prompt, geometry, job_id, version, scale, lang)
     body += _notes(geometry, spec)
 
     return (
@@ -902,9 +906,15 @@ def _version_inputs(version_dir: Path):
 
 
 def ensure_sheet(version_dir: Path, prompt: str, job_id: str,
-                 version: int) -> Optional[Path]:
-    """Return the sheet for a version, building and caching it on first use."""
-    target = version_dir / "drawing.svg"
+                 version: int, lang: str = "en") -> Optional[Path]:
+    """Return the sheet for a version, building and caching it on first use.
+
+    Cached per language: the lettering is part of the drawing, so a sheet
+    built in English is not the sheet a Japanese reader asked for. English
+    keeps the plain name, which is what every existing file on disk is.
+    """
+    target = version_dir / ("drawing.svg" if lang == "en"
+                            else f"drawing.{lang}.svg")
     if target.exists() and target.stat().st_size > 0:
         return target
 
@@ -914,7 +924,7 @@ def ensure_sheet(version_dir: Path, prompt: str, job_id: str,
 
     sheet = build_sheet(step, geometry, prompt, job_id, version,
                         projection=version_dir / "projection.json",
-                        spec=spec)
+                        spec=spec, lang=lang)
     target.write_text(sheet, encoding="utf-8")
     return target
 
@@ -946,7 +956,7 @@ def _dxf_y(y: float) -> float:
 
 def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
               version: int, projection: Optional[Path] = None,
-              spec: Any = None):
+              spec: Any = None, lang: str = "en"):
     """The same drawing as a DXF document, with real DIMENSION entities.
 
     The SVG on screen is a picture of the drawing; this is the drawing. Its
@@ -1049,8 +1059,8 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
             )
             entity.render()
 
-        text(view["label_at"][0], view["label_at"][1], view["label"],
-             TEXT_SMALL)
+        text(view["label_at"][0], view["label_at"][1],
+             i18n.t(view["label"], lang), TEXT_SMALL)
 
     # Frame and title block. The fields are the same ones the SVG carries.
     frame = [(FRAME_L, FRAME_T), (FRAME_R, FRAME_T),
@@ -1062,15 +1072,15 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
 
     bbox = geometry.get("bounding_box", {})
     rows = [
-        ("LEGAL OWNER", "CADSmith"),
-        ("TITLE", " ".join(prompt.split()).rstrip(".")),
+        (i18n.t('sheet.owner', lang), "CADSmith"),
+        (i18n.t('sheet.title', lang), " ".join(prompt.split()).rstrip(".")),
         ("DRAWING No.", f"{job_id}-{version:02d}"),
-        ("DATE OF ISSUE", time.strftime("%Y-%m-%d")),
-        ("SCALE", _scale_label(scale)),
-        ("UNITS", "mm"),
+        (i18n.t('sheet.date', lang), time.strftime("%Y-%m-%d")),
+        (i18n.t('sheet.scale', lang), _scale_label(scale)),
+        (i18n.t('sheet.units', lang), "mm"),
         ("PROJECTION", "FIRST ANGLE"),
-        ("SHEET", "1 / 1  A3"),
-        ("OVERALL", "{:g} x {:g} x {:g}".format(
+        (i18n.t('sheet.sheet', lang), "1 / 1  A3"),
+        (i18n.t('sheet.overall', lang), "{:g} x {:g} x {:g}".format(
             round(bbox.get("xlen", 0), 2), round(bbox.get("ylen", 0), 2),
             round(bbox.get("zlen", 0), 2))),
     ]
@@ -1094,9 +1104,14 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
 
 
 def ensure_dxf(version_dir: Path, prompt: str, job_id: str,
-               version: int) -> Optional[Path]:
-    """Return the DXF for a version, building and caching it on first use."""
-    target = version_dir / "drawing.dxf"
+               version: int, lang: str = "en") -> Optional[Path]:
+    """Return the DXF for a version, building and caching it on first use.
+
+    Cached per language for the same reason the sheet is: the lettering
+    travels with the file into whoever else's CAD opens it.
+    """
+    target = version_dir / ("drawing.dxf" if lang == "en"
+                            else f"drawing.{lang}.dxf")
     if target.exists() and target.stat().st_size > 0:
         return target
 
@@ -1106,7 +1121,7 @@ def ensure_dxf(version_dir: Path, prompt: str, job_id: str,
 
     doc = build_dxf(step, geometry, prompt, job_id, version,
                     projection=version_dir / "projection.json",
-                    spec=spec)
+                    spec=spec, lang=lang)
     doc.saveas(target)
     return target
 

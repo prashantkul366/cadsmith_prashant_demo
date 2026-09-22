@@ -138,6 +138,44 @@ COUNTS = (
 #: Plain nouns and qualifiers. Longest first throughout: 平歯車 must win over
 #: 歯車, and 六角穴付きボルト over ボルト.
 TERMS = (
+    # shafts and what goes on them
+    #
+    # First in the table, because several of these end in ねじ or contain
+    # 軸受 and this list is applied in order: a bare ねじ further down would
+    # otherwise consume 全ねじ, and 軸受 would consume すべり軸受.
+    #
+    # 軸 on its own is deliberately absent. It is the character in 軸受
+    # (bearing) and 軸継手 (coupling), both handled here by their full words,
+    # but it is also the 軸 of Z軸 - an axis, not a shaft - and rewriting a
+    # coordinate direction into a part is the silent substitution this whole
+    # table is written to avoid. シャフト carries no such ambiguity.
+    ("シャフトカップリング", "shaft coupling"),
+    ("軸継手", "shaft coupling"),
+    ("カップリング", "coupling"),
+    ("シャフトカラー", "shaft collar"),
+    ("軸カラー", "shaft collar"),
+    ("固定カラー", "shaft collar"),
+    ("キー溝付き", "keyed"),
+    ("キー溝", "keyway"),
+    ("平行キー", "parallel key"),
+    ("キー材", "key stock"),
+    ("すべり軸受", "plain bearing"),
+    ("滑り軸受", "plain bearing"),
+    ("ブッシュ", "bushing"),
+    ("ブシュ", "bushing"),
+    ("止め輪", "retaining ring"),
+    ("スナップリング", "snap ring"),
+    ("サークリップ", "circlip"),
+    ("Ｃリング", "retaining ring"),
+    ("Cリング", "retaining ring"),
+    ("全ねじボルト", "threaded rod"),
+    ("寸切りボルト", "threaded rod"),
+    ("寸切り", "threaded rod"),
+    ("ずん切り", "threaded rod"),
+    ("全ねじ", "threaded rod"),
+    ("ホーローセット", "set screw"),
+    ("グラブスクリュー", "set screw"),
+    ("シャフト", "shaft"),
     # fasteners
     ("六角穴付きボルト", "socket head cap screw"),
     ("六角穴付きねじ", "socket head cap screw"),
@@ -238,6 +276,27 @@ _JAPANESE = re.compile(r"[぀-ヿ㐀-䶿一-鿿]")
 _NUMBER = r"(\d+(?:\.\d+)?)"
 
 
+#: Every measure and count, as one alternation with a named group per
+#: label, so a single scan can tell which one matched and pick its template.
+_PAIRS = MEASURES + COUNTS
+_PAIRED = re.compile(
+    r"(?P<n1>" + _NUMBER + r")\s*(?:mm)?\s*(?:の)?\s*(?:"
+    + "|".join(f"(?P<pre{i}>{jp})" for i, (jp, _) in enumerate(_PAIRS)) + r")"
+    r"|(?:"
+    + "|".join(f"(?P<post{i}>{jp})" for i, (jp, _) in enumerate(_PAIRS))
+    + r")\s*[:：]?\s*(?P<n2>" + _NUMBER + r")\s*(?:mm)?")
+
+
+def _pair(match: "re.Match") -> str:
+    """The template for whichever label matched, filled with its number."""
+    for index, (_, template) in enumerate(_PAIRS):
+        if match.group(f"pre{index}") is not None:
+            return " " + template.format(n=match.group("n1")) + " "
+        if match.group(f"post{index}") is not None:
+            return " " + template.format(n=match.group("n2")) + " "
+    return match.group(0)
+
+
 def has_japanese(text: str) -> bool:
     """True when the text contains kana or kanji.
 
@@ -272,16 +331,21 @@ def to_english(text: str) -> str:
     # miss it. Replacing the terms inserts the spaces this needs anyway.
     out = unicodedata.normalize("NFKC", text or "")
 
-    for japanese, template in MEASURES + COUNTS:
-        unit = r"\s*(?:mm)?" if template.count("mm") else ""
-        # 内径20mm -> "20mm inside diameter"
-        out = re.sub(japanese + r"\s*[:：]?\s*" + _NUMBER + unit,
-                     lambda m, tpl=template: " " + tpl.format(n=m.group(1)) + " ",
-                     out)
-        # 20mm内径 -> the same
-        out = re.sub(_NUMBER + unit + r"\s*(?:の)?\s*" + japanese,
-                     lambda m, tpl=template: " " + tpl.format(n=m.group(1)) + " ",
-                     out)
+    # One left-to-right pass over every label at once, rather than a loop
+    # of two substitutions per label.
+    #
+    # The loop could not be made correct in either order, because each pass
+    # searched the whole string and nothing stopped one label taking a number
+    # that belonged to another. Label-then-number reached forwards across a
+    # space - 「2mm線径 外径20mm」 gave a spring of 20mm wire, the 2 orphaned
+    # and the 20 read twice. Putting number-then-label first only reversed
+    # it: 外径 then reached backwards and 「線径2mm 外径20mm」 lost the 20.
+    # Either way the builder here happened to reject the result, but the same
+    # shape of mistake elsewhere is the wrong part built quietly.
+    #
+    # Scanning once fixes it by construction: a number consumed by the label
+    # it is written against is no longer in the string for the next one.
+    out = _PAIRED.sub(_pair, out)
 
     for japanese, english in TERMS:
         out = out.replace(japanese, f" {english} ")
