@@ -192,6 +192,8 @@ const I18N = (function () {
     "plan.dimensions":  ["TARGET DIMENSIONS", "目標寸法"],
     "plan.constraints": ["CONSTRAINTS", "制約"],
     "plan.bbox":        ["overall bbox", "外形寸法"],
+    "plan.bbox.measured": ["the kernel measured {actual}",
+                           "カーネルの実測値 {actual}"],
 
     /* ── code panel ─────────────────────────────────────────────────── */
     "code.heading":     ["Generated CadQuery", "生成された CadQuery"],

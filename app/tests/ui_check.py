@@ -272,6 +272,23 @@ def main() -> int:
         check("design plan populated", "base plate" in plan.lower(),
               plan.replace("\n", " ")[:70])
 
+        # A plan is model output and not every field in it is a number:
+        # `symmetry` is free text in the schema. Rounding a sentence gave
+        # NaN, and the panel printed it as though it were the answer.
+        check("no plan field prints as NaN",
+              "NaN" not in plan, plan.replace("\n", " ")[:120])
+
+        # The rail is the conversation, so a run opened from History opens
+        # with what was asked - the same as a live one - rather than putting
+        # the old prompt in the box that now means "change this part".
+        check("a loaded run shows the question it answered",
+              not page.locator("#askTurn").is_hidden()
+              and len(page.locator("#askText").inner_text()) > 10,
+              page.locator("#askText").inner_text()[:60])
+        check("and the composer is empty, ready for a change",
+              page.locator("#prompt").input_value() == "",
+              repr(page.locator("#prompt").input_value()))
+
         code = page.locator("#hl").inner_text()
         check("real CadQuery source shown", "import cadquery" in code)
         check("code is the refined version", "support_height + base_thickness" in code)

@@ -16,8 +16,21 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/&/g, "&amp;")
   .replace(/</g, "&lt;").replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-const fmt = n => (n === null || n === undefined || Number.isNaN(n)) ? "—"
-  : (Number.isInteger(n) ? String(n) : (Math.round(n * 100) / 100).toString());
+/* Numbers are rounded to two places; anything that is not a number is
+   passed through as it was written. A plan is model output, and not every
+   field in it is numeric - `symmetry` is free text in the schema and comes
+   back as a sentence. Rounding a sentence gives NaN, which is what the plan
+   panel used to print beside it. */
+const fmt = value => {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string" && !value.trim()) return "—";
+  const n = typeof value === "number" ? value
+          : typeof value === "string" ? Number(value)
+          : NaN;
+  if (!Number.isFinite(n)) return String(value);
+  return Number.isInteger(n) ? String(n)
+                             : (Math.round(n * 100) / 100).toString();
+};
 
 const S = {
   jobId: null,
@@ -784,6 +797,7 @@ async function selectVersion(index, options) {
 
   renderKernelFacts(version);
   renderValidation(version);
+  markPlanAgainstKernel(version);
   sheetSvg = null;
   $("#drawBtn").disabled = false;
   // A parameter patch is rebuilt by the kernel with no model call, so editing
@@ -826,11 +840,37 @@ function renderPlan(plan) {
     }</div>` : ""}
     ${rows ? `<div class="eyebrow" style="margin-bottom:6px">${
       esc(t("plan.dimensions"))}</div>${rows}` : ""}
-    ${bbox.xlen ? `<div class="dim"><span>${esc(t("plan.bbox"))}</span><b>${
+    ${bbox.xlen ? `<div class="dim" data-k="overall_bbox"><span>${
+      esc(t("plan.bbox"))}</span><b>${
       fmt(bbox.xlen)} × ${fmt(bbox.ylen)} × ${fmt(bbox.zlen)}<u>mm</u></b></div>` : ""}
     ${constraintTags ? `<div class="eyebrow" style="margin:12px 0 6px">${
       esc(t("plan.constraints"))}</div>
       <div class="plan-tags">${constraintTags}</div>` : ""}`;
+}
+
+/* The Planner derives overall_bbox from its own arithmetic and gets it
+   wrong often enough that spec.py measures it but refuses to block on it -
+   a gate that rejects correct parts gets switched off. That is the right
+   call for the pipeline and the wrong one for the panel: it left the
+   model's figure standing as plain fact beside a green verdict, with the
+   kernel's disagreement filed under an advisory row further down the page.
+   A planned size the kernel contradicts now says so where it is read. */
+function markPlanAgainstKernel(version) {
+  const row = $('#planBody .dim[data-k="overall_bbox"]');
+  if (!row) return;
+  row.classList.remove("disputed");
+  const old = row.querySelector(".measured");
+  if (old) old.remove();
+
+  const checks = (version && version.spec && version.spec.checks) || [];
+  const bbox = checks.find(c => c.key === "bbox" && !c.passed);
+  if (!bbox) return;
+
+  row.classList.add("disputed");
+  const note = document.createElement("span");
+  note.className = "measured";
+  note.textContent = t("plan.bbox.measured", { actual: bbox.actual });
+  row.appendChild(note);
 }
 
 function renderKernelFacts(version) {
@@ -1333,7 +1373,13 @@ async function openJob(jobId) {
   S.converged = job.converged;
   S.busy = false;
 
-  setPrompt(job.prompt);
+  // The rail is the conversation, so a run opened from History opens with
+  // what was asked, exactly as a live one does. It used to drop the prompt
+  // into the composer instead - which, now that the composer means "change
+  // this part", read as a pending edit that happened to repeat the original
+  // request.
+  showAsk(job.prompt);
+  setPrompt("");
   S.seq = (state.events || []).length;
   $("#plog").innerHTML = "";
   (state.events || [])
@@ -1594,7 +1640,11 @@ function applyProvider(providerId) {
   const streams = provider.kind === "anthropic" || provider.kind === "bedrock";
   $("#thinkSec").classList.toggle("nostream", !streams);
   const waiting = $("#thinkBody .await span");
-  if (waiting && !TH.order) {
+  // Only the generic line is the provider panel's to rewrite. A more
+  // specific one - the catalogue's "no agent ran" - stays as it is.
+  const generic = waiting && ["think.await", "think.nostream"]
+    .includes(waiting.getAttribute("data-i18n") || "think.await");
+  if (waiting && generic && !TH.order) {
     waiting.textContent = t(streams ? "think.await" : "think.nostream");
     waiting.setAttribute("data-i18n", streams ? "think.await" : "think.nostream");
   }

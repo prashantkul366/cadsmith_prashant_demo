@@ -530,6 +530,15 @@ textarea.prompt::placeholder{color:#535E6E}
 .dim b{font-weight:600;font-variant-numeric:tabular-nums}
 .dim.pulse{background:rgba(59,130,246,.15);box-shadow:0 0 0 4px rgba(59,130,246,.15)}
 .dim.pulse b{color:var(--accent)}
+
+/* A planned size the kernel disagreed with. Amber, not red: the part is not
+   wrong - the plan's arithmetic is, and spec.py deliberately does not block
+   on it. The figure stays readable and stops being stated as fact. */
+.dim.disputed{flex-wrap:wrap}
+.dim.disputed b{color:var(--amber)}
+.dim.disputed b u{color:var(--amber);opacity:.7}
+.dim .measured{flex-basis:100%;text-align:right;font-size:10px;
+  color:var(--ink-dim);letter-spacing:.01em;margin-top:1px}
 .strike{color:var(--ink-dim);text-decoration:line-through;font-weight:400;margin-right:5px}
 
 /* code */
