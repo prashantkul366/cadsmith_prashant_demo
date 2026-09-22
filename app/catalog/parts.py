@@ -655,6 +655,502 @@ result = (
     )
 
 
+# ── the turning half: shafts and what goes on them ──────────────────────
+#
+# A gear, a bearing and a screw were servable; the shaft they all sit on was
+# not, so "a 20mm shaft with a keyway" went to five agents to have a cylinder
+# invented for it. These close that gap. The fastener tables above are
+# published standards; where a family has no published geometry - collars and
+# couplings are made to each maker's own proportions - the docstring says so
+# and the proportions are parameters, not secrets.
+
+
+def shaft(diameter: float = 20.0, length: float = 100.0,
+          keyway: bool = False, keyway_length: float | None = None,
+          ring_groove: bool = False) -> CatalogPart:
+    """A plain round shaft, optionally keyed and grooved for a circlip.
+
+    The shaft itself is only a cylinder. What is worth having from a
+    catalogue is everything cut into it: a keyway to DIN 6885 depth t1, and
+    a retaining-ring groove to DIN 471 - the two dimensions that get guessed
+    at, and the two that stop the assembly going together when the guess is
+    wrong. A keyway cut to the key's full height instead of t1 leaves the key
+    bearing on its top face, which is exactly the failure the depth column
+    exists to prevent.
+    """
+    chamfer = round(min(diameter * 0.05, 1.5), 2)
+    lines = [
+        "import cadquery as cq",
+        "",
+        "# Plain round shaft, axis along +Z, ends chamfered for entry",
+        f"diameter = {_n(diameter)}",
+        f"length = {_n(length)}",
+        f"end_chamfer = {_n(chamfer)}",
+        "",
+        "result = cq.Workplane('XY').circle(diameter / 2.0).extrude(length)",
+        "result = result.faces('>Z').chamfer(end_chamfer)",
+        "result = result.faces('<Z').chamfer(end_chamfer)",
+    ]
+    parameters = {"diameter": diameter, "length": length}
+    title = f"Shaft {_n(diameter)} dia x {_n(length)}"
+    standard = "preferred diameter; ends chamfered"
+    part_id = f"shaft_{_n(diameter)}x{_n(length)}"
+
+    if keyway:
+        spec = standards.key_for_shaft(diameter)
+        run = keyway_length if keyway_length else round(length * 0.4, 1)
+        run = min(run, length - 2 * chamfer - 2.0)
+        lines += [
+            "",
+            "# Keyway to DIN 6885-1 for this shaft diameter. The depth is t1,",
+            "# measured from the shaft surface - NOT the key's full height,",
+            "# which would let the key bear on its top face instead of its",
+            "# flanks. Cut with an end mill of the key's width, so the ends",
+            "# are round: a sled-runner keyway, the common machined form.",
+            f"key_width = {_n(spec.width)}",
+            f"keyway_depth = {_n(spec.shaft_depth)}   # t1",
+            f"keyway_length = {_n(run)}",
+            "",
+            "keyway_centre = length / 2.0",
+            "cutter = (",
+            "    cq.Workplane('YZ')",
+            "    .workplane(offset=diameter / 2.0 - keyway_depth)",
+            "    .center(0, keyway_centre)",
+            "    .slot2D(keyway_length, key_width, angle=90)",
+            "    .extrude(diameter)",
+            ")",
+            "result = result.cut(cutter)",
+        ]
+        parameters.update({"key_width": spec.width,
+                           "keyway_depth": spec.shaft_depth,
+                           "keyway_length": run})
+        title += f", {_n(spec.width)}mm keyway"
+        standard = "DIN 6885-1 keyway"
+        part_id += "_keyed"
+
+    if ring_groove:
+        try:
+            ring = standards.RETAINING_RINGS[standards.nearest_shaft(diameter)]
+        except KeyError:
+            ring = None
+        if ring is not None:
+            lines += [
+                "",
+                "# Retaining-ring groove to DIN 471. The groove diameter is d3,",
+                "# well under the shaft: a groove turned to the shaft diameter",
+                "# holds nothing.",
+                f"groove_diameter = {_n(ring.groove_diameter)}   # d3",
+                f"groove_width = {_n(ring.groove_width)}   # m",
+                "groove_from_end = 6.0",
+                "",
+                "result = (",
+                "    result.faces('>Z').workplane(centerOption='CenterOfBoundBox')",
+                "    .workplane(offset=-groove_from_end)",
+                "    .circle(diameter / 2.0 + 1.0)",
+                "    .circle(groove_diameter / 2.0)",
+                "    .cutBlind(-groove_width)",
+                ")",
+            ]
+            parameters.update({"groove_diameter": ring.groove_diameter,
+                               "groove_width": ring.groove_width})
+            standard += " + DIN 471 groove"
+            part_id += "_grooved"
+
+    return CatalogPart(id=part_id, title=title, standard=standard,
+                       code="\n".join(lines) + "\n", parameters=parameters)
+
+
+def parallel_key(shaft_diameter: float = 20.0,
+                 length: float | None = None) -> CatalogPart:
+    """A DIN 6885-1 form A parallel key: the bar that goes in the keyway.
+
+    Form A is round-ended, cut from bar with an end mill of the key's own
+    width, so it drops into a sled-runner keyway without filing.
+    """
+    spec = standards.key_for_shaft(shaft_diameter)
+    run = length if length else round(max(shaft_diameter * 1.5,
+                                          spec.width * 4.0), 0)
+
+    code = f"""import cadquery as cq
+
+# Parallel key, DIN 6885-1 form A (round ends)
+key_width = {_n(spec.width)}    # b
+key_height = {_n(spec.height)}   # h
+key_length = {_n(run)}   # l
+
+# The overall length includes the two round ends, so the slot's length is
+# the length, not the length plus a diameter.
+result = (
+    cq.Workplane('XY')
+    .slot2D(key_length, key_width, angle=0)
+    .extrude(key_height)
+)
+"""
+    return CatalogPart(
+        id=f"key_{_n(spec.width)}x{_n(spec.height)}x{_n(run)}",
+        title=f"Parallel key {_n(spec.width)} x {_n(spec.height)} x {_n(run)}",
+        standard=f"DIN 6885-1 form A, for a {_n(shaft_diameter)}mm shaft",
+        code=code,
+        parameters={"key_width": spec.width, "key_height": spec.height,
+                    "key_length": run, "shaft_diameter": shaft_diameter,
+                    "hub_depth": spec.hub_depth},
+    )
+
+
+def plain_bushing(bore: float = 12.0,
+                  length: float | None = None) -> CatalogPart:
+    """A DIN 1850 plain sleeve bearing - a bushing, not a ball bearing."""
+    size = standards.nearest_shaft(bore)
+    spec = standards.BUSHINGS.get(size)
+    if spec is None:
+        raise KeyError(f"No DIN 1850 bushing tabled for a {bore:g}mm bore.")
+    run = length if length else spec.length
+
+    code = f"""import cadquery as cq
+
+# Plain sleeve bearing to DIN 1850 / ISO 4379
+bore = {_n(spec.bore)}    # d
+outer_diameter = {_n(spec.outer_diameter)}    # D
+length = {_n(run)}    # L
+
+result = (
+    cq.Workplane('XY')
+    .circle(outer_diameter / 2.0)
+    .circle(bore / 2.0)
+    .extrude(length)
+)
+# Lead-in chamfers, inside and out: a bushing is pressed into its housing
+# and a shaft is pushed through it, and neither starts without one.
+result = result.faces('>Z').chamfer(0.3)
+result = result.faces('<Z').chamfer(0.3)
+"""
+    return CatalogPart(
+        id=f"bushing_{_n(spec.bore)}x{_n(spec.outer_diameter)}x{_n(run)}",
+        title=(f"Plain bushing {_n(spec.bore)} x "
+               f"{_n(spec.outer_diameter)} x {_n(run)}"),
+        standard="DIN 1850 / ISO 4379", code=code,
+        parameters={"bore": spec.bore, "outer_diameter": spec.outer_diameter,
+                    "length": run},
+    )
+
+
+def set_screw(size: str = "M6", length: float = 10.0) -> CatalogPart:
+    """An ISO 4029 hexagon socket set screw with a cup point."""
+    size = standards._normalise(size)
+    thread = standards.THREADS[size]
+    key = standards.SET_SCREW_KEYS.get(size)
+    if key is None:
+        raise KeyError(f"No ISO 4029 set screw tabled for {size}.")
+    cup = round(thread.diameter * 0.55, 2)
+    socket_depth = round(thread.diameter * 0.5, 2)
+
+    code = f"""import cadquery as cq
+
+# Hexagon socket set screw, cup point, ISO 4029
+thread_diameter = {_n(thread.diameter)}
+length = {_n(length)}
+key_across_flats = {_n(key)}
+cup_diameter = {_n(cup)}
+socket_depth = {_n(socket_depth)}
+
+result = cq.Workplane('XY').circle(thread_diameter / 2.0).extrude(length)
+
+# The cup: the end is chamfered back to the cup diameter and then faced off,
+# leaving the thin annular rim that bites into the shaft.
+result = result.faces('<Z').chamfer((thread_diameter - cup_diameter) / 2.0)
+result = (
+    result.faces('<Z').workplane(centerOption='CenterOfBoundBox')
+    .circle(cup_diameter / 2.0)
+    .cutBlind(-{_n(round(thread.diameter * 0.08, 2))})
+)
+
+# The key socket, across flats, from the other end.
+result = (
+    result.faces('>Z').workplane(centerOption='CenterOfBoundBox')
+    .polygon(6, key_across_flats * 2.0 / 3.0 ** 0.5)
+    .cutBlind(-socket_depth)
+)
+"""
+    return CatalogPart(
+        id=f"set_screw_{size.lower()}x{_n(length)}",
+        title=f"Set screw {size} x {_n(length)}, cup point",
+        standard="ISO 4029", code=code,
+        parameters={"thread_diameter": thread.diameter, "length": length,
+                    "key_across_flats": key, "cup_diameter": cup},
+    )
+
+
+def threaded_rod(size: str = "M8", length: float = 100.0) -> CatalogPart:
+    """A length of metric studding, turned to the thread's pitch diameter.
+
+    The plain cylinder is the honest model: it is the pitch diameter, not
+    the major diameter, so anything designed around it clears a real rod.
+    Cutting the helix costs a minute of kernel time and gains nothing that
+    is not already in the designation.
+    """
+    size = standards._normalise(size)
+    thread = standards.THREADS[size]
+    pitch_diameter = round(thread.diameter - 0.6495 * thread.pitch, 3)
+
+    code = f"""import cadquery as cq
+
+# Metric studding, {size} x {_n(thread.pitch)} coarse
+major_diameter = {_n(thread.diameter)}
+pitch_diameter = {_n(pitch_diameter)}   # major - 0.6495 * pitch
+length = {_n(length)}
+
+# Modelled at the pitch diameter, not the major: a nut or a clearance hole
+# sized against this will fit the real rod. See the docstring.
+result = cq.Workplane('XY').circle(pitch_diameter / 2.0).extrude(length)
+result = result.faces('>Z').chamfer({_n(round(thread.pitch, 2))})
+result = result.faces('<Z').chamfer({_n(round(thread.pitch, 2))})
+"""
+    return CatalogPart(
+        id=f"threaded_rod_{size.lower()}x{_n(length)}",
+        title=f"Threaded rod {size} x {_n(length)}",
+        standard=f"ISO 261 coarse, pitch {_n(thread.pitch)}", code=code,
+        parameters={"major_diameter": thread.diameter,
+                    "pitch_diameter": pitch_diameter, "length": length,
+                    "pitch": thread.pitch},
+    )
+
+
+def retaining_ring(shaft_diameter: float = 20.0) -> CatalogPart:
+    """A DIN 471 external retaining ring, simplified to a constant width.
+
+    The standard's three numbers that matter are here exactly: the groove
+    diameter it seats on, its thickness, and its free outside diameter. The
+    real ring's radial width tapers away from the lugs and the lugs carry
+    pliers holes; this one is a plain C of constant width. Anything checking
+    clearance, stack height or groove fit gets the right answer; anything
+    checking the ring's own stress does not, and should use the standard.
+    """
+    size = standards.nearest_shaft(shaft_diameter)
+    spec = standards.RETAINING_RINGS.get(size)
+    if spec is None:
+        raise KeyError(f"No DIN 471 ring tabled for a {shaft_diameter:g}mm shaft.")
+
+    code = f"""import cadquery as cq
+
+# External retaining ring, DIN 471 - simplified constant-width C
+shaft_diameter = {_n(size)}
+groove_diameter = {_n(spec.groove_diameter)}   # d3, the seat
+free_diameter = {_n(spec.free_diameter)}    # d1, relaxed and off the shaft
+thickness = {_n(spec.thickness)}    # s
+
+# The opening has to clear the shaft to go on, so it is set from the shaft
+# diameter rather than from the groove the ring ends up in.
+opening = shaft_diameter * 0.55
+
+result = (
+    cq.Workplane('XY')
+    .circle(free_diameter / 2.0)
+    .circle(groove_diameter / 2.0)
+    .extrude(thickness)
+)
+gap = (
+    cq.Workplane('XY')
+    .box(free_diameter, opening, thickness * 3.0,
+         centered=(False, True, True))
+    .translate((0, 0, thickness / 2.0))
+)
+result = result.cut(gap)
+"""
+    return CatalogPart(
+        id=f"circlip_{_n(size)}",
+        title=f"Retaining ring, {_n(size)}mm shaft",
+        standard="DIN 471 (constant-width simplification)", code=code,
+        parameters={"shaft_diameter": size,
+                    "groove_diameter": spec.groove_diameter,
+                    "groove_width": spec.groove_width,
+                    "thickness": spec.thickness,
+                    "free_diameter": spec.free_diameter},
+    )
+
+
+def shaft_collar(bore: float = 12.0, clamp: bool = True) -> CatalogPart:
+    """A one-piece clamping shaft collar.
+
+    No published standard sets a collar's outside dimensions - every maker
+    has its own - so the proportions here are the commercial ones (outside
+    twice the bore, width half the bore, rounded to the half millimetre) and
+    they are parameters, not constants. What is standard is the clamp screw:
+    it is an ISO 4762 cap screw and the clearance hole is ISO 273.
+    """
+    outer = round(bore * 2.0 * 2) / 2.0
+    width = max(round(bore * 0.5 * 2) / 2.0, 6.0)
+    screw = "M3" if bore <= 8 else "M4" if bore <= 15 else "M5" if bore <= 25 else "M6"
+    thread = standards.THREADS[screw]
+    clearance = standards.clearance_hole(screw)
+    head = standards.ISO_4762[screw].head_diameter
+    head_height = standards.ISO_4762[screw].head_height
+
+    lines = [
+        "import cadquery as cq",
+        "",
+        "# Clamping shaft collar. Outside proportions are commercial, not",
+        "# standard - see the docstring. The clamp screw is ISO 4762 and its",
+        "# clearance hole ISO 273.",
+        f"bore = {_n(bore)}",
+        f"outer_diameter = {_n(outer)}",
+        f"width = {_n(width)}",
+        "",
+        "result = (",
+        "    cq.Workplane('XY')",
+        "    .circle(outer_diameter / 2.0)",
+        "    .circle(bore / 2.0)",
+        "    .extrude(width)",
+        ")",
+    ]
+    parameters = {"bore": bore, "outer_diameter": outer, "width": width}
+
+    if clamp:
+        slit = round(max(bore * 0.09, 1.0), 2)
+        lines += [
+            "",
+            f"clamp_screw_clearance = {_n(clearance)}   # ISO 273 for {screw}",
+            f"clamp_head_diameter = {_n(head)}   # ISO 4762 socket head",
+            f"clamp_head_height = {_n(head_height)}",
+            f"slit_width = {_n(slit)}",
+            "",
+            "# The slit runs out through the +X side. Everything inboard of the",
+            "# bore is already air, so cutting from the centre costs nothing.",
+            "slit = (",
+            "    cq.Workplane('XY')",
+            "    .box(outer_diameter, slit_width, width * 2.0,",
+            "         centered=(False, True, True))",
+            "    .translate((0, 0, width / 2.0))",
+            ")",
+            "result = result.cut(slit)",
+            "",
+            "# The clamp screw crosses the slit, so it has to sit in the solid",
+            "# between the bore and the outside - midway is where it goes.",
+            "clamp_radius = (bore + outer_diameter) / 4.0",
+            "screw_hole = (",
+            "    cq.Workplane('XZ')",
+            "    .center(clamp_radius, width / 2.0)",
+            "    .circle(clamp_screw_clearance / 2.0)",
+            "    .extrude(outer_diameter, both=True)",
+            ")",
+            "result = result.cut(screw_hole)",
+            "",
+            "# A counterbore on the -Y ear so the head finishes below the",
+            "# outside. It starts at that ear's outer surface and goes inward",
+            "# by the head's own height: any deeper and it meets the slit,",
+            "# which cuts the ear off the collar entirely.",
+            "ear_reach = (outer_diameter ** 2 / 4.0 - clamp_radius ** 2) ** 0.5",
+            "counterbore = (",
+            "    cq.Workplane('XZ')",
+            "    .workplane(offset=ear_reach)",
+            "    .center(clamp_radius, width / 2.0)",
+            "    .circle(clamp_head_diameter / 2.0 + 0.2)",
+            "    .extrude(-clamp_head_height)",
+            ")",
+            "result = result.cut(counterbore)",
+        ]
+        parameters.update({"clamp_screw_clearance": clearance,
+                           "slit_width": slit})
+
+    return CatalogPart(
+        id=f"collar_{_n(bore)}",
+        title=f"Shaft collar, {_n(bore)}mm bore"
+              + (f", {screw} clamp" if clamp else ""),
+        standard=f"commercial proportions; {screw} ISO 4762 clamp screw",
+        code="\n".join(lines) + "\n", parameters=parameters)
+
+
+def rigid_coupling(bore: float = 12.0,
+                   second_bore: float | None = None) -> CatalogPart:
+    """A one-piece clamping shaft coupling, for joining two shafts end to end.
+
+    Like the collar, the body proportions are commercial rather than
+    standard. The two clamps are put at right angles to each other, which is
+    how they are made: two slits in the same plane would leave the middle of
+    the coupling as a hinge.
+    """
+    other = second_bore if second_bore else bore
+    biggest = max(bore, other)
+    outer = round(biggest * 2.0 * 2) / 2.0
+    length = round(biggest * 3.0 * 2) / 2.0
+    screw = "M3" if biggest <= 8 else "M4" if biggest <= 15 else "M5" if biggest <= 25 else "M6"
+    clearance = standards.clearance_hole(screw)
+    head = standards.ISO_4762[screw].head_diameter
+    head_height = standards.ISO_4762[screw].head_height
+    slit = round(max(biggest * 0.09, 1.0), 2)
+
+    code = f"""import cadquery as cq
+
+# Clamping shaft coupling. Body proportions are commercial, not standard;
+# the clamp screws are ISO 4762 with ISO 273 clearance holes.
+bore_a = {_n(bore)}
+bore_b = {_n(other)}
+outer_diameter = {_n(outer)}
+length = {_n(length)}
+slit_width = {_n(slit)}
+clamp_screw_clearance = {_n(clearance)}   # ISO 273 for {screw}
+clamp_head_diameter = {_n(head)}
+clamp_head_height = {_n(head_height)}
+
+# A thin web is left at the middle so the two shafts butt against it rather
+# than against each other.
+web = 1.5
+
+result = cq.Workplane('XY').circle(outer_diameter / 2.0).extrude(length)
+result = (
+    result.faces('<Z').workplane(centerOption='CenterOfBoundBox')
+    .circle(bore_a / 2.0)
+    .cutBlind(-(length - web) / 2.0)
+)
+result = (
+    result.faces('>Z').workplane(centerOption='CenterOfBoundBox')
+    .circle(bore_b / 2.0)
+    .cutBlind(-(length - web) / 2.0)
+)
+
+clamp_radius = (max(bore_a, bore_b) + outer_diameter) / 4.0
+
+
+def clamp(z, angle):
+    \"\"\"One slit and its screw, as a single solid to cut away.\"\"\"
+    slit = (
+        cq.Workplane('XY')
+        .box(outer_diameter, slit_width, length / 3.0,
+             centered=(False, True, True))
+        .translate((0, 0, z))
+    )
+    screw = (
+        cq.Workplane('XZ')
+        .center(clamp_radius, z)
+        .circle(clamp_screw_clearance / 2.0)
+        .extrude(outer_diameter, both=True)
+    )
+    ear_reach = (outer_diameter ** 2 / 4.0 - clamp_radius ** 2) ** 0.5
+    head_recess = (
+        cq.Workplane('XZ')
+        .workplane(offset=ear_reach)
+        .center(clamp_radius, z)
+        .circle(clamp_head_diameter / 2.0 + 0.2)
+        .extrude(-clamp_head_height)
+    )
+    return slit.union(screw).union(head_recess).rotate((0, 0, 0), (0, 0, 1), angle)
+
+
+# At right angles, so neither end hinges on the other's slit.
+result = result.cut(clamp(length * 0.22, 0))
+result = result.cut(clamp(length * 0.78, 90))
+"""
+    return CatalogPart(
+        id=f"coupling_{_n(bore)}_{_n(other)}",
+        title=(f"Shaft coupling, {_n(bore)}mm to {_n(other)}mm bore"
+               if bore != other else f"Shaft coupling, {_n(bore)}mm bore"),
+        standard=f"commercial proportions; {screw} ISO 4762 clamp screws",
+        code=code,
+        parameters={"bore_a": bore, "bore_b": other,
+                    "outer_diameter": outer, "length": length,
+                    "clamp_screw_clearance": clearance},
+    )
+
+
 def select(text: str) -> CatalogPart | None:
     """The standard part someone asked for, or None if this is a custom part.
 
@@ -735,6 +1231,9 @@ def size_lengths(size: str) -> float:
     return round(diameter * 3.0, 1)
 
 
+#: Every family this module builds, by name. ``select`` reads a request and
+#: picks one; this is for reaching a builder directly, when the family is
+#: already known and only the sizes are in question.
 BUILDERS = {
     "socket_head_cap_screw": socket_head_cap_screw,
     "hex_bolt": hex_bolt,
@@ -743,4 +1242,15 @@ BUILDERS = {
     "ball_bearing": ball_bearing,
     "o_ring": o_ring,
     "dowel_pin": dowel_pin,
+    "set_screw": set_screw,
+    "threaded_rod": threaded_rod,
+    "compression_spring": compression_spring,
+    "timing_pulley": timing_pulley,
+    "spur_gear": spur_gear,
+    "shaft": shaft,
+    "parallel_key": parallel_key,
+    "plain_bushing": plain_bushing,
+    "retaining_ring": retaining_ring,
+    "shaft_collar": shaft_collar,
+    "rigid_coupling": rigid_coupling,
 }

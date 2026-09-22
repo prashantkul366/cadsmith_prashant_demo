@@ -52,6 +52,35 @@ _FREE_LENGTH = re.compile(r"(\d+(?:\.\d+)?)\s*mm\s*(?:free length|long|length)",
 _COILS = re.compile(r"(\d+(?:\.\d+)?)\s*coils?", re.I)
 _BELT = re.compile(r"\b(gt2|gt3|htd\s*5m|htd5m|htd|t5|t10)\b", re.I)
 
+# A gear can be specified by diameter instead of by tooth count, and usually
+# is: "a 50mm gear" is how people ask, because the diameter is the thing you
+# can measure. Which diameter matters - tip and pitch differ by two modules -
+# so the qualified forms are read first, and an unqualified one is taken as
+# the tip diameter, which is what a caliper across the gear reads.
+_PITCH_DIA = re.compile(
+    r"pitch\s*(?:circle\s*)?dia(?:meter)?\.?\s*(?:of\s*|=\s*)?(\d+(?:\.\d+)?)"
+    r"|(\d+(?:\.\d+)?)\s*(?:mm)?\s*pitch\s*(?:circle\s*)?dia(?:meter)?", re.I)
+_TIP_DIA = re.compile(
+    r"(?:tip|outside|outer|overall|major)\s*dia(?:meter)?\.?\s*(?:of\s*|=\s*)?"
+    r"(\d+(?:\.\d+)?)"
+    r"|(\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:tip|outside|outer|overall|major)\s*"
+    r"dia(?:meter)?", re.I)
+_ANY_DIA = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?:mm)?\s*dia(?:meter)?\b"
+    r"|dia(?:meter)?\.?\s*(?:of\s*|=\s*)?(\d+(?:\.\d+)?)", re.I)
+
+
+def _first_group(pattern, text):
+    """The first group that actually matched, for either-order patterns."""
+    found = pattern.search(text)
+    if not found:
+        return None
+    for value in found.groups():
+        if value is not None:
+            return float(value)
+    return None
+
+
 _GEAR_WORDS = ("gear", "pinion", "sprocket", "cog")
 
 
@@ -106,8 +135,35 @@ def _gear(text: str) -> Optional[CatalogPart]:
     if "rack" in lowered:
         return library.rack_gear(module=module or 2.0)
 
+    if teeth is None and _is_plain_spur(lowered):
+        # A tooth count is one way to specify a gear; a diameter is another,
+        # and the commoner one. Tip diameter is module x (teeth + 2), so a
+        # diameter plus a preferred module from ISO 54 gives a whole tooth
+        # count - or does not, in which case the gear really is unspecified
+        # and the Planner should size it. See gear_teeth_for_diameter.
+        pitch_dia = _first_group(_PITCH_DIA, text)
+        tip_dia = _first_group(_TIP_DIA, text)
+        plain_dia = _first_group(_ANY_DIA, text)
+        if plain_dia is not None and plain_dia == bore:
+            plain_dia = None         # "12mm bore diameter" is not the gear
+        wanted, kind = ((pitch_dia, "pitch") if pitch_dia is not None
+                        else (tip_dia, "tip") if tip_dia is not None
+                        else (plain_dia, "tip"))
+        if wanted is not None and wanted >= 8.0:
+            derived = standards.gear_teeth_for_diameter(
+                wanted, kind, min_teeth=10 if module is None else 5)
+            if module is not None:
+                # An explicit module is not ours to round away.
+                offset = 2 if kind == "tip" else 0
+                exact = wanted / module - offset
+                derived = ((round(exact), module)
+                           if abs(exact - round(exact)) < 0.02 and round(exact) >= 5
+                           else None)
+            if derived:
+                teeth, module = derived
+
     if teeth is None:
-        # "a spur gear" with no tooth count is under-specified. The Planner
+        # Neither a tooth count nor a diameter that lands on one. The Planner
         # can pick sensible numbers; the catalogue should not guess them.
         return None
 
@@ -131,9 +187,11 @@ def _gear(text: str) -> Optional[CatalogPart]:
             return library.spur_gear(module=module or 2.0, teeth=teeth,
                                      face_width=face_width or 10.0,
                                      bore=bore or 8.0)
-        return parts.spur_gear(teeth=teeth, module=module or 2.0,
-                               face_width=face_width or 10.0,
-                               bore=bore or 8.0)
+        chosen = module or 2.0
+        return parts.spur_gear(
+            teeth=teeth, module=chosen,
+            face_width=face_width or max(4.0, round(chosen * 4.0 * 2) / 2.0),
+            bore=bore or standards.nearest_shaft(chosen * (teeth + 2) / 4.0))
     return None
 
 
@@ -232,6 +290,238 @@ def _fastener(text: str) -> Optional[CatalogPart]:
     return parts.select(text)
 
 
+# ── shafts and what goes on them ────────────────────────────────────────
+#
+# These run before the fastener finders because two of them would otherwise
+# be answered wrongly rather than not at all: "M6 set screw" reaches a branch
+# that serves a cap screw, and "a 12mm plain bearing" reaches one that looks
+# for a 6203 and gives up. A wrong part is worse than no part.
+
+#: The words that name each family, used to work out which one a request is
+#: actually for - see _family_of. "A bearing for a 20mm shaft" is a bearing
+#: request that mentions a shaft, and answering it with a shaft would be
+#: silently wrong.
+_FAMILY_WORDS = {
+    "shaft": ("shaft", "axle"),
+    "collar": ("collar",),
+    "coupling": ("coupling", "coupler"),
+    "key": ("parallel key", "machine key", "keystock", "key stock",
+            "woodruff"),
+    "bushing": ("bushing", "bush ", "sleeve bearing", "plain bearing",
+                "journal bearing"),
+    "ring": ("circlip", "retaining ring", "snap ring", "e-clip", "c-clip"),
+    "rod": ("threaded rod", "studding", "all-thread", "allthread"),
+    "setscrew": ("set screw", "setscrew", "grub screw", "grubscrew"),
+    "gear": ("gear", "pinion", "sprocket"),
+    "pulley": ("pulley", "sheave"),
+    "spring": ("spring",),
+    "bearing": ("ball bearing", "deep groove"),
+}
+
+_DIAMETER = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:dia(?:meter)?\b|\u00f8)"
+    r"|(?:dia(?:meter)?\.?|\u00f8)\s*(?:of\s*|=\s*)?(\d+(?:\.\d+)?)", re.I)
+_BORE_WORD = re.compile(r"(\d+(?:\.\d+)?)\s*(?:mm)?\s*bore"
+                        r"|bore\s*(?:of\s*|=\s*)?(\d+(?:\.\d+)?)", re.I)
+_LONG = re.compile(r"(\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:long\b|length)"
+                   r"|length\s*(?:of\s*|=\s*)?(\d+(?:\.\d+)?)", re.I)
+_ANY_MM = re.compile(r"(\d+(?:\.\d+)?)\s*mm\b", re.I)
+#: "a 20mm shaft", "a 20 mm keyed shaft" - the size sitting in front of the
+#: noun, which is how these are actually asked for. %s is the noun.
+_SIZED = r"(\d+(?:\.\d+)?)\s*(?:mm)?\s+(?:\w+\s+){0,2}?%s"
+
+#: What turns the rest of a sentence into a reference rather than the ask.
+#: "A collar for a 12mm shaft" is a collar; "a 20mm shaft with a keyway" is a
+#: shaft. Without this, whichever family word came last won both.
+_REFERENCE = re.compile(
+    r"\b(?:for|with|to fit|to suit|that fits|onto|on)\s+(?:a|an|the|its)?\b",
+    re.I)
+
+
+def _head(text: str) -> str:
+    """The part of the request that names what is wanted."""
+    found = _REFERENCE.search(text)
+    return text[:found.start()] if found and found.start() > 0 else text
+
+
+def _family_of(text: str) -> Optional[str]:
+    """Which family this request is actually for.
+
+    The last family word in the head of the request wins, because English
+    puts the head noun last: a "shaft collar" is a collar, a "shaft coupling"
+    is a coupling, and a "20mm shaft" is a shaft. Anything after "for a" or
+    "with a" is a reference to another part and does not count - otherwise
+    "a collar for a 12mm shaft" would be a shaft.
+    """
+    head = _head(text).lower()
+    best, at = None, -1
+    for family, words in _FAMILY_WORDS.items():
+        for word in words:
+            where = head.rfind(word)
+            if where > at:
+                best, at = family, where
+    return best
+
+
+def _sized_for(text: str, nouns: tuple[str, ...]) -> Optional[float]:
+    """The size given for one of these nouns, however it was worded."""
+    for noun in nouns:
+        match = re.search(_SIZED % re.escape(noun.strip()), text, re.I)
+        if match:
+            return float(match.group(1))
+    return (_first_group(_BORE_WORD, text)
+            or _first_group(_DIAMETER, text)
+            or _number(_ANY_MM, text))
+
+
+def _mentions(lowered: str, family: str) -> bool:
+    return any(word in lowered for word in _FAMILY_WORDS[family])
+
+
+def _set_screw(text: str) -> Optional[CatalogPart]:
+    """A cup-point set screw. Deliberately ahead of the screw branches, which
+    would otherwise hand back a cap screw with a head on it."""
+    lowered = text.lower()
+    if not _mentions(lowered, "setscrew"):
+        return None
+    if library.HAVE_WAREHOUSE:
+        return None          # it cuts a real thread; let _fastener have it
+    size = parts._SIZE.search(text)
+    if not size:
+        return None
+    try:
+        designation = standards._normalise(size.group(1))
+    except KeyError:
+        return None
+    if designation not in standards.SET_SCREW_KEYS:
+        return None
+    length = (_number(parts._LENGTH, text) or _first_group(_LONG, text)
+              or round(standards.THREADS[designation].diameter * 1.5, 1))
+    return parts.set_screw(designation, length)
+
+
+def _threaded_rod(text: str) -> Optional[CatalogPart]:
+    lowered = text.lower()
+    if not _mentions(lowered, "rod"):
+        return None
+    size = parts._SIZE.search(text)
+    if not size:
+        return None
+    try:
+        designation = standards._normalise(size.group(1))
+    except KeyError:
+        return None
+    length = (_number(parts._LENGTH, text) or _first_group(_LONG, text))
+    if length is None:
+        return None          # studding with no length is not a part yet
+    return parts.threaded_rod(designation, length)
+
+
+def _shaft(text: str) -> Optional[CatalogPart]:
+    """A plain, keyed or grooved shaft.
+
+    Strict on purpose: "shaft" appears inside most requests that are about
+    something else entirely, so a request only counts as a shaft request when
+    it names no other family and gives a diameter.
+    """
+    lowered = text.lower()
+    if _family_of(text) != "shaft":
+        return None
+    diameter = _sized_for(text, _FAMILY_WORDS["shaft"])
+    if diameter is None or diameter < 3.0 or diameter > 50.0:
+        return None
+    length = _first_group(_LONG, text) or round(diameter * 6.0, 0)
+    keyway = "keyway" in lowered or "keyed" in lowered or "keyslot" in lowered
+    groove = ("groove" in lowered or "circlip" in lowered
+              or "retaining ring" in lowered or "snap ring" in lowered)
+    try:
+        return parts.shaft(standards.nearest_shaft(diameter), length,
+                           keyway=keyway, ring_groove=groove)
+    except KeyError:
+        return None
+
+
+def _shaft_collar(text: str) -> Optional[CatalogPart]:
+    lowered = text.lower()
+    if _family_of(text) != "collar":
+        return None
+    bore = _sized_for(text, _FAMILY_WORDS["collar"])
+    if bore is None or bore < 4.0 or bore > 50.0:
+        return None
+    clamp = "set screw" not in lowered and "grub" not in lowered
+    return parts.shaft_collar(standards.nearest_shaft(bore), clamp=clamp)
+
+
+def _coupling(text: str) -> Optional[CatalogPart]:
+    lowered = text.lower()
+    if _family_of(text) != "coupling":
+        return None
+    # A coupling joining two different shafts carries both sizes, and which
+    # end is which does not matter - it is symmetric.
+    pair = re.search(r"(\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:to|x|\u00d7|and)\s*"
+                     r"(\d+(?:\.\d+)?)\s*(?:mm)?", text, re.I)
+    if pair:
+        first, second = float(pair.group(1)), float(pair.group(2))
+    else:
+        first = _sized_for(text, _FAMILY_WORDS["coupling"])
+        second = first
+    if first is None or not (4.0 <= first <= 50.0) or not (4.0 <= second <= 50.0):
+        return None
+    if "flexible" in lowered or "jaw" in lowered or "oldham" in lowered \
+            or "bellows" in lowered or "spider" in lowered:
+        return None          # a different part, and not one built here
+    return parts.rigid_coupling(standards.nearest_shaft(first),
+                                standards.nearest_shaft(second))
+
+
+def _parallel_key(text: str) -> Optional[CatalogPart]:
+    lowered = text.lower()
+    if _family_of(text) != "key":
+        return None
+    if "woodruff" in lowered:
+        return None          # a different profile, not built here
+    shaft_size = _sized_for(text, ("shaft",)) or _first_group(_DIAMETER, text)
+    if shaft_size is None or shaft_size > 85.0:
+        return None
+    length = _first_group(_LONG, text)
+    try:
+        return parts.parallel_key(shaft_size, length)
+    except KeyError:
+        return None
+
+
+def _bushing(text: str) -> Optional[CatalogPart]:
+    lowered = text.lower()
+    if _family_of(text) != "bushing":
+        return None
+    if parts._BEARING.search(text):
+        return None          # a designation means a ball bearing
+    bore = _sized_for(text, ("bushing", "bush", "bearing"))
+    if bore is None:
+        return None
+    length = _first_group(_LONG, text)
+    try:
+        return parts.plain_bushing(bore, length)
+    except KeyError:
+        return None
+
+
+def _retaining_ring(text: str) -> Optional[CatalogPart]:
+    lowered = text.lower()
+    if _family_of(text) != "ring":
+        return None
+    if "internal" in lowered or "bore" in lowered:
+        return None          # DIN 472 internal rings are not built here
+    shaft_size = _sized_for(text, ("shaft", "circlip", "retaining ring",
+                                   "snap ring"))
+    if shaft_size is None:
+        return None
+    try:
+        return parts.retaining_ring(shaft_size)
+    except KeyError:
+        return None
+
+
 def select(text: str) -> Optional[Routed]:
     """The standard part this request asks for, built and checked.
 
@@ -265,7 +555,9 @@ def _select_cached(text: str, have_gears: bool,
     if any(word in lowered for word in _CUSTOM_CONTEXT):
         return None
 
-    for finder in (_gear, _pulley, _spring, _fastener, parts.select):
+    for finder in (_gear, _pulley, _spring, _set_screw, _threaded_rod,
+                   _shaft, _shaft_collar, _coupling, _parallel_key,
+                   _bushing, _retaining_ring, _fastener, parts.select):
         try:
             candidate = finder(text)
         except Exception:
@@ -300,7 +592,10 @@ def describe() -> dict:
     """What the catalogue can serve right now, for the health panel."""
     backends = library.available()
     families = ["washers", "o-rings", "dowel pins", "bearings",
-                "compression springs", "timing pulleys", "spur gears"]
+                "compression springs", "timing pulleys", "spur gears",
+                "shafts (keyed, grooved)", "parallel keys", "shaft collars",
+                "shaft couplings", "plain bushings", "retaining rings",
+                "set screws", "threaded rod"]
     if backends["cq_gears"]:
         families += ["helical", "herringbone", "ring", "rack", "bevel"]
     if backends["cq_warehouse"]:

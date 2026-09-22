@@ -12,7 +12,9 @@ being built.
 
 Sources: ISO 4762 (socket head cap screws), ISO 4014 (hex bolts), ISO 4032
 (hex nuts), ISO 7089 (plain washers), ISO 273 (clearance holes), ISO 2338
-(dowel pins), and the ISO 15 bearing series.
+(dowel pins), the ISO 15 bearing series, ISO 54 (gear modules), DIN 6885-1
+(parallel keys), DIN 471 (retaining rings), DIN 1850 (plain bushings) and
+ISO 4029 (set screws).
 
     These tables were transcribed by hand and carry nominal values only -
     no tolerances, no length-dependent thread runout.
@@ -27,7 +29,16 @@ Sources: ISO 4762 (socket head cap screws), ISO 4014 (hex bolts), ISO 4032
         clearance and tapping-drill columns of ``THREADS`` (ISO 273)
         ``NEMA_FRAMES``      - not a family BOLTS carries
         ``O_RING_CORDS``
+        ``PARALLEL_KEYS``    - DIN 6885-1
+        ``RETAINING_RINGS``  - DIN 471
+        ``BUSHINGS``         - DIN 1850 / ISO 4379
+        ``SET_SCREW_KEYS``   - ISO 4029
+        ``GEAR_MODULES``     - ISO 54 series 1
         the belt profiles in ``parts.py``
+
+    ``SHAFT_DIAMETERS`` is not a standard at all - it is the preferred-number
+    list a shaft is normally drawn to, offered so that "a shaft" comes out at
+    a size that can be bought.
 
     Nothing here carries tolerances, so read the standard before anything is
     manufactured from it.
@@ -257,3 +268,183 @@ def _normalise(size: str) -> str:
 
 def sizes() -> list[str]:
     return list(THREADS)
+
+
+# ── the power-transmission half of the catalogue ────────────────────────
+#
+# Everything above this line fastens things together. Everything below it
+# turns: the shaft, what keys it, what retains it, what it runs in, and the
+# modules the gears on it are cut to. A gear on a shaft in a bearing is the
+# assembly people actually ask this tool for, and until these tables existed
+# only two of those four parts could be served.
+
+
+# ISO 54 series 1 preferred modules. A gear is defined by any two of module,
+# tooth count and diameter, so a request that gives only a diameter is not
+# under-specified - it is one preferred module away from being exact, and
+# this is the list to try. Series 2 (1.125, 1.375, 1.75, …) is deliberately
+# left out: it exists, but nobody cuts a one-off gear to it.
+GEAR_MODULES: tuple[float, ...] = (
+    0.5, 0.6, 0.8, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0,
+    5.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0,
+)
+
+
+@dataclass(frozen=True)
+class KeySpec:
+    """A parallel key and the two slots it sits in, DIN 6885-1.
+
+    ``shaft_depth`` and ``hub_depth`` are the numbers that get invented most
+    often. They do not add up to the key height: the key stands proud of the
+    shaft slot by less than the hub slot is deep, so the key bears on its
+    flanks and never on its top face.
+    """
+    width: float             # b
+    height: float            # h
+    shaft_depth: float       # t1, measured from the shaft surface
+    hub_depth: float         # t2, measured from the bore surface
+
+
+# DIN 6885-1, keyed by the largest shaft diameter the key serves. A shaft is
+# matched to the first row it does not exceed - see ``key_for_shaft``.
+PARALLEL_KEYS: dict[float, KeySpec] = {
+    #        b     h    t1   t2
+     8.0: KeySpec( 2.0,  2.0, 1.2, 1.0),
+    10.0: KeySpec( 3.0,  3.0, 1.8, 1.4),
+    12.0: KeySpec( 4.0,  4.0, 2.5, 1.8),
+    17.0: KeySpec( 5.0,  5.0, 3.0, 2.3),
+    22.0: KeySpec( 6.0,  6.0, 3.5, 2.8),
+    30.0: KeySpec( 8.0,  7.0, 4.0, 3.3),
+    38.0: KeySpec(10.0,  8.0, 5.0, 3.3),
+    44.0: KeySpec(12.0,  8.0, 5.0, 3.3),
+    50.0: KeySpec(14.0,  9.0, 5.5, 3.8),
+    58.0: KeySpec(16.0, 10.0, 6.0, 4.3),
+    65.0: KeySpec(18.0, 11.0, 7.0, 4.4),
+    75.0: KeySpec(20.0, 12.0, 7.5, 4.9),
+    85.0: KeySpec(22.0, 14.0, 9.0, 5.4),
+}
+
+
+@dataclass(frozen=True)
+class RetainingRingSpec:
+    """An external circlip and its groove, DIN 471."""
+    groove_diameter: float   # d3, the turned groove
+    groove_width: float      # m, the groove wide enough for the ring
+    thickness: float         # s, the ring's own thickness
+    free_diameter: float     # d1, the ring relaxed and off the shaft
+
+
+# DIN 471 external retaining rings, keyed by the shaft they fit. The groove
+# is the part that has to be right: a ring dropped into a groove turned to
+# the shaft diameter does not retain anything.
+RETAINING_RINGS: dict[float, RetainingRingSpec] = {
+    #                         d3     m     s     d1
+     4.0: RetainingRingSpec( 3.70, 0.60, 0.40,  7.60),
+     5.0: RetainingRingSpec( 4.70, 0.70, 0.60,  9.30),
+     6.0: RetainingRingSpec( 5.60, 0.80, 0.70, 11.30),
+     8.0: RetainingRingSpec( 7.60, 0.90, 0.80, 14.30),
+    10.0: RetainingRingSpec( 9.60, 1.10, 1.00, 18.00),
+    12.0: RetainingRingSpec(11.50, 1.10, 1.00, 20.20),
+    14.0: RetainingRingSpec(13.40, 1.10, 1.00, 22.70),
+    15.0: RetainingRingSpec(14.30, 1.10, 1.00, 24.00),
+    16.0: RetainingRingSpec(15.20, 1.10, 1.00, 25.20),
+    17.0: RetainingRingSpec(16.20, 1.10, 1.00, 26.20),
+    20.0: RetainingRingSpec(19.00, 1.30, 1.20, 29.60),
+    25.0: RetainingRingSpec(23.90, 1.30, 1.20, 36.30),
+    30.0: RetainingRingSpec(28.60, 1.60, 1.50, 43.80),
+    35.0: RetainingRingSpec(33.00, 1.60, 1.50, 50.00),
+    40.0: RetainingRingSpec(37.50, 1.85, 1.75, 56.50),
+    45.0: RetainingRingSpec(42.50, 1.85, 1.75, 62.40),
+    50.0: RetainingRingSpec(47.00, 2.15, 2.00, 69.40),
+}
+
+
+@dataclass(frozen=True)
+class BushingSpec:
+    """A plain cylindrical sleeve bearing, DIN 1850 / ISO 4379."""
+    bore: float              # d
+    outer_diameter: float    # D
+    length: float            # L, the preferred length for this bore
+
+
+BUSHINGS: dict[float, BushingSpec] = {
+     6.0: BushingSpec( 6.0,  8.0,  6.0),
+     8.0: BushingSpec( 8.0, 10.0,  8.0),
+    10.0: BushingSpec(10.0, 12.0, 10.0),
+    12.0: BushingSpec(12.0, 14.0, 12.0),
+    14.0: BushingSpec(14.0, 16.0, 15.0),
+    16.0: BushingSpec(16.0, 18.0, 15.0),
+    20.0: BushingSpec(20.0, 23.0, 20.0),
+    25.0: BushingSpec(25.0, 28.0, 20.0),
+    30.0: BushingSpec(30.0, 34.0, 30.0),
+    35.0: BushingSpec(35.0, 39.0, 30.0),
+    40.0: BushingSpec(40.0, 44.0, 40.0),
+    50.0: BushingSpec(50.0, 55.0, 40.0),
+}
+
+
+# Preferred metric shaft diameters - R40 rounded to what is actually drawn
+# and actually stocked. A shaft asked for at 13mm is not wrong, but a shaft
+# asked for as "a shaft" should come out at one of these.
+SHAFT_DIAMETERS: tuple[float, ...] = (
+    3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0, 15.0, 16.0, 17.0, 20.0,
+    25.0, 30.0, 35.0, 40.0, 45.0, 50.0,
+)
+
+
+# ISO 4029 cup point socket set screws: the hex key across flats, by thread.
+# The screw is otherwise a plain threaded cylinder, so the key size and the
+# cup diameter are the whole table.
+SET_SCREW_KEYS: dict[str, float] = {
+    "M3": 1.5, "M4": 2.0, "M5": 2.5, "M6": 3.0,
+    "M8": 4.0, "M10": 5.0, "M12": 6.0, "M16": 8.0,
+}
+
+
+def key_for_shaft(diameter: float) -> KeySpec:
+    """The parallel key DIN 6885 puts on a shaft of this diameter.
+
+    The table is keyed by the top of each range, so the first row the shaft
+    does not exceed is its row.
+    """
+    for limit in sorted(PARALLEL_KEYS):
+        if diameter <= limit:
+            return PARALLEL_KEYS[limit]
+    raise KeyError(f"No DIN 6885 key tabled for a {diameter:g}mm shaft "
+                   f"(the table stops at {max(PARALLEL_KEYS):g}mm).")
+
+
+def nearest_shaft(diameter: float) -> float:
+    """The preferred shaft diameter closest to the one asked for."""
+    return min(SHAFT_DIAMETERS, key=lambda d: (abs(d - diameter), d))
+
+
+def gear_teeth_for_diameter(diameter: float, kind: str = "tip",
+                            min_teeth: int = 10) -> tuple[int, float] | None:
+    """A whole tooth count and preferred module giving this gear diameter.
+
+    A gear asked for by diameter alone is not under-specified, it is
+    unrounded: tip diameter is module x (teeth + 2) and pitch diameter is
+    module x teeth, so every preferred module implies a tooth count, and
+    most of them imply a fractional one. The best answer is the largest
+    module that lands on a whole tooth count, because for a given diameter a
+    coarser module is a stronger tooth - which is the choice a gear cutter
+    makes too.
+
+    Returns ``(teeth, module)``, or None if no preferred module gets within
+    a tenth of a millimetre with at least ``min_teeth`` teeth.
+    """
+    offset = 2 if kind == "tip" else 0
+    best = None
+    for module in sorted(GEAR_MODULES, reverse=True):
+        teeth = round(diameter / module) - offset
+        if teeth < min_teeth:
+            continue
+        error = abs(module * (teeth + offset) - diameter)
+        if error > 0.1:
+            continue
+        if best is None or error < best[2]:
+            best = (teeth, module, error)
+        if error < 1e-9:
+            break      # exact, and modules are tried coarsest first
+    return (best[0], best[1]) if best else None

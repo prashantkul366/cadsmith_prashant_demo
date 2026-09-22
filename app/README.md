@@ -501,8 +501,9 @@ as truncated rather than as finished.
 Four things sit between the request and the five agents.
 
 **A standard part is served, not generated.** When a request is unambiguously
-a catalogue part — "an M8x30 socket head cap screw", "a 6203 bearing", "a 20
-tooth spur gear module 2" — there is nothing for five agents to work out. The
+a catalogue part — "an M8x30 socket head cap screw", "a 6203 bearing", "a spur
+gear 50mm diameter", "a 20mm keyed shaft" — there is nothing for five agents
+to work out. The
 dimensions come from the published standard, the geometry is exact, and a
 model can only introduce error. `app/catalog/router.py` refuses anything
 ambiguous, under-specified, or merely *mentioning* a standard part inside a
@@ -555,6 +556,26 @@ thickness at the pitch circle is π × module / 2, all measured in the kernel.
 Gears are the standard part people ask for most and used to be the one family
 that needed an optional git dependency, so that family now stands on its own.
 
+**A gear can be asked for by diameter, not only by tooth count.** "A spur gear
+50mm diameter" is how the request actually arrives, and it used to be refused
+as under-specified — which sent it to five agents, cost five minutes, and came
+back with trapezoidal teeth that do not mesh. A gear is defined by any two of
+module, tooth count and diameter, so `standards.gear_teeth_for_diameter`
+walks the ISO 54 preferred modules for the coarsest one landing on a whole
+tooth count: 50mm tip diameter is 18 teeth at module 2.5, exactly. A diameter
+no preferred module reaches — 31.4mm — is still refused rather than rounded.
+
+**Shafts and what goes on them.** A gear needs a shaft, a shaft needs a key,
+and none of those could be served either, so the same request that wanted a
+gear wanted four pipeline runs. `parts.py` now builds shafts (plain, with a
+DIN 6885-1 keyway cut to depth t1, and with a DIN 471 circlip groove),
+parallel keys, plain bushings, retaining rings, set screws, threaded rod,
+clamping shaft collars and clamping shaft couplings. The fastener families
+come from published tables; collars and couplings have no published outside
+geometry — every maker differs — so those carry commercial proportions, say
+so in their docstring and expose them as parameters. `app/tests/
+test_transmission.py` measures all of it against the tables in the kernel.
+
 The remaining gear kinds — helical, herringbone, bevel, rack, ring — and the
 wider fastener range need two optional libraries:
 
@@ -562,9 +583,11 @@ wider fastener range need two optional libraries:
 .venv/bin/pip install -r app/requirements-catalog.txt
 ```
 
-Without them the catalogue degrades to the nine families it builds itself —
-spur gears, washers, bearings, springs, pulleys, pins and ISO 4762/4014/4032
-screws — and the health chip says which are missing.
+Without them the catalogue degrades to the sixteen families it builds itself
+— spur gears, shafts, parallel keys, shaft collars, shaft couplings, plain
+bushings, retaining rings, set screws, threaded rod, washers, bearings,
+springs, pulleys, pins and ISO 4762/4014/4032 screws — and the health chip
+says which are missing.
 `app/tests/test_catalog_library.py` covers that path and reports the
 library-dependent checks as skipped rather than failed, as do the browser
 checks that ask for a part only those libraries can build.
@@ -705,6 +728,7 @@ deterministic.
 .venv/bin/python -m app.tests.test_i18n             # both dictionaries, and what
                                                     # must stay English
 .venv/bin/python -m app.tests.test_catalog          # the catalogue, real kernel
+.venv/bin/python -m app.tests.test_transmission     # gears, shafts, keys, collars
 .venv/bin/python -m app.tests.test_catalog_library  # every family builds and routes
 .venv/bin/python -m app.tests.test_grounding        # published dimensions retrieved
 .venv/bin/python -m app.tests.test_spec             # measurement over opinion,
