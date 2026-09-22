@@ -213,7 +213,14 @@ def main() -> int:
 
         # -----------------------------------------------------------------
         print("\nA drawing from a catalogue part")
-        page.click('#viewSeg .vsegb[data-view="drawing"]')
+        # The projection is the slow part and this test already allows two
+        # minutes for it below - but the wait lands on the click, not on the
+        # result. Projecting a forty tooth involute gear pegs a core for the
+        # best part of half a minute, the browser cannot be scheduled while
+        # it does, and Playwright's default thirty seconds for a click is
+        # close enough to that to fail on a busy machine and pass on an idle
+        # one. The click gets the same two minutes the sheet does.
+        page.click('#viewSeg .vsegb[data-view="drawing"]', timeout=120000)
         page.wait_for_function(
             "() => document.querySelector('#sheet') && "
             "document.querySelector('#sheet').innerHTML.includes('svg')",
