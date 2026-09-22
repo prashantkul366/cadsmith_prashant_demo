@@ -740,8 +740,26 @@ def index() -> HTMLResponse:
     return HTMLResponse(page.read_text(encoding="utf-8"))
 
 
+class _RevalidatingStatic(StaticFiles):
+    """Serve the interface, but never let a browser keep an old copy.
+
+    The app is a local tool that gets pulled and restarted, and a cached
+    app.js against a fresh style.css is a broken-looking page with nothing
+    wrong in it - a gizmo that does not draw, a control that does nothing,
+    and no error anywhere to explain either. Revalidation costs one 304 per
+    file per load on localhost, which is nothing next to an hour of looking
+    for a bug that was fixed yesterday.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 if WEB_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+    app.mount("/static", _RevalidatingStatic(directory=str(WEB_DIR)),
+              name="static")
 
 
 @app.on_event("startup")

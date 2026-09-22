@@ -453,6 +453,86 @@ def main() -> int:
         page.screenshot(path=str(out / "07-wireframe.png"))
         page.click("#wireBtn")
 
+        print("\nThe left rail gives, rather than holding fixed bands")
+
+        def bands():
+            return page.evaluate(
+                "() => [Math.round($('.thread').getBoundingClientRect().height),"
+                " Math.round($('.thinksec').getBoundingClientRect().height)]")
+
+        def drag_grip(by):
+            box = page.locator("#railGrip").bounding_box()
+            x = box["x"] + box["width"] / 2
+            y = box["y"] + box["height"] / 2
+            page.mouse.move(x, y)
+            page.mouse.down()
+            page.mouse.move(x, y + by, steps=16)
+            page.mouse.up()
+            page.wait_for_timeout(350)
+            return bands()
+
+        check("the conversation and the reasoning have a grip between them",
+              page.locator("#railGrip").count() == 1)
+        check("reachable without a mouse",
+              page.get_attribute("#railGrip", "tabindex") == "0"
+              and bool(page.get_attribute("#railGrip", "aria-label")))
+
+        # Up first, then down. A conversation that happens to be taller than
+        # its share is already at its ceiling, so dragging it down proves
+        # nothing; from a shrunk rail both directions are real moves.
+        start = bands()
+        up = drag_grip(-200)
+        check("dragging up gives the reasoning the room",
+              up[0] < start[0] - 40 and up[1] > start[1] + 40,
+              f"{start} -> {up}")
+        down = drag_grip(160)
+        check("and dragging back down returns it",
+              down[0] > up[0] + 40 and down[1] < up[1] - 40,
+              f"{up} -> {down}")
+        check("neither band can be squeezed out of existence",
+              drag_grip(-2000)[0] >= 100 and drag_grip(2000)[1] >= 110)
+
+        page.focus("#railGrip")
+        keyed = bands()
+        for _ in range(6):
+            page.keyboard.press("ArrowUp")
+        page.wait_for_timeout(250)
+        check("the arrow keys move it too", bands()[0] < keyed[0],
+              f"{keyed[0]} -> {bands()[0]}")
+        saved = page.evaluate("() => localStorage.getItem('cadsmith.railsplit')")
+        check("and where it was put is remembered", saved is not None,
+              str(saved))
+        page.screenshot(path=str(out / "12-rail-split.png"))
+
+        print("\nThe composer grows with what is typed")
+        one_line = page.evaluate(
+            "() => Math.round($('#prompt').getBoundingClientRect().height)")
+        page.fill("#prompt", "\n".join(
+            f"line {i}: an L bracket, 60 by 40 by 6mm, 5mm fillet"
+            for i in range(14)))
+        page.wait_for_timeout(250)
+        grown = page.evaluate(
+            "() => Math.round($('#prompt').getBoundingClientRect().height)")
+        check("a long prompt grows the box", grown > one_line + 40,
+              f"{one_line} -> {grown}")
+        check("but it stops before eating the rail, and scrolls instead",
+              grown <= 205 and page.evaluate(
+                  "() => { const b = $('#prompt'); "
+                  "return b.scrollHeight > b.clientHeight + 2; }"),
+              f"{grown}px")
+        page.fill("#prompt", "")
+        page.wait_for_timeout(300)
+        shrunk = page.evaluate(
+            "() => Math.round($('#prompt').getBoundingClientRect().height)")
+        # Not back to exactly where it started: an empty textarea is sized to
+        # its placeholder, and the edit hint is three lines where the first
+        # prompt's is two. That is the behaviour wanted - the hint is what
+        # the box is for when it is empty - so the check is that the rail
+        # gets its room back, not that the number matches.
+        check("and it gives the room back when the text goes",
+              shrunk < grown - 100 and shrunk <= 90,
+              f"{grown} -> {shrunk} (started at {one_line})")
+
         print("\nConsole")
         real_errors = [e for e in console_errors if "favicon" not in e.lower()]
         check("no JavaScript errors", not real_errors,

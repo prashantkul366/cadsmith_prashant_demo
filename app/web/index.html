@@ -106,6 +106,12 @@
       <button class="verpill" id="verPill" hidden></button>
     </div>
 
+    <!-- Drag to give either band the room. How much of the rail belongs to
+         the conversation and how much to the reasoning depends on the part
+         and the person, and it is not a decision this app should keep. -->
+    <div class="railgrip" id="railGrip" role="separator" aria-orientation="horizontal"
+         tabindex="0" data-i18n-label="rail.resize" aria-label="Resize"></div>
+
     <!-- The reasoning, between what was asked and what is typed next. It
          needs height more than anything else, so it takes what the thread
          does not, scrolls on its own, and each agent folds away when it is
@@ -130,7 +136,12 @@
 
     <!-- The one place anything is typed. -->
     <div class="composer">
-      <textarea class="prompt" id="prompt" data-i18n-ph="input.placeholder"
+      <!-- rows="1" because a textarea defaults to two, and the box is sized
+           from its own scrollHeight as you type: with the default, clearing
+           it left two empty lines behind and the box never came back down to
+           where it started. CSS gives it its resting height. -->
+      <textarea class="prompt" id="prompt" rows="1"
+                data-i18n-ph="input.placeholder"
                 placeholder="Describe the part you want to generate…"></textarea>
       <div class="crow">
         <!-- With one composer, "another part" and "change this part" are

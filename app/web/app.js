@@ -229,7 +229,7 @@ function renderExamples() {
   }).join("");
   $$("#samples .sample").forEach(button => {
     button.onclick = () => {
-      $("#prompt").value = button.dataset.prompt;
+      setPrompt(button.dataset.prompt);
       $("#prompt").focus();
     };
   });
@@ -967,7 +967,7 @@ function startNewPart() {
   showOverlay("empty");
   showView("model");
   $("#drawBtn").disabled = true;
-  $("#prompt").value = "";
+  setPrompt("");
   setComposerEnabled(true);
   refreshComposer();
   $("#prompt").focus();
@@ -988,6 +988,77 @@ function refreshComposer() {
   box.placeholder = t(key);
   box.setAttribute("data-i18n-ph", key);
   $("#genBtn").title = t(editing() ? "edit.apply" : "input.generate");
+}
+
+/* ── the rail's own split ────────────────────────────────────────────
+   The conversation and the reasoning share the column, and which of them
+   deserves the room changes with the part and with the person. The grip
+   between them sets it, and it is remembered - a preference about how
+   somebody works, not about this run. */
+
+const RAIL_KEY = "cadsmith.railsplit";
+
+function setThreadShare(px) {
+  const column = $(".col.left");
+  const usable = column.clientHeight - $(".composer").offsetHeight - 40;
+  const clamped = Math.max(104, Math.min(px, Math.max(140, usable - 120)));
+  column.style.setProperty("--thread", `${Math.round(clamped)}px`);
+  try { localStorage.setItem(RAIL_KEY, String(Math.round(clamped))); }
+  catch (e) { /* a private window has no storage; the drag still works */ }
+}
+
+(function railGrip() {
+  const grip = $("#railGrip");
+  if (!grip) return;
+  try {
+    const saved = parseInt(localStorage.getItem(RAIL_KEY) || "", 10);
+    if (saved > 0) setThreadShare(saved);
+  } catch (e) { /* fine */ }
+
+  let from = 0, start = 0;
+  const move = event => setThreadShare(start + (event.clientY - from));
+  const stop = () => {
+    grip.classList.remove("dragging");
+    document.body.classList.remove("rail-resizing");
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", stop);
+  };
+  grip.addEventListener("pointerdown", event => {
+    event.preventDefault();
+    from = event.clientY;
+    start = $(".thread").getBoundingClientRect().height;
+    grip.classList.add("dragging");
+    document.body.classList.add("rail-resizing");
+    addEventListener("pointermove", move);
+    addEventListener("pointerup", stop);
+  });
+  // Reachable without a mouse, which a drag handle otherwise is not.
+  grip.addEventListener("keydown", event => {
+    const step = event.shiftKey ? 48 : 16;
+    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      event.preventDefault();
+      const now = $(".thread").getBoundingClientRect().height;
+      setThreadShare(now + (event.key === "ArrowDown" ? step : -step));
+    }
+  });
+})();
+
+/* The composer grows with what is being typed, up to a point, instead of
+   holding a fixed block of the rail whether or not anything is in it. */
+function growPrompt() {
+  const box = $("#prompt");
+  box.style.height = "auto";
+  box.style.height = `${Math.min(box.scrollHeight + 2, 200)}px`;
+}
+$("#prompt").addEventListener("input", growPrompt);
+
+/* Writing .value from script fires no input event, so the box would keep
+   whatever height the last typed character left it at - a loaded run's long
+   prompt clipped to one line, or an empty box still three lines tall. Every
+   place that fills the composer goes through here instead. */
+function setPrompt(text) {
+  $("#prompt").value = text;
+  growPrompt();
 }
 
 //: Reaching for the prompt means the settings are finished with.
@@ -1030,7 +1101,7 @@ async function generate() {
   S.runStarted = Date.now();
   S.viewChosen = false;      // a new run may move the centre again
   showAsk(prompt);
-  $("#prompt").value = "";
+  setPrompt("");
   $("#verPill").hidden = true;
   S.versions = [];
   S.selected = -1;
@@ -1245,7 +1316,7 @@ async function openJob(jobId) {
   S.converged = job.converged;
   S.busy = false;
 
-  $("#prompt").value = job.prompt;
+  setPrompt(job.prompt);
   S.seq = (state.events || []).length;
   $("#plog").innerHTML = "";
   (state.events || [])
@@ -1757,7 +1828,7 @@ function finishEdit(ok, data, message) {
   }
   // A parameter the panel set did not come from the instruction box, so
   // whatever is half-typed in there is still the person's.
-  if (!fromPanel) $("#prompt").value = "";
+  if (!fromPanel) setPrompt("");
   const method = t(data.method === "parameter patch"
     ? "edit.method.patch" : "edit.method.agent");
   const seconds = data.total_ms

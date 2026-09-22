@@ -217,10 +217,34 @@ textarea.prompt::placeholder{color:#535E6E}
    the other two - so the conversation keeps enough to read and the rest
    is the reasoning's. */
 /* Enough to read the plan, never more than it needs, and never more than
-   45% however long the plan runs - the rest is the reasoning's. */
-.thread{flex:0 1 auto;min-height:124px;max-height:45%;overflow-y:auto;
-  overscroll-behavior:contain;padding:14px 12px 4px;
+   45% however long the plan runs - unless the grip below says otherwise.
+
+   Until the grip is dragged, --thread is unset, var() with no fallback is
+   invalid at computed-value time, and height falls back to auto - so a short
+   conversation is sized by its own content and capped at 45%. Once the grip
+   writes a value, height and max-height agree on it and the band holds where
+   it was put. max-height alone could only ever shrink the band, never grow
+   it, which made dragging downwards do nothing. */
+.thread{flex:0 1 auto;min-height:104px;
+  height:var(--thread);max-height:var(--thread, 45%);
+  overflow-y:auto;overscroll-behavior:contain;padding:14px 12px 4px;
   display:flex;flex-direction:column;gap:14px}
+
+/* The handle between the two bands. Four pixels of target is not enough for
+   a hand, so the hit area is taller than the line it draws. */
+.railgrip{
+  flex:none;height:9px;margin:-4px 0;cursor:row-resize;position:relative;
+  z-index:5;
+}
+.railgrip::after{
+  content:"";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:34px;height:3px;border-radius:2px;background:var(--line);
+  transition:background .14s;
+}
+.railgrip:hover::after,.railgrip:focus-visible::after,
+.railgrip.dragging::after{background:var(--amber)}
+.railgrip:focus-visible{outline:none}
+body.rail-resizing{cursor:row-resize;user-select:none}
 /* Every turn keeps its own height and the thread scrolls. Without this
    the column shares its height out and a section collapses to nothing
    while its contents spill over whatever is beneath. */
@@ -247,7 +271,7 @@ textarea.prompt::placeholder{color:#535E6E}
    lines, and giving it a fixed share of the column while the reasoning
    scrolled in a slot was the whole complaint. */
 .thinksec{
-  flex:1 1 auto;min-height:140px;display:flex;flex-direction:column;
+  flex:1 1 auto;min-height:120px;display:flex;flex-direction:column;
   border-top:1px solid var(--line);background:var(--panel-2);
 }
 .thinksec.shut{flex:0 0 auto;min-height:0}
@@ -277,7 +301,7 @@ textarea.prompt::placeholder{color:#535E6E}
 .composer{flex:none;margin:8px 10px 10px;padding:10px;border-radius:var(--r-lg);
   border:1px solid var(--line);background:var(--panel-2);
   display:flex;flex-direction:column;gap:9px}
-.composer .prompt{width:100%;min-height:76px;resize:vertical;background:var(--input);
+.composer .prompt{width:100%;min-height:52px;max-height:200px;resize:none;background:var(--input);
   border:1px solid transparent;border-radius:var(--r);padding:9px 10px;
   color:var(--ink);font-family:inherit;font-size:12.5px;line-height:1.5}
 .composer .prompt:focus{outline:none;border-color:var(--accent-dim)}

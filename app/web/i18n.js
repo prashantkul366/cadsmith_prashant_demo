@@ -37,6 +37,8 @@ const I18N = (function () {
     "app.history":      ["History", "履歴"],
     "app.fullscreen":   ["Fullscreen", "全画面"],
     "opt.more":         ["Model and run settings", "モデルと実行の設定"],
+    "rail.resize":      ["Resize the conversation and the reasoning",
+                         "会話と推論の高さを変更"],
     "input.newpart":    ["Start a new part", "新しい部品を作成"],
     "props.heading":    ["Properties", "プロパティ"],
     "usage.heading":    ["Token tracking", "トークン使用量"],
