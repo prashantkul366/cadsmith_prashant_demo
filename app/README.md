@@ -562,8 +562,14 @@ as under-specified — which sent it to five agents, cost five minutes, and came
 back with trapezoidal teeth that do not mesh. A gear is defined by any two of
 module, tooth count and diameter, so `standards.gear_teeth_for_diameter`
 walks the ISO 54 preferred modules for the coarsest one landing on a whole
-tooth count: 50mm tip diameter is 18 teeth at module 2.5, exactly. A diameter
-no preferred module reaches — 31.4mm — is still refused rather than rounded.
+tooth count of at least seventeen: 50mm tip diameter is 18 teeth at module
+2.5, exactly. Coarsest because for a given diameter a coarser module is a
+stronger tooth, and seventeen because a 20° involute undercuts below it —
+without that floor a 60mm gear comes out as ten teeth at module 5, which
+measures correctly and is a worse gear than the eighteen-tooth module 3
+beside it. A diameter no preferred module reaches — 31.4mm — is refused
+rather than rounded, and a gear that names its own tooth count keeps the
+face width and bore it always had.
 
 **Shafts and what goes on them.** A gear needs a shaft, a shaft needs a key,
 and none of those could be served either, so the same request that wanted a
@@ -583,11 +589,12 @@ wider fastener range need two optional libraries:
 .venv/bin/pip install -r app/requirements-catalog.txt
 ```
 
-Without them the catalogue degrades to the sixteen families it builds itself
-— spur gears, shafts, parallel keys, shaft collars, shaft couplings, plain
-bushings, retaining rings, set screws, threaded rod, washers, bearings,
-springs, pulleys, pins and ISO 4762/4014/4032 screws — and the health chip
-says which are missing.
+Without them the catalogue degrades to the families it builds itself, which
+`parts.BUILDERS` lists: spur gears, shafts, parallel keys, shaft collars,
+shaft couplings, plain bushings, retaining rings, set screws, threaded rod,
+timing pulleys, compression springs, ball bearings, o-rings, dowel pins,
+washers and ISO 4762/4014/4032 screws and nuts. The health chip says which
+of the rest are missing.
 `app/tests/test_catalog_library.py` covers that path and reports the
 library-dependent checks as skipped rather than failed, as do the browser
 checks that ask for a part only those libraries can build.

@@ -39,6 +39,9 @@ venv/
 # Experiment logs
 experiments/logs/
 
+# Eval scores, where app/README.md tells you to write them
+runs/
+
 # OS
 .DS_Store
 Thumbs.db
