@@ -109,7 +109,11 @@ def configure_provider(page, base_url: str) -> None:
 
 def start_mock(port: int, delay: float = 0.0) -> subprocess.Popen:
     process = subprocess.Popen(
-        [sys.executable, "-m", "app.tools.mock_provider",
+        # --parts: answer from mock_parts.py, the five real mechanical
+        # parts this file measures. Without it the provider replies with one
+        # 40x30x10 plate to every prompt, and every dimension check here
+        # fails against that same plate no matter what was asked for.
+        [sys.executable, "-m", "app.tools.mock_provider", "--parts",
          "--port", str(port), "--delay", str(delay)],
         cwd=str(ROOT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2.0)
@@ -129,6 +133,13 @@ def stop_mock(process: subprocess.Popen) -> None:
 
 def run_and_wait(page, prompt: str, timeout_ms: int = 240000) -> float:
     """Generate, wait for the run to settle, return wall-clock seconds."""
+    # There is one composer now, and after a run it is asking for an edit to
+    # the part on screen, not for a new part. Typing the next prompt into it
+    # without starting a new part sends an edit - which runs no pipeline, so
+    # the overlay never appears and this waited 20s for nothing.
+    if page.locator("#verPill").is_visible():
+        page.click("#newBtn")
+        page.wait_for_timeout(400)
     page.fill("#prompt", prompt)
     started = time.time()
     page.click("#genBtn")
@@ -237,7 +248,18 @@ def main() -> int:
             print("\nClicking around while a run is in flight")
             stop_mock(mock)
             mock = start_mock(args.mock_port + 1, delay=3.0)
+
+            # Start the new part before reconfiguring, not after: the same
+            # reason as in run_and_wait - the composer is still asking for an
+            # edit to the part the last run left on screen - but configuring
+            # opens the settings menu over the composer, and #newBtn cannot
+            # be clicked through it.
+            if page.locator("#verPill").is_visible():
+                page.click("#newBtn")
+                page.wait_for_timeout(400)
             configure_provider(page, f"http://127.0.0.1:{args.mock_port + 1}/v1")
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(200)
 
             page.fill("#prompt", "a stepped transmission shaft with a keyway")
             page.click("#genBtn")
