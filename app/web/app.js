@@ -398,10 +398,29 @@ function renderUsage() {
 
 const TH = { blocks: new Map(), order: 0 };
 
+const THINK_AWAIT = `<div class="await">
+  <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+  <span></span></div>`;
+
+/* Put the waiting line back, rather than leaving a hole. The placeholder
+   only ever existed because it shipped in the markup, so the first run
+   removed it for good - and after that any run with no reasoning to show,
+   a catalogue part above all, left an open section with nothing in it. */
+function thinkPlaceholder(key) {
+  const body = $("#thinkBody");
+  body.innerHTML = THINK_AWAIT;
+  const span = body.querySelector("span");
+  // Tagged as well as filled: the dictionary re-walks the page on a
+  // language switch, and a line written here without the tag would sit in
+  // English underneath a Japanese interface.
+  span.setAttribute("data-i18n", key);
+  span.textContent = t(key);
+}
+
 function thinkReset() {
   TH.blocks.clear();
   TH.order = 0;
-  $("#thinkBody").innerHTML = "";
+  thinkPlaceholder("think.await");
   $("#thinkLive").hidden = true;
 }
 
@@ -491,6 +510,17 @@ function paintLane(node) {
 
 function thinkAppend(agent, iteration, lane, text) {
   if (!text) return;
+
+  // Whether the reader is at the bottom has to be sampled BEFORE anything
+  // is written, not after. Measured afterwards it answers a different
+  // question - is the reader at the bottom of the text they have not seen
+  // yet - and the answer is no whenever the insertion is taller than the
+  // threshold. One new agent block is, so the first line an agent spoke
+  // switched following off for the rest of the run.
+  const rail = $("#rail");
+  const wasAtBottom =
+    rail.scrollHeight - rail.scrollTop - rail.clientHeight < 80;
+
   const block = thinkBlock(agent, iteration);
   const node = laneNode(block, lane);
   node.full += text;
@@ -500,12 +530,15 @@ function thinkAppend(agent, iteration, lane, text) {
   }
   paintLane(node);
 
-
-  // Follow the stream only while the reader is already at the bottom, so
-  // scrolling back to read something is not yanked away.
-  const body = $("#thinkBody");
-  const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
-  if (atBottom) body.scrollTop = body.scrollHeight;
+  // Follow the stream only while the reader was already at the bottom, so
+  // scrolling back to read something is not yanked away. The rail is what
+  // scrolls - the reasoning body has no scrollbar of its own any more.
+  if (wasAtBottom) {
+    rail.scrollTop = rail.scrollHeight;
+    // Again after layout, because a <details> block that has just been
+    // inserted has not been laid out yet and scrollHeight is still short.
+    requestAnimationFrame(() => { rail.scrollTop = rail.scrollHeight; });
+  }
   $("#thinkLive").hidden = false;
 }
 
@@ -656,11 +689,37 @@ function showVersionPill() {
   const version = S.versions[S.selected];
   if (!version) { pill.hidden = true; return; }
   pill.hidden = false;
+  // A parameter change is the next iteration of the same part, not a
+  // different kind of thing. It was labelled EDIT, which read as though the
+  // history had two sorts of entry in it when it has one: versions of a
+  // part, in the order they were made. The coloured dot still says how each
+  // one came about.
   pill.textContent = version.source === "catalog"
     ? t("iter.catalog")
-    : t(version.source === "edit" ? "iter.edit" : "iter.iteration",
-        { n: version.iteration });
+    : t("iter.iteration", { n: version.iteration });
 }
+
+/* ── stepping through the versions ──────────────────────────────────── */
+
+function refreshUndo(busy) {
+  // Nothing to step through until a part has been built, and never while
+  // one is being built - loading an older version mid-run would fight the
+  // run for the viewer.
+  const working = busy === undefined ? S.busy : busy;
+  const at = S.selected;
+  $("#undoBtn").disabled = working || at <= 0;
+  $("#redoBtn").disabled = working || at < 0
+                           || at >= S.versions.length - 1;
+}
+
+function stepVersion(by) {
+  const next = S.selected + by;
+  if (next < 0 || next >= S.versions.length) return;
+  selectVersion(next);
+}
+
+$("#undoBtn").onclick = () => stepVersion(-1);
+$("#redoBtn").onclick = () => stepVersion(1);
 
 function addVersion(version) {
   const existing = S.versions.findIndex(v => v.iteration === version.iteration);
@@ -673,14 +732,14 @@ function addVersion(version) {
 }
 
 function renderIterations() {
+  refreshUndo();
   if (!S.versions.length) { $("#iters").innerHTML = ""; return; }
   const cards = S.versions.map((v, i) => {
     const kind = v.source === "edit" ? "edit"
                : v.source === "catalog" ? "catalog"
                : (v.passed ? "pass" : "fail");
     const label = v.source === "catalog" ? t("iter.catalog")
-      : t(v.source === "edit" ? "iter.edit" : "iter.iteration",
-          { n: v.iteration });
+      : t("iter.iteration", { n: v.iteration });
     const thumb = v.has_render
       ? `<img src="${API.artifact(S.jobId, v.iteration, "render.png")}" alt="" />`
       : "";
@@ -702,6 +761,7 @@ async function selectVersion(index, options) {
   if (!version) return;
   S.selected = index;
   renderIterations();
+  refreshUndo();
 
   // Started before the mesh rather than after it. The panel does not depend
   // on the geometry, and a heavy STL - a swept helix runs to megabytes -
@@ -740,6 +800,7 @@ function renderPlan(plan) {
   if (S.catalog) {
     $("#planBody").innerHTML =
       `<div class="await">${esc(t("plan.catalog"))}</div>`;
+    thinkPlaceholder("think.catalog");
     return;
   }
   if (!plan) return;
@@ -918,6 +979,10 @@ function renderValidation(version) {
 function setComposerEnabled(on) {
   $("#prompt").disabled = !on;
   $("#genBtn").disabled = !on;
+  // This is the one call made at every start and end of work, so it is
+  // where undo finds out. The flag is passed rather than read back off
+  // S.busy, which some callers set on the line after this one.
+  refreshUndo(!on);
 }
 
 /* Whether the part on screen can be rebuilt. A version that cannot -
@@ -988,60 +1053,12 @@ function refreshComposer() {
   box.placeholder = t(key);
   box.setAttribute("data-i18n-ph", key);
   $("#genBtn").title = t(editing() ? "edit.apply" : "input.generate");
+  // An empty box is sized to show its placeholder, and this is where the
+  // placeholder changes - from describing a part to asking for a change,
+  // which is a line longer. Without this the new hint is clipped until
+  // something is typed.
+  growPrompt();
 }
-
-/* ── the rail's own split ────────────────────────────────────────────
-   The conversation and the reasoning share the column, and which of them
-   deserves the room changes with the part and with the person. The grip
-   between them sets it, and it is remembered - a preference about how
-   somebody works, not about this run. */
-
-const RAIL_KEY = "cadsmith.railsplit";
-
-function setThreadShare(px) {
-  const column = $(".col.left");
-  const usable = column.clientHeight - $(".composer").offsetHeight - 40;
-  const clamped = Math.max(104, Math.min(px, Math.max(140, usable - 120)));
-  column.style.setProperty("--thread", `${Math.round(clamped)}px`);
-  try { localStorage.setItem(RAIL_KEY, String(Math.round(clamped))); }
-  catch (e) { /* a private window has no storage; the drag still works */ }
-}
-
-(function railGrip() {
-  const grip = $("#railGrip");
-  if (!grip) return;
-  try {
-    const saved = parseInt(localStorage.getItem(RAIL_KEY) || "", 10);
-    if (saved > 0) setThreadShare(saved);
-  } catch (e) { /* fine */ }
-
-  let from = 0, start = 0;
-  const move = event => setThreadShare(start + (event.clientY - from));
-  const stop = () => {
-    grip.classList.remove("dragging");
-    document.body.classList.remove("rail-resizing");
-    removeEventListener("pointermove", move);
-    removeEventListener("pointerup", stop);
-  };
-  grip.addEventListener("pointerdown", event => {
-    event.preventDefault();
-    from = event.clientY;
-    start = $(".thread").getBoundingClientRect().height;
-    grip.classList.add("dragging");
-    document.body.classList.add("rail-resizing");
-    addEventListener("pointermove", move);
-    addEventListener("pointerup", stop);
-  });
-  // Reachable without a mouse, which a drag handle otherwise is not.
-  grip.addEventListener("keydown", event => {
-    const step = event.shiftKey ? 48 : 16;
-    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-      event.preventDefault();
-      const now = $(".thread").getBoundingClientRect().height;
-      setThreadShare(now + (event.key === "ArrowDown" ? step : -step));
-    }
-  });
-})();
 
 /* The composer grows with what is being typed, up to a point, instead of
    holding a fixed block of the rail whether or not anything is in it. */
@@ -1457,6 +1474,17 @@ $("#lightbox").onclick = () => { $("#lightbox").hidden = true; };
 addEventListener("keydown", e => {
   if (e.target.matches("input,textarea")) return;
   const key = e.key.toLowerCase();
+  if ((e.metaKey || e.ctrlKey) && key === "z") {
+    e.preventDefault();
+    stepVersion(e.shiftKey ? 1 : -1);
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && key === "y") {
+    e.preventDefault();
+    stepVersion(1);
+    return;
+  }
+  if (e.metaKey || e.ctrlKey) return;   // leave every other shortcut alone
   if (key === "1") Viewer.view("iso", true);
   if (key === "2") Viewer.view("front", true);
   if (key === "3") Viewer.view("top", true);

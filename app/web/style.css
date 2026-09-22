@@ -130,6 +130,18 @@ header{
 .brand h1{font-size:14.5px;font-weight:650;letter-spacing:-.15px;line-height:1.1}
 .brand p{font-size:10.5px;color:var(--ink-dim);letter-spacing:.01em}
 .hsep{width:1px;height:22px;background:var(--line)}
+
+/* Undo and redo, beside the wordmark. Quiet until there is somewhere to go:
+   a control that is always lit but does nothing half the time teaches people
+   not to trust it. */
+.undogrp{display:flex;gap:2px;margin-left:4px}
+.ubtn{
+  width:28px;height:26px;display:grid;place-items:center;border-radius:var(--r-sm);
+  color:var(--ink-dim);transition:background .13s,color .13s;
+}
+.ubtn .icn{width:15px;height:15px;stroke-width:1.9}
+.ubtn:hover:not(:disabled){background:var(--panel-2);color:var(--ink)}
+.ubtn:disabled{opacity:.3;cursor:default}
 .pill{
   display:flex;align-items:center;gap:6px;border:1px solid var(--line);
   background:var(--panel-2);border-radius:100px;padding:4px 10px 4px 8px;
@@ -212,42 +224,23 @@ textarea.prompt::placeholder{color:#535E6E}
 
 /* ---------- left: the conversation ---------- */
 .col.left{display:flex;flex-direction:column;min-height:0}
-/* Three bands: what has been said, what is being thought, what is being
-   typed. The middle one is the reasoning, and it needs height more than
-   the other two - so the conversation keeps enough to read and the rest
-   is the reasoning's. */
-/* Enough to read the plan, never more than it needs, and never more than
-   45% however long the plan runs - unless the grip below says otherwise.
 
-   Until the grip is dragged, --thread is unset, var() with no fallback is
-   invalid at computed-value time, and height falls back to auto - so a short
-   conversation is sized by its own content and capped at 45%. Once the grip
-   writes a value, height and max-height agree on it and the band holds where
-   it was put. max-height alone could only ever shrink the band, never grow
-   it, which made dragging downwards do nothing. */
-.thread{flex:0 1 auto;min-height:104px;
-  height:var(--thread);max-height:var(--thread, 45%);
-  overflow-y:auto;overscroll-behavior:contain;padding:14px 12px 4px;
+/* One scroll, not three. What was asked, what was planned and what was
+   thought are sections of a single column - the reference for this panel is
+   a document you scroll, not a stack of panes each with its own scrollbar.
+   Only the composer is pinned, because it is the one thing that must never
+   scroll away. */
+.rail{
+  flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  display:flex;flex-direction:column;
+  scrollbar-width:thin;scrollbar-color:var(--line) transparent;
+}
+.thread{flex:0 0 auto;padding:14px 12px 4px;
   display:flex;flex-direction:column;gap:14px}
 
-/* The handle between the two bands. Four pixels of target is not enough for
-   a hand, so the hit area is taller than the line it draws. */
-.railgrip{
-  flex:none;height:9px;margin:-4px 0;cursor:row-resize;position:relative;
-  z-index:5;
-}
-.railgrip::after{
-  content:"";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-  width:34px;height:3px;border-radius:2px;background:var(--line);
-  transition:background .14s;
-}
-.railgrip:hover::after,.railgrip:focus-visible::after,
-.railgrip.dragging::after{background:var(--amber)}
-.railgrip:focus-visible{outline:none}
-body.rail-resizing{cursor:row-resize;user-select:none}
-/* Every turn keeps its own height and the thread scrolls. Without this
-   the column shares its height out and a section collapses to nothing
-   while its contents spill over whatever is beneath. */
+/* Every turn keeps its own height. Without this the column shares its
+   height out and a section collapses to nothing while its contents spill
+   over whatever is beneath. */
 .thread > *{flex:0 0 auto}
 
 /* What the person said: the darkest thing on screen, so the thread reads as
@@ -263,23 +256,29 @@ body.rail-resizing{cursor:row-resize;user-select:none}
 .tsec{display:flex;flex-direction:column;gap:7px;min-height:0}
 .tsec[hidden]{display:none}
 .tsechd{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
-.tsec .tmodel{opacity:.7;flex:none}
-.tsec .ai-body{padding:0;overflow:visible;max-height:none}
+/* The heading holds its line and the model id gives way. A long id -
+   QWEN3-VL-8B-INSTRUCT - was pushing "DESIGN PLAN" onto two lines and
+   breaking it mid-phrase. */
+.tsechd .eyebrow:first-child{white-space:nowrap;flex:none}
+.tsec .tmodel{opacity:.7;flex:0 1 auto;min-width:0;text-align:right;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tsec .ai-body,.rail .think-body{
+  padding:0;overflow:visible;max-height:none;
+  background:none;
+}
+.rail .think-body{padding:0 12px 12px}
 
-/* ---------- the reasoning, in the middle of the rail ---------- */
-/* Takes whatever the conversation does not need. An empty thread is two
-   lines, and giving it a fixed share of the column while the reasoning
-   scrolled in a slot was the whole complaint. */
+/* ---------- the reasoning, further down the same page ---------- */
+/* Not a band with a surface of its own: a rule, a heading and the text
+   under it, continuing the column above. It was a panel with its own
+   background and its own scrollbar, which is what made the rail read as a
+   stack of three boxes rather than one conversation. */
 .thinksec{
-  flex:1 1 auto;min-height:120px;display:flex;flex-direction:column;
-  border-top:1px solid var(--line);background:var(--panel-2);
+  flex:0 0 auto;display:flex;flex-direction:column;margin-top:12px;
+  border-top:1px solid var(--line-soft);
 }
-.thinksec.shut{flex:0 0 auto;min-height:0}
 .thinksec.shut .think-body{display:none}
-.thinkhd{
-  display:flex;align-items:center;gap:7px;padding:8px 12px;flex:none;
-  border-bottom:1px solid var(--line-soft);
-}
+.thinkhd{display:flex;align-items:center;gap:7px;padding:11px 12px 5px;flex:none}
 .thinktoggle{
   display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;
   letter-spacing:.02em;color:var(--ink-2);

@@ -156,10 +156,56 @@ def main() -> int:
         check("every step is a version in the timeline",
               page.locator("#iters .iter").count() == len(CHAIN) + 1,
               f"{page.locator('#iters .iter').count()} cards")
-        check("they are labelled as edits",
-              page.locator("#iters").inner_text().count("EDIT") == len(CHAIN),
+        check("and they are numbered on, not set apart as edits",
+              "EDIT" not in page.locator("#iters").inner_text().upper()
+              and page.locator("#iters").inner_text().upper().count("ITER")
+                  == len(CHAIN),   # the base is the catalogue part itself
               page.locator("#iters").inner_text().replace("\n", " ")[:60])
         page.screenshot(path=str(out / "edit-chain.png"))
+
+        # -----------------------------------------------------------------
+        print("\nUndo and redo, beside the wordmark")
+        # The strip at the foot of the viewport could always do this by
+        # clicking a thumbnail. These are the same move where a hand looks
+        # for it, and on the keys it reaches for.
+        last = page.evaluate("S.selected")
+        check("undo has somewhere to go after a chain of edits",
+              not page.locator("#undoBtn").is_disabled(), f"at {last}")
+        check("redo has nowhere to go from the newest",
+              page.locator("#redoBtn").is_disabled())
+
+        page.click("#undoBtn")
+        page.wait_for_timeout(2200)
+        check("undo loads the version before",
+              page.evaluate("S.selected") == last - 1,
+              f"{last} -> {page.evaluate('S.selected')}")
+        check("and redo lights up", not page.locator("#redoBtn").is_disabled())
+        page.click("#redoBtn")
+        page.wait_for_timeout(2200)
+        check("redo returns to where it was",
+              page.evaluate("S.selected") == last,
+              str(page.evaluate("S.selected")))
+
+        page.evaluate("() => document.activeElement.blur()")
+        page.wait_for_timeout(300)
+        page.keyboard.press("Control+z")
+        page.wait_for_timeout(2200)
+        check("ctrl+z does the same thing",
+              page.evaluate("S.selected") == last - 1,
+              str(page.evaluate("S.selected")))
+        page.keyboard.press("Control+Shift+z")
+        page.wait_for_timeout(2200)
+        check("and ctrl+shift+z comes back",
+              page.evaluate("S.selected") == last, str(page.evaluate("S.selected")))
+
+        # In the prompt, ctrl+z belongs to the text being typed.
+        page.fill("#prompt", "make it thicker")
+        page.focus("#prompt")
+        page.keyboard.press("Control+z")
+        page.wait_for_timeout(500)
+        check("but the prompt keeps its own undo",
+              page.evaluate("S.selected") == last, str(page.evaluate("S.selected")))
+        page.fill("#prompt", "")
 
         # -----------------------------------------------------------------
         print("\nStepping back through the history")

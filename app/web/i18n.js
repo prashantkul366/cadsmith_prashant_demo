@@ -36,9 +36,11 @@ const I18N = (function () {
                          "プランナー · コーダー · 実行 · 検証 · リファイナー"],
     "app.history":      ["History", "履歴"],
     "app.fullscreen":   ["Fullscreen", "全画面"],
+    "app.undo":         ["Undo - the version before this one",
+                         "元に戻す - 一つ前のバージョン"],
+    "app.redo":         ["Redo - the version after this one",
+                         "やり直す - 一つ後のバージョン"],
     "opt.more":         ["Model and run settings", "モデルと実行の設定"],
-    "rail.resize":      ["Resize the conversation and the reasoning",
-                         "会話と推論の高さを変更"],
     "input.newpart":    ["Start a new part", "新しい部品を作成"],
     "props.heading":    ["Properties", "プロパティ"],
     "usage.heading":    ["Token tracking", "トークン使用量"],
@@ -299,7 +301,6 @@ const I18N = (function () {
     "label.judge.model": ["JUDGE · {model}", "検証 · {model}"],
 
     /* ── iterations ─────────────────────────────────────────────────── */
-    "iter.edit":        ["EDIT {n}", "編集 {n}"],
     "iter.iteration":   ["ITER {n}", "反復 {n}"],
     "iter.compare":     ["← {n} attempts · click to compare",
                          "← {n} 件の試行 · クリックで比較"],
@@ -593,6 +594,10 @@ const I18N = (function () {
     "think.collapse":   ["Collapse", "折りたたむ"],
     "think.collapse.tip": ["Collapse finished steps", "完了したステップを折りたたむ"],
     "think.working":    ["working", "処理中"],
+    "think.catalog":    ["No agent ran - this part comes from the standard, "
+                         + "so there was nothing to reason about.",
+                         "エージェントは動作していません - この部品は規格由来のため、"
+                         + "推論はありません。"],
     "think.await":      ["The agents' reasoning appears here as they work.",
                          "エージェントの推論が、作業の進行に合わせてここに表示されます。"],
     "think.plan":       ["Planner", "プランナー"],

@@ -323,8 +323,12 @@ def main() -> int:
               page.locator("#iters .iter").count() == 3)
         labels = page.evaluate(
             "[...document.querySelectorAll('#iters .iter .ilabel')].map(e => e.textContent.trim())")
-        check("it is labelled as an edit",
-              any("EDIT" in l for l in labels), str(labels))
+        # A parameter change is the next iteration of the same part, not a
+        # separate kind of history entry, so the strip counts straight on.
+        check("it is numbered on from the last one, not called an edit",
+              all("EDIT" not in l.upper() for l in labels)
+              and sum("ITER" in l.upper() for l in labels) >= 2,
+              str(labels))
         after = page.evaluate("Viewer.extents.x")
         check("the kernel rebuilt it at the new length",
               abs(before - 100.0) < 0.5 and abs(after - 140.0) < 0.5,
@@ -453,56 +457,99 @@ def main() -> int:
         page.screenshot(path=str(out / "07-wireframe.png"))
         page.click("#wireBtn")
 
-        print("\nThe left rail gives, rather than holding fixed bands")
+        print("\nThe left rail is one panel, not a stack of them")
+        shape = page.evaluate("""() => {
+          const rail = document.querySelector('#rail');
+          const cs = el => getComputedStyle(el);
+          const inner = [];
+          rail.querySelectorAll('*').forEach(el => {
+            const o = cs(el).overflowY;
+            if ((o === 'auto' || o === 'scroll')
+                && el.scrollHeight > el.clientHeight + 4)
+              inner.push(el.id || el.className);
+          });
+          return {
+            innerScrollers: inner,
+            planBg: cs(document.querySelector('#planBody')).backgroundColor,
+            thinkBg: cs(document.querySelector('#thinkBody')).backgroundColor,
+            headingLines: Math.round(
+              document.querySelector('#planSec .eyebrow')
+                      .getBoundingClientRect().height),
+          };
+        }""")
+        check("the thread and the reasoning share one scroll",
+              page.locator("#rail").count() == 1
+              and not shape["innerScrollers"], str(shape["innerScrollers"]))
+        check("the plan reads as text, not as an inset box",
+              shape["planBg"] in ("rgba(0, 0, 0, 0)", "transparent"),
+              shape["planBg"])
+        check("and so does the reasoning",
+              shape["thinkBg"] in ("rgba(0, 0, 0, 0)", "transparent"),
+              shape["thinkBg"])
+        check("a long model id does not break the heading onto two lines",
+              shape["headingLines"] < 20, f'{shape["headingLines"]}px tall')
 
-        def bands():
-            return page.evaluate(
-                "() => [Math.round($('.thread').getBoundingClientRect().height),"
-                " Math.round($('.thinksec').getBoundingClientRect().height)]")
+        # The reason the rail has to be one scroll and the composer pinned:
+        # five agents on a hard part run to tens of thousands of characters,
+        # and that has to push past without taking the prompt off screen.
+        def stream(count):
+            page.evaluate("""(count) => {
+              const line = 'Working through the wall thickness and the fillet '
+                         + 'radius against the bore, and what that leaves. ';
+              ['planner', 'coder', 'judge'].forEach(agent => {
+                for (let i = 0; i < count; i++)
+                  thinkAppend(agent, 0, 'thinking', line + i + '\\n');
+              });
+            }""", count)
+            page.wait_for_timeout(500)
 
-        def drag_grip(by):
-            box = page.locator("#railGrip").bounding_box()
-            x = box["x"] + box["width"] / 2
-            y = box["y"] + box["height"] / 2
-            page.mouse.move(x, y)
-            page.mouse.down()
-            page.mouse.move(x, y + by, steps=16)
-            page.mouse.up()
-            page.wait_for_timeout(350)
-            return bands()
+        # A reader watching the run is at the bottom, so the stream follows.
+        page.evaluate("() => { const r = $('#rail'); r.scrollTop = r.scrollHeight; }")
+        page.wait_for_timeout(200)
+        stream(60)
+        flow = page.evaluate("""() => {
+          const rail = document.querySelector('#rail');
+          const composer = document.querySelector('.composer');
+          const inner = [];
+          rail.querySelectorAll('*').forEach(el => {
+            const o = getComputedStyle(el).overflowY;
+            if ((o === 'auto' || o === 'scroll')
+                && el.scrollHeight > el.clientHeight + 4)
+              inner.push(el.id || el.className);
+          });
+          return {railScrolls: rail.scrollHeight > rail.clientHeight + 4,
+                  innerScrollers: inner,
+                  gap: Math.round(rail.scrollHeight - rail.scrollTop
+                                  - rail.clientHeight),
+                  atBottom: rail.scrollHeight - rail.scrollTop
+                            - rail.clientHeight < 80,
+                  top: Math.round(rail.scrollTop),
+                  composerOnScreen: composer.getBoundingClientRect().bottom
+                                    <= window.innerHeight + 1,
+                  chars: document.querySelector('#thinkBody').innerText.length};
+        }""")
+        check("a long run makes the one rail scroll",
+              flow["railScrolls"], f'{flow["chars"]} characters shown')
+        check("and still nothing scrolls inside it",
+              not flow["innerScrollers"], str(flow["innerScrollers"]))
+        # It used to stop following the moment an agent spoke its first
+        # line: the check for "is the reader at the bottom" was made after
+        # the text went in, and a newly inserted agent block is taller than
+        # the threshold, so the answer was always no from then on.
+        check("it follows the stream to the bottom", flow["atBottom"],
+              f'{flow["gap"]}px from the foot, at {flow["top"]}')
+        check("the composer never leaves the screen",
+              flow["composerOnScreen"])
 
-        check("the conversation and the reasoning have a grip between them",
-              page.locator("#railGrip").count() == 1)
-        check("reachable without a mouse",
-              page.get_attribute("#railGrip", "tabindex") == "0"
-              and bool(page.get_attribute("#railGrip", "aria-label")))
-
-        # Up first, then down. A conversation that happens to be taller than
-        # its share is already at its ceiling, so dragging it down proves
-        # nothing; from a shrunk rail both directions are real moves.
-        start = bands()
-        up = drag_grip(-200)
-        check("dragging up gives the reasoning the room",
-              up[0] < start[0] - 40 and up[1] > start[1] + 40,
-              f"{start} -> {up}")
-        down = drag_grip(160)
-        check("and dragging back down returns it",
-              down[0] > up[0] + 40 and down[1] < up[1] - 40,
-              f"{up} -> {down}")
-        check("neither band can be squeezed out of existence",
-              drag_grip(-2000)[0] >= 100 and drag_grip(2000)[1] >= 110)
-
-        page.focus("#railGrip")
-        keyed = bands()
-        for _ in range(6):
-            page.keyboard.press("ArrowUp")
-        page.wait_for_timeout(250)
-        check("the arrow keys move it too", bands()[0] < keyed[0],
-              f"{keyed[0]} -> {bands()[0]}")
-        saved = page.evaluate("() => localStorage.getItem('cadsmith.railsplit')")
-        check("and where it was put is remembered", saved is not None,
-              str(saved))
-        page.screenshot(path=str(out / "12-rail-split.png"))
+        # But a reader who has scrolled back to read something is not yanked
+        # away from it by the next thing the model says.
+        page.evaluate("() => { $('#rail').scrollTop = 0; }")
+        page.wait_for_timeout(200)
+        stream(20)
+        held = page.evaluate("() => Math.round($('#rail').scrollTop)")
+        check("and a reader who scrolled up is left where they were",
+              held < 120, f"scrollTop {held}")
+        page.screenshot(path=str(out / "12-rail-flow.png"))
 
         print("\nThe composer grows with what is typed")
         one_line = page.evaluate(

@@ -18,6 +18,22 @@
     <svg class="logo" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>
     <h1>CADSmith</h1>
   </div>
+
+  <!-- Step back and forward through the versions of this part. The strip at
+       the foot of the viewport has always been able to do it by clicking a
+       thumbnail; this is the same move in the place a hand reaches for it,
+       and on the keys it reaches for - so a parameter dragged too far is one
+       key away from where it was. -->
+  <div class="undogrp">
+    <button class="ubtn" id="undoBtn" disabled
+            data-i18n-title="app.undo" title="Undo">
+      <svg class="icn" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>
+    </button>
+    <button class="ubtn" id="redoBtn" disabled
+            data-i18n-title="app.redo" title="Redo">
+      <svg class="icn" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg>
+    </button>
+  </div>
   <!-- Was the always-on "Planner · Coder · Executor · Validator · Refiner"
        strapline, which the design drops. The element stays because it is
        also where a replay announces itself, and that is a state worth
@@ -76,6 +92,12 @@
        and changing one - because from where the reader sits those are the
        same act, and two text boxes made it look like two applications. -->
   <div class="col left">
+   <!-- One scroll for the whole conversation. The thread and the reasoning
+        were two bands, each with its own scrollbar, its own background and a
+        hard edge between them, which read as three stacked panels rather
+        than one. They are sections in a single flow now, separated by a
+        rule; only the composer is pinned. -->
+   <div class="rail" id="rail">
     <div class="thread" id="thread">
 
       <div class="banner" id="keyBanner" hidden>
@@ -106,16 +128,9 @@
       <button class="verpill" id="verPill" hidden></button>
     </div>
 
-    <!-- Drag to give either band the room. How much of the rail belongs to
-         the conversation and how much to the reasoning depends on the part
-         and the person, and it is not a decision this app should keep. -->
-    <div class="railgrip" id="railGrip" role="separator" aria-orientation="horizontal"
-         tabindex="0" data-i18n-label="rail.resize" aria-label="Resize"></div>
-
-    <!-- The reasoning, between what was asked and what is typed next. It
-         needs height more than anything else, so it takes what the thread
-         does not, scrolls on its own, and each agent folds away when it is
-         done talking. -->
+    <!-- The reasoning, below what was asked and above what is typed next.
+         Part of the same flow as the thread: a rule above it rather than a
+         band of its own, and each agent folds away when it is done talking. -->
     <section class="thinksec" id="thinkSec">
       <div class="thinkhd">
         <button class="thinktoggle" id="thinkClear" aria-expanded="true">
@@ -133,6 +148,7 @@
         </div>
       </div>
     </section>
+   </div>
 
     <!-- The one place anything is typed. -->
     <div class="composer">
