@@ -112,14 +112,22 @@ def main() -> int:
     # `model`, not config.generation_model: with --model given, the config
     # still holds the declared default, and printing that beside a tick
     # computed from the id actually being probed marked a wrong id as fine.
-    line(model in offered if offered else None, "generation", model)
-    line(config.judge_model in offered if offered else None, "judge",
-         config.judge_model)
+    # Reported, not judged. These were a tick or a cross against the list
+    # above, and the cross was wrong: the app calls Bedrock's Messages
+    # endpoint through AnthropicBedrockMantle, whose ids carry a bare
+    # `anthropic.` prefix, while list_foundation_models and
+    # list_inference_profiles describe the older InvokeModel path and answer
+    # in `us.` and `global.` inference profiles. The two catalogues do not
+    # overlap, so membership says nothing - and a red FAIL under a correct
+    # configuration sends people to change a setting that was already right.
+    line(None, "generation", model)
+    line(None, "judge", config.judge_model)
     if offered and model not in offered:
         line(None, "note",
-             f"{model!r} is not in the list above. That is not proof of "
-             f"anything either way - the list comes from the control plane, "
-             f"the runtime decides separately. The probe settles it.")
+             f"{model!r} is not in the list above, and is not expected to be. "
+             f"That list is the control plane's view of the InvokeModel path; "
+             f"the app uses the Messages endpoint, which takes ids like this "
+             f"one. Only the probe settles whether it serves.")
 
     print("\nSpend guard")
     line(True, "token budget per run", f"{budget.DEFAULT_BUDGET:,} tokens")

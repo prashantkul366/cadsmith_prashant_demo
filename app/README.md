@@ -156,6 +156,23 @@ a refusal names what is actually wrong, whether that is the missing
 dependency, an expired session token, or a key and secret that do not belong
 together.
 
+**The model ids look wrong and are not.** The app talks to Bedrock's Messages
+endpoint through `AnthropicBedrockMantle`, and its ids carry a bare
+`anthropic.` prefix — `anthropic.claude-sonnet-5`, `anthropic.claude-opus-5`.
+What `aws bedrock list-foundation-models` and the console show you instead are
+`us.anthropic.…` and `global.anthropic.…`: those are inference profiles for
+the older `InvokeModel` path, and they are a different catalogue. The two do
+not overlap, so a model id that serves perfectly well will not appear in the
+listing — this account offers 27 ids that way, refuses them at runtime, and
+serves the two defaults, which are in no listing at all.
+
+`bedrock_check` therefore reports which ids the app will ask for without
+grading them against that list; only the probe settles whether they serve:
+
+```powershell
+.venv\Scripts\python -m app.tools.bedrock_check          # a few cents
+```
+
 Credentials come from wherever boto3 finds them:
 
 ```powershell
