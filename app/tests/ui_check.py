@@ -115,6 +115,40 @@ def main() -> int:
               f"{page.locator('#samples .sample').count()} prompts")
         page.screenshot(path=str(out / "01-empty.png"))
 
+        # A pixel ratio the machine running this does not have. The canvas is
+        # transparent and is the one element sized in script rather than by
+        # the layout, so at 2x it used to lay out at twice the stage: the
+        # model's grid painted across the right-hand cards - which reads as
+        # the panels being see-through - and clicks meant for a slider
+        # landing on the canvas instead. None of it shows at 1x, which is
+        # why it is measured rather than looked at.
+        print("\nOn a 2x display")
+        retina = browser.new_page(viewport={"width": 1600, "height": 950},
+                                  device_scale_factor=2)
+        retina.goto(args.url, wait_until="networkidle")
+        retina.wait_for_timeout(1200)
+        fit = retina.evaluate("""() => {
+          const host = document.querySelector('#gl');
+          const canvas = host.querySelector('canvas');
+          const stage = host.getBoundingClientRect();
+          const drawn = canvas.getBoundingClientRect();
+          const rail = document.querySelector('.col.right').getBoundingClientRect();
+          const over = document.elementFromPoint(rail.left + rail.width / 2,
+                                                 rail.top + 120);
+          return {canvas: [Math.round(drawn.width), Math.round(drawn.height)],
+                  stage: [Math.round(stage.width), Math.round(stage.height)],
+                  buffer: [canvas.width, canvas.height],
+                  onTop: over ? over.tagName : null};
+        }""")
+        check("the canvas is laid out at the size of the stage",
+              fit["canvas"] == fit["stage"], f'{fit["canvas"]} vs {fit["stage"]}')
+        check("and still renders at the display's own resolution",
+              fit["buffer"] == [fit["stage"][0] * 2, fit["stage"][1] * 2],
+              str(fit["buffer"]))
+        check("so the viewport does not paint over the right-hand rail",
+              fit["onTop"] != "CANVAS", f'{fit["onTop"]} is on top of the rail')
+        retina.close()
+
         print("\nModel backend picker")
         options = page.evaluate(
             "[...document.querySelectorAll('#optProvider option')].map(o => o.value)")

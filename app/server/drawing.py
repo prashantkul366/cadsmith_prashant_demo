@@ -116,7 +116,7 @@ FONT = f'font-family="{FONT_STACK}"'
 # ---------------------------------------------------------------------------
 
 _WORKER = r'''
-import json, sys
+import json, math, sys
 import cadquery as cq
 from OCP.gp import gp_Ax2, gp_Pnt, gp_Dir, gp_Vec
 from OCP.BRepLib import BRepLib
@@ -128,6 +128,7 @@ from OCP.GeomAbs import GeomAbs_CurveType
 
 step_path, spec_json = sys.argv[1], sys.argv[2]
 spec = json.loads(spec_json)
+SCHEMA = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 
 shape = cq.importers.importStep(step_path)
 if hasattr(shape, "val"):
@@ -175,9 +176,15 @@ def project(direction, x_direction):
     ey = (yd.X(), yd.Y(), yd.Z())
 
     # A circular edge whose axis lies along the line of sight projects as a
-    # circle - that is what earns a centre line and a diameter.
+    # circle - that is what earns a centre line and a size callout.
     look = gp_Vec(*direction).Normalized()
     circles = []
+
+    def flat(point):
+        p = (point.X(), point.Y(), point.Z())
+        return (round(sum(p[i] * ex[i] for i in range(3)), 3),
+                round(sum(p[i] * ey[i] for i in range(3)), 3))
+
     for edge in shape.Edges():
         adaptor = BRepAdaptor_Curve(edge.wrapped)
         if adaptor.GetType() != GeomAbs_CurveType.GeomAbs_Circle:
@@ -185,12 +192,26 @@ def project(direction, x_direction):
         circle = adaptor.Circle()
         if abs(gp_Vec(circle.Axis().Direction()).Normalized().Dot(look)) < 0.999:
             continue
-        centre = circle.Location()
-        p = (centre.X(), centre.Y(), centre.Z())
+        # How much of the circle the edge actually is. A whole turn is a hole
+        # or a boss and takes a diameter; anything less is a fillet or a
+        # round and takes a radius. Without this they all read as holes, and
+        # a 5mm corner round is called out as a 10mm hole that is not there.
+        first, last = adaptor.FirstParameter(), adaptor.LastParameter()
+        span = abs(last - first)
+        u, v = flat(circle.Location())
+        start_u, start_v = flat(adaptor.Value(first))
+        end_u, end_v = flat(adaptor.Value(last))
+        mid_u, mid_v = flat(adaptor.Value((first + last) / 2.0))
         circles.append({
-            "u": round(sum(p[i] * ex[i] for i in range(3)), 3),
-            "v": round(sum(p[i] * ey[i] for i in range(3)), 3),
+            "u": u, "v": v,
             "r": round(circle.Radius(), 3),
+            "span": round(span, 4),
+            # Where the arc begins and ends around its own centre, so that
+            # two half-edges of one hole can be recognised as one hole.
+            "a0": round(math.degrees(math.atan2(start_v - v, start_u - u)) % 360.0, 1),
+            "a1": round(math.degrees(math.atan2(end_v - v, end_u - u)) % 360.0, 1),
+            # The middle of the arc: where a radius leader's arrow lands.
+            "mu": mid_u, "mv": mid_v,
         })
 
     us = [p[0] for line in visible + hidden for p in line]
@@ -203,8 +224,28 @@ def project(direction, x_direction):
 
 
 print("__DRAWING__")
-print(json.dumps({name: project(v["dir"], v["x"]) for name, v in spec.items()}))
+out = {name: project(v["dir"], v["x"]) for name, v in spec.items()}
+out["__schema__"] = SCHEMA
+print(json.dumps(out))
 '''
+
+
+#: What a drawing on disk was built by. A cached sheet outlives the code
+#: that wrote it, so it carries the number and is rebuilt when it falls
+#: behind: schema 2 is the one that calls a round R and a hole Ø, and a
+#: sheet from before it says Ø10 about a 5mm corner.
+SHEET_SCHEMA = 2
+
+#: The same number inside a DXF, where there is no attribute to hang it on.
+#: A custom property's *name* carries it, so the check is a plain search.
+_DXF_MARKER = f"CADSMITH_SHEET_{SHEET_SCHEMA}"
+
+#: What a cached projection has to contain to be usable. Bumped when the
+#: worker starts recording something the drawing then relies on - schema 2
+#: added each circular edge's sweep, which is what tells a hole from a
+#: round. Read through the older cache every hole would come out as a round -
+#: Ø12 becoming R6 - so an older one is re-projected rather than trusted.
+PROJECTION_SCHEMA = 2
 
 
 def _project(step_path: Path, timeout: int = 180,
@@ -216,11 +257,19 @@ def _project(step_path: Path, timeout: int = 180,
     Caching it beside the version means the second of them is nearly free, and
     that a prebuilt sheet also pays for the DXF download.
     """
+    def views_only(data: dict) -> dict:
+        # The schema marker travels with the cache, not into the drawing:
+        # everything downstream reads this dict as {view name: view}.
+        return {name: view for name, view in data.items()
+                if not name.startswith("__")}
+
     if cache is not None and cache.exists():
         try:
-            return json.loads(cache.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass  # rebuild rather than trust a half-written file
+            cached = json.loads(cache.read_text(encoding="utf-8"))
+            if cached.get("__schema__") == PROJECTION_SCHEMA:
+                return views_only(cached)
+        except (json.JSONDecodeError, OSError, AttributeError):
+            pass  # rebuild rather than trust a half-written or older file
 
     work = Path(tempfile.mkdtemp(prefix="cadsmith_drawing_"))
     script = work / "project.py"
@@ -229,7 +278,8 @@ def _project(step_path: Path, timeout: int = 180,
     spec = {name: {"dir": list(v["dir"]), "x": list(v["x"])}
             for name, v in VIEWS.items()}
     result = subprocess.run(
-        [sys.executable, str(script), str(step_path), json.dumps(spec)],
+        [sys.executable, str(script), str(step_path), json.dumps(spec),
+         str(PROJECTION_SCHEMA)],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=timeout, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
@@ -243,7 +293,7 @@ def _project(step_path: Path, timeout: int = 180,
             cache.write_text(body, encoding="utf-8")
         except OSError:
             pass  # a cache that cannot be written is not a failure
-    return json.loads(body)
+    return views_only(json.loads(body))
 
 
 # ---------------------------------------------------------------------------
@@ -379,18 +429,46 @@ def _escape(x: float, y: float, dx: float, dy: float,
     return min(nearest, 1e4) if nearest is not None else 0.0
 
 
+#: A full turn, less the slack a kernel leaves in a parameter range.
+FULL_TURN = 2 * math.pi - 1e-4
+
+
 def _distinct_circles(circles: list[dict]) -> list[dict]:
     """One entry per concentric-and-equal family, largest first.
 
     A through hole projects as two identical circles, and a counterbore as
     several; dimensioning each of them would say the same thing twice.
+
+    This is also where a hole is told from a round. A full circle is often
+    modelled as two half-edges, so the arcs at one centre and radius are
+    collected and their *distinct* sweeps added up - distinct, because the
+    top and bottom of one corner fillet are the same 90 degrees twice over,
+    and adding those would turn four stacked rounds into a hole. A whole turn
+    is a hole and takes a diameter; less is a round and takes a radius.
     """
     seen: dict[tuple, dict] = {}
+    sweeps: dict[tuple, dict[tuple, float]] = {}
     for circle in circles:
         key = (round(circle["u"], 2), round(circle["v"], 2),
                round(circle["r"], 3))
-        seen.setdefault(key, circle)
-    return sorted(seen.values(), key=lambda c: -c["r"])
+        entry = seen.setdefault(key, dict(circle))
+        span = circle.get("span")
+        arc = (circle.get("a0"), circle.get("a1"),
+               None if span is None else round(span, 3))
+        sweeps.setdefault(key, {})[arc] = span
+        # The longest arc of a family is the one worth pointing a leader at.
+        if (circle.get("span") or 0.0) > (entry.get("span") or 0.0):
+            entry.update(circle)
+
+    out = []
+    for key, entry in seen.items():
+        spans = sweeps[key].values()
+        # Data from before the sweep was recorded says nothing either way,
+        # and everything it holds was treated as a hole when it was written.
+        entry["closed"] = (True if any(span is None for span in spans)
+                           else sum(spans) >= FULL_TURN)
+        out.append(entry)
+    return sorted(out, key=lambda c: -c["r"])
 
 
 #: How far a second row of dimensions sits beyond the first. ISO 129-1 wants
@@ -406,6 +484,11 @@ MAX_POSITIONED = 4
 
 #: How close two lengths have to be before a pattern is called a pattern.
 PATTERN_TOL = 0.05
+
+#: Two radii on a view is what a part like a filleted, shelled box has -
+#: the outside round and the inside one. Past that the sheet says so in a
+#: note rather than growing a third and a fourth leader into the margin.
+MAX_ROUND_CALLOUTS = 2
 
 
 def _hole_patterns(circles: list[dict]) -> list[dict]:
@@ -492,6 +575,26 @@ def _hole_label(group: dict) -> str:
     return text
 
 
+def _round_groups(arcs: list[dict]) -> list[dict]:
+    """Fillets and rounds, grouped by radius, largest first.
+
+    Four corners of one radius are one callout - "4x R5" - for the same
+    reason four identical holes are: a drawing names a size once.
+    """
+    by_size: dict[float, list[dict]] = {}
+    for arc in arcs:
+        by_size.setdefault(round(arc["r"], 3), []).append(arc)
+    return [{"radius": radius, "members": members, "count": len(members)}
+            for radius, members in sorted(by_size.items(), key=lambda kv: -kv[0])]
+
+
+def _round_label(group: dict) -> str:
+    """R, never \u00d8. A round is a radius on every drawing ever issued."""
+    radius = _num(group["radius"])
+    return f"R{radius}" if group["count"] == 1 \
+        else f"{group['count']}\u00d7 R{radius}"
+
+
 def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
     """Where everything in one view goes, without drawing any of it.
 
@@ -529,8 +632,12 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
         "centre_lines": [], "dimensions": [], "callouts": [],
     }
 
-    # Centre lines through every circular feature (ISO 128-2 long-dash-dot).
-    circles = _distinct_circles(view["circles"])
+    # Centre lines through every hole (ISO 128-2 long-dash-dot). Rounds get
+    # none: a centre mark says "there is a hole here", and a crosshair inside
+    # the solid metal of a filleted corner says something that is not true.
+    everything = _distinct_circles(view["circles"])
+    circles = [c for c in everything if c.get("closed", True)]
+    rounds = _round_groups([c for c in everything if not c.get("closed", True)])
     seen: set[tuple[float, float]] = set()
     for circle in circles:
         key = (round(circle["u"], 2), round(circle["v"], 2))
@@ -560,7 +667,12 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
     # the holes go cannot be made from that drawing - it is the single thing
     # that separated this sheet from a manufacturable one.
     groups = _hole_patterns(circles)
-    level = 1 if "width" in dimension else 0
+    # One step out from whatever overall dimension this view already carries -
+    # any of them, not only the width. A view that carries the height alone
+    # was starting feature dimensions on the line the height was already
+    # drawn on, and a pitch written over an overall length is a drawing
+    # someone has to come back and ask about.
+    level = 1 if dimension.strip() else 0
     positioned = 0
 
     def below_line(at_y: float) -> float:
@@ -643,6 +755,7 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
         run = max(11.0, _escape(px, py, cos_a, -sin_a, left, top, right, bottom)
                   - radius + 4.0)
         plan["callouts"].append({
+            "kind": "diameter",
             "centre": (px, py), "radius": radius, "angle": angle,
             "start": (px + radius * cos_a, py - radius * sin_a),
             "elbow": (px + (radius + run) * cos_a,
@@ -650,6 +763,44 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
             "shoulder": 6.0 if cos_a > 0 else -6.0,
             "measure": circle["r"] * 2.0,
             "label": _hole_label(group)})
+
+    # Rounds are called out the way a radius is: the arrow lands on the arc
+    # and the leader lies along the radius that made it, so the reader can
+    # see which curve the number belongs to. Each group leaves from a
+    # different corner, because an outer round and the inner one the wall
+    # thickness leaves behind share a centre and would otherwise write their
+    # leaders over each other.
+    # Upwards first. The overall dimensions are placed below the view and to
+    # its left, so a leader that leaves from a bottom or left corner lands on
+    # them - which is how a sheet ends up with a radius written across an
+    # extension line.
+    corners = ((1, 1), (-1, 1), (1, -1), (-1, -1))
+    if plan["callouts"]:
+        # The holes leave up-right first and down-right second, so a round
+        # that also starts up-right writes its radius across a diameter.
+        corners = ((-1, 1), (-1, -1), (1, 1), (1, -1))
+    for index, group in enumerate(rounds[:MAX_ROUND_CALLOUTS]):
+        pull = corners[index % len(corners)]
+        arc = max(group["members"],
+                  key=lambda a: pull[0] * (a["mu"] - uc) + pull[1] * (a["mv"] - vc))
+        ox, oy = to_sheet(arc["u"], arc["v"])
+        mx, my = to_sheet(arc["mu"], arc["mv"])
+        reach = math.hypot(mx - ox, my - oy) or 1.0
+        cos_a, sin_a = (mx - ox) / reach, -(my - oy) / reach
+        # An outer round is already on the outline, so its leader only has to
+        # clear the view; an inner one has to cross the wall first.
+        run = max(9.0, _escape(mx, my, cos_a, -sin_a,
+                               left, top, right, bottom) + 5.0)
+        plan["callouts"].append({
+            "kind": "radius",
+            "centre": (ox, oy), "radius": arc["r"] * scale,
+            "angle": math.atan2(sin_a, cos_a),
+            "start": (mx, my),
+            "elbow": (mx + run * cos_a, my - run * sin_a),
+            "shoulder": 6.0 if cos_a > 0 else -6.0,
+            "measure": arc["r"],
+            "label": _round_label(group)})
+    plan["rounds_uncalled"] = rounds[MAX_ROUND_CALLOUTS:]
 
     below = bottom + (DIM_OFFSET + level * DIM_STEP + 10.0
                      if ("width" in dimension or level) else 5.0)
@@ -705,8 +856,11 @@ def _render_view(plan: dict, lang: str = "en") -> list[str]:
         out.append(_line(ex, ey, ex + shoulder, ey))
         length = math.hypot(ex - sx, ey - sy) or 1.0
         out.append(_arrow(sx, sy, (sx - ex) / length, (sy - ey) / length))
+        fallback = (f"R{_num(call['measure'])}"
+                    if call.get("kind") == "radius"
+                    else f"Ø{_num(call['measure'])}")
         out.append(_text(ex + shoulder, ey - 1.6,
-                         call.get("label") or f"Ø{_num(call['measure'])}",
+                         call.get("label") or fallback,
                          anchor="start" if shoulder > 0 else "end"))
 
     out.append(_text(plan["label_at"][0], plan["label_at"][1],
@@ -813,7 +967,8 @@ _NOTES = [
 ]
 
 
-def note_lines(geometry: dict, spec: Any = None) -> list[str]:
+def note_lines(geometry: dict, spec: Any = None,
+               sheet: Optional[dict] = None) -> list[str]:
     """Every note the sheet carries, in reading order.
 
     Shared by both renderers for the same reason ``plan_sheet`` is: two
@@ -824,14 +979,21 @@ def note_lines(geometry: dict, spec: Any = None) -> list[str]:
     lines.extend(spec.sheet_notes() if spec is not None
                  else ["DIMENSIONS ARE AS MODELLED — NO TOLERANCES "
                        "ARE SPECIFIED"])
+    # Two radii are called out per view and the rest are left to the model.
+    # Saying so is the difference between a drawing that omits them and one
+    # that implies the corners it did not name are sharp.
+    if sheet is not None and any(view.get("rounds_uncalled")
+                                 for view in sheet.get("views", [])):
+        lines.append("ROUNDS AND FILLETS NOT CALLED OUT ARE AS MODELLED")
     if geometry.get("is_valid"):
         lines.append("SOLID IS CLOSED AND WATERTIGHT AS PROJECTED")
     return lines
 
 
-def _notes(geometry: dict, spec: Any = None) -> list[str]:
+def _notes(geometry: dict, spec: Any = None,
+           sheet: Optional[dict] = None) -> list[str]:
     """The notes as SVG."""
-    lines = note_lines(geometry, spec)
+    lines = note_lines(geometry, spec, sheet)
     out = []
     # Grown upward from just above the footer rather than downward from the
     # title block. A specified part has three times the notes an unspecified
@@ -860,11 +1022,12 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
         body += _render_view(view, lang)
 
     body += _title_block(prompt, geometry, job_id, version, scale, lang)
-    body += _notes(geometry, spec)
+    body += _notes(geometry, spec, sheet)
 
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{SHEET_W}mm" '
-        f'height="{SHEET_H}mm" viewBox="0 0 {SHEET_W} {SHEET_H}">'
+        f'height="{SHEET_H}mm" viewBox="0 0 {SHEET_W} {SHEET_H}" '
+        f'data-sheet="{SHEET_SCHEMA}">'
         f'<rect width="{SHEET_W}" height="{SHEET_H}" fill="#fff"/>'
         f'<rect x="{FRAME_L}" y="{FRAME_T}" width="{FRAME_R - FRAME_L}" '
         f'height="{FRAME_B - FRAME_T}" fill="none" stroke="#000" '
@@ -905,6 +1068,19 @@ def _version_inputs(version_dir: Path):
     return step, geometry, spec
 
 
+def _built_by_this_code(path: Path, marker: str) -> bool:
+    """Is a cached drawing one this version of the code would draw again?
+
+    A drawing is cached for the life of the run directory, so a convention
+    that changes afterwards would otherwise never reach the runs already on
+    disk - and an old sheet is not a stale picture, it is a wrong one.
+    """
+    try:
+        return marker in path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
 def ensure_sheet(version_dir: Path, prompt: str, job_id: str,
                  version: int, lang: str = "en") -> Optional[Path]:
     """Return the sheet for a version, building and caching it on first use.
@@ -915,7 +1091,8 @@ def ensure_sheet(version_dir: Path, prompt: str, job_id: str,
     """
     target = version_dir / ("drawing.svg" if lang == "en"
                             else f"drawing.{lang}.svg")
-    if target.exists() and target.stat().st_size > 0:
+    if (target.exists() and target.stat().st_size > 0
+            and _built_by_this_code(target, f'data-sheet="{SHEET_SCHEMA}"')):
         return target
 
     step, geometry, spec = _version_inputs(version_dir)
@@ -979,6 +1156,9 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
     scale = sheet["scale"]
 
     doc = ezdxf.new("R2010", setup=True)
+    # Which conventions drew this file, so a cached one can be told it is
+    # behind the code and rebuilt rather than handed to a machinist.
+    doc.header.custom_vars.append(_DXF_MARKER, str(SHEET_SCHEMA))
     doc.header["$INSUNITS"] = 4        # millimetres
     doc.header["$MEASUREMENT"] = 1     # metric
     for name, colour, weight, linetype in _LAYERS:
@@ -1049,7 +1229,12 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
 
         for call in view["callouts"]:
             cx, cy = call["centre"]
-            entity = msp.add_diameter_dim(
+            # A round is a radius in the DXF as well, or the file and the
+            # sheet disagree about the same corner - and the DXF is the one
+            # that gets opened in a CAM system.
+            add_dim = (msp.add_radius_dim if call.get("kind") == "radius"
+                       else msp.add_diameter_dim)
+            entity = add_dim(
                 center=(cx, _dxf_y(cy)),
                 radius=call["radius"],
                 angle=math.degrees(call["angle"]),
@@ -1093,7 +1278,7 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
         text(TITLE_L + 2.0, y, label, TEXT_SMALL, "MIDDLE_LEFT")
         text(TITLE_L + 52.0, y, value, TEXT_SMALL, "MIDDLE_LEFT")
 
-    notes = note_lines(geometry, spec)
+    notes = note_lines(geometry, spec, sheet)
     for index, note in enumerate(notes):
         # Bottom-aligned, as on the SVG, so the two sheets stay the same
         # drawing however many notes a specification adds.
@@ -1112,7 +1297,8 @@ def ensure_dxf(version_dir: Path, prompt: str, job_id: str,
     """
     target = version_dir / ("drawing.dxf" if lang == "en"
                             else f"drawing.{lang}.dxf")
-    if target.exists() and target.stat().st_size > 0:
+    if (target.exists() and target.stat().st_size > 0
+            and _built_by_this_code(target, _DXF_MARKER)):
         return target
 
     step, geometry, spec = _version_inputs(version_dir)

@@ -294,7 +294,14 @@ const Viewer = (() => {
   function resize() {
     const w = host.clientWidth, h = host.clientHeight;
     if (!w || !h) return;
-    renderer.setSize(w, h, false);
+    /* setSize must update the canvas CSS size as well as its drawing buffer.
+       Passing false left the element with no CSS size at all, so the browser
+       laid it out at its width/height attributes - which setPixelRatio had
+       multiplied by the display's ratio. On a 2x screen the canvas was drawn
+       twice the size of the stage: the grid and the model spilled over the
+       right-hand cards, which is what read as the panels being see-through,
+       and the overflow swallowed clicks meant for the sliders underneath. */
+    renderer.setSize(w, h);
     cam.aspect = w / h;
     cam.updateProjectionMatrix();
   }

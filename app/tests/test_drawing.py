@@ -13,6 +13,7 @@ Run:  .venv/bin/python -m app.tests.test_drawing
 
 from __future__ import annotations
 
+import math
 import re
 import shutil
 import sys
@@ -253,6 +254,86 @@ def main() -> int:
               any("PCD" in label and label.startswith("6\u00d7") for label in flabels),
               str(flabels))
 
+        # ------------------------------------------------------------------
+        # A round is a radius. Every circular edge used to be read as a hole,
+        # so the corner fillets of a box came out as "4x Ø10" - a hole that
+        # is not there, twice the size of the round that is - and their
+        # centres were dimensioned from the datum as though they were one.
+        print("\nRounds are radii, holes are diameters")
+        container = (cq.Workplane("XY")
+                     .box(60.0, 40.0, 30.0, centered=(True, True, False))
+                     .edges("|Z").fillet(5.0)
+                     .faces(">Z").shell(-2.0))
+        box_step = work / "container.step"
+        cq.exporters.export(container, str(box_step))
+        box_plan = drawing.plan_sheet(drawing._project(box_step))  # noqa: SLF001
+        btop = next(v for v in box_plan["views"] if v["name"] == "TOP")
+        blabels = [c.get("label") or "" for c in btop["callouts"]]
+        check("the outer corners are called out as a radius",
+              "4\u00d7 R5" in blabels, str(blabels))
+        check("and the ones the wall thickness leaves inside them too",
+              "4\u00d7 R3" in blabels, str(blabels))
+        check("no round is called out as a hole",
+              not any("\u00d8" in label for label in blabels), str(blabels))
+        check("every round callout is a radius dimension",
+              all(c.get("kind") == "radius" for c in btop["callouts"]),
+              str([c.get("kind") for c in btop["callouts"]]))
+        # A centre mark says "there is a hole here". Inside the solid corner
+        # of a filleted box it says something untrue.
+        check("and no fillet earns a centre mark",
+              not btop["centre_lines"], f'{len(btop["centre_lines"])} line(s)')
+        measures = sorted(round(d["measure"], 2) for d in btop["dimensions"])
+        check("nor is a fillet centre dimensioned from the datum",
+              measures == [40.0], str(measures))
+
+        # The awkward shapes the kernel hands over, checked directly: one
+        # hole is often two half-edges, and one fillet is the same quarter
+        # turn twice over - once at the top of the corner and once at the
+        # bottom. Adding sweeps blindly would turn the second into a hole.
+        quarter, half = math.pi / 2, math.pi
+        stacked = [{"u": 10, "v": 10, "r": 5.0, "span": quarter,
+                    "a0": 0.0, "a1": 90.0, "mu": 13.5, "mv": 13.5}] * 2
+        halves = [{"u": 0, "v": 0, "r": 4.0, "span": half,
+                   "a0": 0.0, "a1": 180.0, "mu": 0.0, "mv": 4.0},
+                  {"u": 0, "v": 0, "r": 4.0, "span": half,
+                   "a0": 180.0, "a1": 360.0, "mu": 0.0, "mv": -4.0}]
+        legacy = [{"u": 0.0, "v": 0.0, "r": 3.0}]
+        check("one fillet seen twice is still one round",
+              not drawing._distinct_circles(stacked)[0]["closed"])  # noqa: SLF001
+        check("a hole modelled as two half-edges is still a hole",
+              drawing._distinct_circles(halves)[0]["closed"])  # noqa: SLF001
+        check("and a projection from before any of this reads as it used to",
+              drawing._distinct_circles(legacy)[0]["closed"])  # noqa: SLF001
+
+        # Both conventions on one sheet: rounded corners and real holes.
+        rounded = (cq.Workplane("XY")
+                   .box(100.0, 60.0, 8.0, centered=(True, True, False))
+                   .edges("|Z").fillet(10.0)
+                   .faces(">Z").workplane().rarray(70.0, 40.0, 2, 2).hole(6.0))
+        rounded_step = work / "rounded.step"
+        cq.exporters.export(rounded, str(rounded_step))
+        round_plan = drawing.plan_sheet(drawing._project(rounded_step))  # noqa: SLF001
+        rtop = next(v for v in round_plan["views"] if v["name"] == "TOP")
+        rlabels = [c.get("label") or "" for c in rtop["callouts"]]
+        check("holes keep their diameter when a part also has rounds",
+              "4\u00d7 \u00d86" in rlabels, str(rlabels))
+        check("and the corners still read as R",
+              "4\u00d7 R10" in rlabels, str(rlabels))
+        # Two leaders that leave a view in the same direction write their
+        # text in the same place, and a radius over a diameter is unreadable.
+        elbows = [c["elbow"] for c in rtop["callouts"]]
+        check("their leaders do not land on each other",
+              all(abs(a[0] - b[0]) > 6.0 or abs(a[1] - b[1]) > 4.0
+                  for i, a in enumerate(elbows) for b in elbows[i + 1:]),
+              str([(round(x, 1), round(y, 1)) for x, y in elbows]))
+        # A view carrying an overall dimension has to push feature dimensions
+        # out past it, whichever overall it is.
+        offsets = sorted({round(d["offset"], 2) for d in rtop["dimensions"]
+                          if d["vertical"]})
+        check("a hole pitch is not drawn over an overall length",
+              len(offsets) == len(set(offsets)) and len(offsets) >= 2,
+              str(offsets))
+
         # Every leader has to end somewhere a reader can follow it to.
         for view in pat_plan["views"] + flange_plan["views"]:
             left, top_y, right, bottom = view["box"]
@@ -263,6 +344,37 @@ def main() -> int:
                       and top_y - 40 <= ey <= bottom + 40,
                       f"elbow {ex:.1f},{ey:.1f} for box "
                       f"{left:.1f},{top_y:.1f},{right:.1f},{bottom:.1f}")
+
+        # A drawing outlives the code that drew it: the run directory keeps
+        # it for good, so a convention fixed today has to reach the sheets
+        # already cached or the fix never arrives where anyone looks.
+        print("\nCached drawings from older code")
+        cached_dir = work / "cached"
+        cached_dir.mkdir()
+        shutil.copy(box_step, cached_dir / "model.step")
+        (cached_dir / "drawing.svg").write_text(
+            '<svg viewBox="0 0 420.0 297.0"><text>4× Ø10</text></svg>',
+            encoding="utf-8")
+        rebuilt = drawing.ensure_sheet(cached_dir, "container", "JOB-TEST", 0)
+        body = rebuilt.read_text(encoding="utf-8")
+        check("a sheet drawn by older code is drawn again",
+              "R5" in body and "Ø10" not in body,
+              f"{len(body)} bytes")
+        check("and the one this code drew is served from the cache",
+              drawing.ensure_sheet(cached_dir, "container", "JOB-TEST", 0)
+              .read_text(encoding="utf-8") == body)
+        # The projection is cached too, and an older one has no record of
+        # how far each circular edge sweeps - which would read every hole as
+        # a round.
+        stale = cached_dir / "projection.json"
+        stale.write_text(
+            '{"FRONT": {"visible": [], "hidden": [], "circles": [],'
+            ' "basis": [[1,0,0],[0,1,0]], "bbox": [0,0,1,1]}}', encoding="utf-8")
+        views = drawing._project(box_step, cache=stale)  # noqa: SLF001
+        check("a projection cached before that was recorded is taken again",
+              any("span" in circle
+                  for view in views.values() for circle in view["circles"]),
+              str(sorted(views)))
 
         print("\nA specification, once there is one to state")
         from app.server import specification
@@ -309,6 +421,16 @@ def main() -> int:
               f"{measured} vs {sorted([PLATE_X, PLATE_Y, PLATE_Z, HOLE_D])}")
 
         layers = {e.dxf.layer for e in model}
+        # The container's corners, read back out of the file: a CAM system
+        # opening the DXF has to see a radius where the sheet says R, or the
+        # two halves of the same drawing disagree. Type 4 is RADIUS.
+        box_doc = drawing.build_dxf(box_step, {"is_valid": True},
+                                    "container", "JOB-TEST", 0)
+        box_kinds = sorted({e.dxf.dimtype & 7 for e in box_doc.modelspace()
+                            if e.dxftype() == "DIMENSION"})
+        check("a round is a radius dimension in the file as well",
+              4 in box_kinds, f"dimension types {box_kinds}")
+
         check("line work is separated onto drawing-office layers",
               {"OUTLINE", "HIDDEN", "CENTRE", "DIMENSIONS", "FRAME"} <= layers,
               ", ".join(sorted(layers)))

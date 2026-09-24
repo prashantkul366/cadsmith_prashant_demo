@@ -422,14 +422,38 @@ than a picture of one. What makes it a drawing rather than four pictures:
   ratio the title block claims.
 * **Dimensions** (ISO 129-1) with extension lines, arrowheads and values that
   come from the kernel, each overall length given once across the sheet
-  rather than repeated on every view that happens to show it. Circular
-  features get a centre line and a diameter, on a leader long enough to clear
-  the view it points into.
+  rather than repeated on every view that happens to show it. A feature
+  dimension is always drawn a step outside whatever overall length the same
+  view already carries, so a hole pitch is never written over a width.
+* **A hole is a diameter; a round is a radius.** Both are circular edges and
+  the projection returns both, so the sweep decides: a whole turn is a hole
+  or a boss and gets a centre line and `Ø`, and anything less is a fillet or
+  a round and gets `R` on a leader that lies along the radius it names, with
+  the arrow on the arc. Equal ones are grouped the way a drawing groups
+  them — `4× R5` — and a filleted, shelled box comes out `4× R5` outside and
+  `4× R3` in, which is what the corner actually is. A round earns no centre
+  mark and no position dimension: a crosshair in the solid metal of a corner
+  says there is a hole there, and a fillet's centre is set by the corner it
+  rounds, not by the datum. Two radii are called out per view and a note says
+  the rest are as modelled. Reading every circular edge as a hole was the
+  older behaviour, and it called a 5mm corner `Ø10` and then dimensioned
+  where its centre sat.
+* **Leaders that keep out of each other's way.** Diameters leave a view
+  up-right and down-right; radii leave by a corner the diameters have not
+  taken, upwards first, because the overall dimensions live below and to the
+  left.
 * **Line types** (ISO 128-2): two widths in a 2:1 ratio, hidden detail
   dashed, centre lines long-dash-dotted. The pictorial view drops hidden
   detail, which is clutter rather than information there.
 * **An ISO 7200 title block** — owner, title, drawing number, date, scale,
   units, projection, sheet — plus the size and volume the kernel measured.
+
+A drawing outlives the code that drew it — the run directory keeps it — so
+each sheet records which conventions drew it, and one written before a
+convention changed is drawn again rather than served from the cache. The
+cached projection carries the same kind of marker, because a projection taken
+before the sweep of each circular edge was recorded cannot tell a hole from a
+round.
 
 It carries no tolerances and no material, and says so on the sheet. Nothing
 in the pipeline has specified either, and a general tolerance note on a part
@@ -512,6 +536,17 @@ to its header, which is what it used to do: a panel reduced to its title bar
 hides its content without looking like it is hiding anything. A panel with
 more below the fold fades at that edge, so a truncated plan or verdict reads
 as truncated rather than as finished.
+
+**The rails are solid, and stack above the viewport.** The WebGL canvas is
+transparent and it is the one element on screen whose size is set in script
+rather than by the layout, so getting that wrong does not leave a gap — it
+leaves the model's grid painted across whichever panel the canvas reaches,
+and the clicks meant for a slider landing on the canvas instead. It reads as
+the panels being see-through, which is why it is worth naming: `setSize` has
+to update the canvas's CSS size as well as its drawing buffer, or on a 2×
+display the element lays out at twice the stage. The rails also carry their
+own stacking context, so a future mistake of the same shape stays inside the
+viewport rather than over the reading.
 
 ## Standard parts, measured checks, and a spend ceiling
 

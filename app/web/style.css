@@ -163,6 +163,12 @@ header{
 .shell{height:calc(100vh - var(--hdr));display:flex;flex-direction:column}
 .work{flex:1;display:grid;grid-template-columns:296px 1fr 384px;min-height:0}
 .col{display:flex;flex-direction:column;min-height:0;min-width:0}
+/* The rails stack above the viewport, not beside it by luck. The WebGL
+   canvas is transparent and lives in the middle column; anything that makes
+   it wider than its host - a pixel ratio, a stale size - paints the grid
+   over whichever rail it reaches, and a rail you can see the model through
+   is a rail you cannot read. Their own stacking context settles it. */
+.col.left,.col.right{position:relative;z-index:1}
 .col.left{border-right:1px solid var(--line);background:var(--panel)}
 .col.right{border-left:1px solid var(--line);background:var(--panel)}
 .phead{
@@ -375,6 +381,7 @@ textarea.prompt::placeholder{color:#535E6E}
 /* One card per version, scrolling sideways. Amber marks the one on screen,
    the same amber that marks everything else you are holding. */
 .iters{display:flex;gap:9px;padding:10px 12px;flex:none;min-height:0;
+  position:relative;z-index:1;
   background:var(--panel);border-top:1px solid var(--line-soft);
   overflow-x:auto;overflow-y:hidden;align-items:center;scrollbar-width:thin}
 .iters:empty{display:none}
