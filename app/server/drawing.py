@@ -123,8 +123,11 @@ from OCP.BRepLib import BRepLib
 from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
 from OCP.HLRAlgo import HLRAlgo_Projector
 from OCP.GCPnts import GCPnts_QuasiUniformDeflection
-from OCP.BRepAdaptor import BRepAdaptor_Curve
-from OCP.GeomAbs import GeomAbs_CurveType
+from OCP.TopExp import TopExp_Explorer
+from OCP.TopAbs import TopAbs_ShapeEnum
+from OCP.TopoDS import TopoDS
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 
 step_path, spec_json = sys.argv[1], sys.argv[2]
 spec = json.loads(spec_json)
@@ -214,10 +217,55 @@ def project(direction, x_direction):
             "mu": mid_u, "mv": mid_v,
         })
 
+    # A bent tube leaves a torus, and the torus knows its own bend radius:
+    # the major radius is the centreline radius a tube bender is set to.
+    # Worth having because the projected edges do not agree - seen along the
+    # bend axis a tube shows its crown at the centreline radius and its
+    # flanks half a diameter either side, so a sheet that dimensions
+    # whichever arc the hidden-line pass happened to emit says R45 of one
+    # bend and R56 of the same bend in the next view.
+    bends = []
+    explorer = TopExp_Explorer(shape.wrapped, TopAbs_ShapeEnum.TopAbs_FACE)
+    while explorer.More():
+        face = TopoDS.Face_s(explorer.Current())
+        explorer.Next()
+        surface = BRepAdaptor_Surface(face)
+        if surface.GetType() != GeomAbs_SurfaceType.GeomAbs_Torus:
+            continue
+        torus = surface.Torus()
+        axis = torus.Axis().Direction()
+        if abs(gp_Vec(axis).Normalized().Dot(look)) < 0.999:
+            continue
+        position = torus.Position()
+        centre = position.Location()
+        x_dir = gp_Vec(position.XDirection())
+        y_dir = gp_Vec(position.YDirection())
+        middle_u = (surface.FirstUParameter() + surface.LastUParameter()) / 2.0
+        # The middle of the bend, on its centreline: where a radius leader
+        # puts its arrow.
+        crown = gp_Pnt(
+            centre.X() + torus.MajorRadius() * (
+                math.cos(middle_u) * x_dir.X() + math.sin(middle_u) * y_dir.X()),
+            centre.Y() + torus.MajorRadius() * (
+                math.cos(middle_u) * x_dir.Y() + math.sin(middle_u) * y_dir.Y()),
+            centre.Z() + torus.MajorRadius() * (
+                math.cos(middle_u) * x_dir.Z() + math.sin(middle_u) * y_dir.Z()))
+        u, v = flat(centre)
+        mid_u, mid_v = flat(crown)
+        bends.append({
+            "u": u, "v": v,
+            "r": round(torus.MajorRadius(), 3),
+            "tube_r": round(torus.MinorRadius(), 3),
+            "span": round(abs(surface.LastUParameter()
+                              - surface.FirstUParameter()), 4),
+            "mu": mid_u, "mv": mid_v,
+        })
+
     us = [p[0] for line in visible + hidden for p in line]
     vs = [p[1] for line in visible + hidden for p in line]
     return {
         "visible": visible, "hidden": hidden, "circles": circles,
+        "bends": bends,
         "basis": [list(ex), list(ey)],
         "bbox": ([min(us), min(vs), max(us), max(vs)] if us else [0, 0, 0, 0]),
     }
@@ -245,7 +293,9 @@ _DXF_MARKER = f"CADSMITH_SHEET_{SHEET_SCHEMA}"
 #: added each circular edge's sweep, which is what tells a hole from a
 #: round. Read through the older cache every hole would come out as a round -
 #: Ø12 becoming R6 - so an older one is re-projected rather than trusted.
-PROJECTION_SCHEMA = 2
+#: Schema 3 added the bends: a swept tube's torus faces, which carry the
+#: centreline radius the projected edges only approximate.
+PROJECTION_SCHEMA = 3
 
 
 def _project(step_path: Path, timeout: int = 180,
@@ -575,6 +625,15 @@ def _hole_label(group: dict) -> str:
     return text
 
 
+def _distinct_bends(bends: list[dict]) -> list[dict]:
+    """One entry per bend: the wall and the bore make two tori of each."""
+    seen: dict[tuple, dict] = {}
+    for bend in bends:
+        key = (round(bend["u"], 2), round(bend["v"], 2), round(bend["r"], 3))
+        seen.setdefault(key, bend)
+    return sorted(seen.values(), key=lambda b: -b["r"])
+
+
 def _round_groups(arcs: list[dict]) -> list[dict]:
     """Fillets and rounds, grouped by radius, largest first.
 
@@ -636,8 +695,18 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
     # none: a centre mark says "there is a hole here", and a crosshair inside
     # the solid metal of a filleted corner says something that is not true.
     everything = _distinct_circles(view["circles"])
+    # A bend seen along its own axis draws three arcs - its crown at the
+    # centreline radius and a flank half a tube either side - and only the
+    # crown is the radius a bender is set to. The torus face knows which is
+    # which, so where there is a bend the arcs step aside rather than
+    # dimensioning one corner three times with three different numbers.
+    bends = _distinct_bends(view.get("bends", []))
+    at_bends = {(round(b["u"], 1), round(b["v"], 1)) for b in bends}
+    everything = [c for c in everything
+                  if (round(c["u"], 1), round(c["v"], 1)) not in at_bends]
     circles = [c for c in everything if c.get("closed", True)]
-    rounds = _round_groups([c for c in everything if not c.get("closed", True)])
+    rounds = _round_groups(
+        [c for c in everything if not c.get("closed", True)] + bends)
     seen: set[tuple[float, float]] = set()
     for circle in circles:
         key = (round(circle["u"], 2), round(circle["v"], 2))
