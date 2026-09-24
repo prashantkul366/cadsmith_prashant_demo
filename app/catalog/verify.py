@@ -36,6 +36,11 @@ class Report:
     is_valid: bool = False
     build_ms: float = 0.0
     solid: Optional[Any] = None
+    #: What the family itself wanted measured, in the shape validation.json
+    #: carries: {"metric", "passed", "message"}. A washer has nothing to add
+    #: beyond a valid solid; a bent tube has a bend radius that decides
+    #: whether it can be made at all.
+    measured: list[dict] = field(default_factory=list)
 
     def summary(self) -> str:
         if self.ok:
@@ -90,6 +95,21 @@ def check(part, allow_multi_solid: bool = False) -> Report:
         report.problems.append("zero or negative volume")
     if min(report.bbox) <= 0:
         report.problems.append(f"degenerate bounding box {report.bbox}")
+
+    # A family may know more about its own geometry than "is it a solid".
+    # Whatever it reports is recorded; only what it marks as failed counts
+    # against the part, so an advisory stays advisory.
+    inspect = getattr(part, "inspect", None)
+    if callable(inspect):
+        try:
+            report.measured = list(inspect(solid))
+        except Exception as error:
+            report.measured = [{
+                "metric": "family_checks", "passed": None,
+                "message": f"could not run this family's own checks: "
+                           f"{type(error).__name__}: {error}"}]
+        report.problems += [row["message"] for row in report.measured
+                            if row.get("passed") is False]
 
     report.solid = solid
     report.ok = not report.problems

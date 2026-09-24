@@ -651,6 +651,65 @@ of the rest are missing.
 library-dependent checks as skipped rather than failed, as do the browser
 checks that ask for a part only those libraries can build.
 
+## The handlebar case study
+
+One part, carried the whole way, because a catalogue of washers and brackets
+does not show what a tool is for. A motorcycle handlebar does: everyone
+recognises one, the dozen named styles are the *same* part with different
+numbers, and those numbers are published by the people who make them, so the
+geometry can be checked against the real thing rather than against taste.
+
+**How a bar is specified.** Five dimensions name one, and they are the five
+the trade uses - width tip to tip, rise above the clamp, pullback, the
+straight in the middle the risers hold, and the straight at each end the
+grip, throttle and switchgear need. `docs/handlebar-research.md` is where
+each number came from: four production road bends with all five published,
+the reference drawing this study was given, and the ranges the custom trade
+quotes for apes and trackers.
+
+**The rest is solved, not stated.** The sweep angle is whatever leaves
+exactly the control length of straight at the tip. The centreline stops half
+a tube short of the stated width, because a tube cut square to a swept grip
+reaches past its own centreline and width is measured across the widest
+point. Ten bends come out measuring what they claim to within a tenth of a
+millimetre - and they are measured, off the end faces of the built solid,
+not read back from the parameters.
+
+**A bend costs room, and running out of it is the interesting case.** Each
+bend eats `R x tan(turn/2)` out of the straights either side, so two bends
+sharing a straight have to fit inside it. Where they do not, the radius is
+reduced to the largest that does; where even that falls below one and a half
+tube diameters - the point at which a 2 mm wall folds rather than bends -
+the script refuses and names the dimension to give it. Four of the ten
+styles hit that on the first attempt, and every one of them was genuinely
+unbuildable.
+
+**What the kernel then says about it.** A family can attach its own measured
+checks now, and a bent tube has several worth making: the width tip to tip,
+the rise and pullback off the end-face centres, that the two halves mirror
+to within a rounding error, the tube and its wall, and the tightest bend as
+a multiple of the tube diameter - `R45 on Ø22, 2.05 x diameter, a plain
+rotary-draw bend`. The last one is advisory wherever it is measured,
+including on bars the agents write themselves, because a mandrel bend is a
+real thing to buy rather than a mistake. Under 1.5 it is not.
+
+**And the drawing says it in the right language.** A bend leaves a torus
+whose major radius is the centreline radius a tube bender is set to, and the
+sheet dimensions that rather than the projected arcs - which do not agree
+with it, since a tube seen along a bend axis draws its crown at the
+centreline radius and a flank half a diameter either side. Before that the
+same bend came out `R45` in the front view and `R56` in the view from above.
+The tube itself is called out where it is seen end-on, `Ø22` outside and
+`Ø18` in, which is how the reference drawing specifies it too.
+
+Ask for a named bend - "a drag bar", "mini ape hangers", "a commuter
+handlebar", ドラッグバー - and it is served from the catalogue exactly and
+instantly. Ask for "a handlebar" and it is not: a bar is five dimensions
+rather than a size, and guessing which of ten was meant is the silent
+substitution the router exists to prevent. The things that hold a bar - a
+riser, a clamp, a grip, a bar-end weight - are declined for the same reason
+a bearing housing is not a bearing.
+
 ## English and Japanese
 
 The interface has a language switch in the header, and opens in Japanese by

@@ -295,3 +295,123 @@ result = (
     .sweep(cq.Workplane(path), isFrenet=True)
 )
 '''
+
+
+# ---------------------------------------------------------------------------
+# What the kernel can tell you about a bar once it is built
+# ---------------------------------------------------------------------------
+
+#: Below this, a mandrel and a wiper die; below 1.5 the wall folds. The
+#: trade's comfortable minimum is twice the tube diameter, and about three
+#: times for a thin wall (Xometry, Listertube - see docs/handlebar-research).
+EASY_BEND = 2.0
+TIGHT_BEND = 1.5
+
+#: A grip, a throttle tube and a switch block need this much straight tube.
+#: Renthal's own road bars run 200-242 mm of it.
+MIN_CONTROL_LENGTH = 180.0
+
+
+def _surfaces(solid):
+    """The faces of a bar, sorted into the three kinds it has."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_SurfaceType
+
+    ends, tubes, bends = [], [], []
+    for face in solid.Faces():
+        surface = BRepAdaptor_Surface(face.wrapped)
+        kind = surface.GetType()
+        if kind == GeomAbs_SurfaceType.GeomAbs_Plane:
+            ends.append(face)
+        elif kind == GeomAbs_SurfaceType.GeomAbs_Cylinder:
+            tubes.append(surface.Cylinder().Radius())
+        elif kind == GeomAbs_SurfaceType.GeomAbs_Torus:
+            torus = surface.Torus()
+            bends.append((torus.MajorRadius(), torus.MinorRadius()))
+    return ends, tubes, bends
+
+
+def _row(metric: str, passed, message: str) -> dict:
+    return {"metric": metric, "passed": passed, "message": message}
+
+
+def inspect(solid, wanted: dict) -> list[dict]:
+    """Measure a built bar against the dimensions it was asked for.
+
+    Every row here is a measurement off the solid, not a restatement of the
+    parameters: the width is the kernel's bounding box, the rise and the
+    pullback are the centres of the two end faces, and the bend radius is
+    the major radius of a torus. A bar that claims 725 and measures 734 is
+    the failure this is for.
+    """
+    ends, tubes, bends = _surfaces(solid)
+    box = solid.BoundingBox()
+    rows: list[dict] = []
+
+    width = box.xlen
+    asked_width = wanted["overall_width"]
+    rows.append(_row(
+        "overall_width", abs(width - asked_width) <= 0.5,
+        f"{width:.1f} mm tip to tip, asked for {asked_width:g}."))
+
+    if len(ends) == 2:
+        left, right = sorted((face.Center() for face in ends), key=lambda c: c.x)
+        rise, pullback = right.z, -right.y
+        rows.append(_row(
+            "rise", abs(rise - wanted["rise"]) <= 0.5,
+            f"the grips sit {rise:.1f} mm above the clamp, "
+            f"asked for {wanted['rise']:g}."))
+        rows.append(_row(
+            "pullback", abs(pullback - wanted["pullback"]) <= 0.5,
+            f"the tips sit {pullback:.1f} mm back from the clamp line, "
+            f"asked for {wanted['pullback']:g}."))
+        # A bar that is not symmetric steers crooked, and nothing else here
+        # would catch it: both halves can measure right on their own.
+        skew = max(abs(left.z - right.z), abs(left.y - right.y),
+                   abs(left.x + right.x))
+        rows.append(_row(
+            "symmetry", skew <= 0.05,
+            f"the two ends mirror each other to within {skew:.3f} mm."))
+    else:
+        rows.append(_row("ends", False,
+                         f"{len(ends)} end faces: a bar has two."))
+
+    if tubes:
+        outer = max(tubes) * 2.0
+        wall = (max(tubes) - min(tubes)) if len(set(tubes)) > 1 else 0.0
+        rows.append(_row(
+            "tube", abs(outer - wanted["tube_diameter"]) <= 0.05,
+            f"Ø{outer:.1f} tube with a {wall:.1f} mm wall, asked for "
+            f"Ø{wanted['tube_diameter']:g} x {wanted['wall_thickness']:g}."))
+
+    if bends:
+        tightest = min(radius for radius, _ in bends)
+        ratio = tightest / wanted["tube_diameter"]
+        if ratio >= EASY_BEND:
+            verdict, passed = "a plain rotary-draw bend", True
+        elif ratio >= TIGHT_BEND:
+            verdict, passed = "tight: a mandrel and a wiper die", None
+        else:
+            verdict, passed = "too tight: the wall will fold, not bend", False
+        rows.append(_row(
+            "bend_radius", passed,
+            f"tightest bend R{tightest:.1f} on a Ø{wanted['tube_diameter']:g} "
+            f"tube - {ratio:.2f} x diameter, {verdict}."))
+        # One radius for the whole bar is one die and one setup; more than
+        # one is a second, which is worth saying out loud rather than
+        # discovering on a quotation.
+        distinct = sorted({round(radius, 1) for radius, _ in bends})
+        rows.append(_row(
+            "bend_count", None,
+            f"{len(bends) // 2} bends, "
+            + ("all on one radius." if len(distinct) == 1
+               else f"on {len(distinct)} radii: "
+                    + ", ".join(f"R{r:g}" for r in distinct) + ".")))
+
+    asked_control = wanted.get("control_length")
+    if asked_control:
+        rows.append(_row(
+            "control_length", asked_control >= MIN_CONTROL_LENGTH,
+            f"{asked_control:g} mm of straight at each end for the grip, "
+            f"throttle and switchgear."))
+    return rows

@@ -257,6 +257,9 @@ const I18N = (function () {
     "spec.drill_sizes": ["holes at stock drill sizes", "標準ドリル径の穴"],
     "spec.drill_sizes.advisory": ["holes at stock drill sizes (advisory)",
                                   "標準ドリル径の穴（参考）"],
+    "spec.bend_radius": ["bends a tube will take", "パイプが曲げられる半径"],
+    "spec.bend_radius.advisory": ["bends a tube will take (advisory)",
+                                  "パイプが曲げられる半径（参考）"],
     "spec.clash": ["components that do not overlap", "干渉のない構成要素"],
     // The checks that name a dimension carry it in their key - stated_8,
     // stated_bore_10.5 - so there is no fixed key to look up. The number is
@@ -458,6 +461,7 @@ const I18N = (function () {
 
     "plan.heading":     ["Design Plan", "設計プラン"],
     "tier.demo":        ["DEMO", "デモ"],
+    "tier.handlebar":   ["HANDLEBAR", "ハンドルバー"],
 
     /* ── token accounting ───────────────────────────────────────────────
        Canonical agent ids, translated only when drawn. The counters are keyed
@@ -683,6 +687,17 @@ const I18N = (function () {
       + "60mm × 40mm の長方形から、Z=53 における直径 30mm の円へ滑らかに"
       + "ロフトした遷移部。(3) Z=53 から Z=63 まで伸びる直径 30mm の円筒"
       + "ネック。いずれの部分も XY 平面で原点を中心とする。"],
+    "sample.bar_drag": [
+      "A drag bar, 760 mm wide, on 22 mm tube.",
+      "22mm パイプの幅 760mm ドラッグバー。"],
+    "sample.bar_custom": [
+      "A motorcycle handlebar of 22 mm outside diameter tube with a 2 mm "
+      + "wall: 700 mm wide overall, rising 140 mm from the clamp, with 100 "
+      + "mm of pullback, a 130 mm straight in the middle for the risers and "
+      + "200 mm of straight at each end for the grips.",
+      "外径 22mm、肉厚 2mm のパイプによるオートバイ用ハンドルバー。全幅 "
+      + "700mm、クランプ部からの立ち上がり 140mm、手前への引き 100mm、"
+      + "中央のライザー用直線部 130mm、両端のグリップ用直線部 200mm。"],
     "sample.demo_bracket": [
       "A mounting bracket with a 100mm x 60mm base plate 10mm thick, two "
       + "vertical support walls 45mm tall at each end, and four 8mm mounting "

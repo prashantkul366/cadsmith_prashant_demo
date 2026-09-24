@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
 
 from app.catalog import handlebars, standards
 
@@ -36,6 +37,10 @@ class CatalogPart:
     standard: str
     code: str
     parameters: dict[str, float] = field(default_factory=dict)
+    #: Optional: measure the built solid for whatever this family knows to
+    #: care about, and say so in the shape validation.json carries. Left
+    #: unset by the families whose only claim is a valid solid.
+    inspect: Optional[Callable[[Any], list[dict]]] = None
 
 
 def _n(value: float) -> str:
@@ -1319,7 +1324,8 @@ def handlebar(style: str = "road_medium", **overrides) -> CatalogPart:
         title=f"{bar.title}, {width:g} mm wide on {tube:g} mm tube",
         standard=f"handlebar - {bar.source}",
         code=handlebars.code_for(**dimensions),
-        parameters=dimensions)
+        parameters=dimensions,
+        inspect=lambda solid: handlebars.inspect(solid, dimensions))
 
 
 #: Every family this module builds, by name. ``select`` reads a request and

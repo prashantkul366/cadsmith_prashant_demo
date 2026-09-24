@@ -1,0 +1,210 @@
+"""The handlebar case study, checked against bars that exist.
+
+The claim being made here is not "this builds a shape". It is that a bar
+asked for by the five dimensions the trade sells one by comes back measuring
+those five dimensions, that a bend it could not make is refused rather than
+built, and that the drawing dimensions the bend a tube bender would be set
+to rather than whichever arc the projection happened to emit.
+
+Runs the real kernel: it bends ten bars and projects one.
+
+Run:  .venv/bin/python -m app.tests.test_handlebars
+"""
+
+from __future__ import annotations
+
+import math
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import cadquery as cq  # noqa: E402
+
+from app.catalog import handlebars, parts, router, verify  # noqa: E402
+from app.server import drawing, spec  # noqa: E402
+
+failures: list[str] = []
+
+
+def check(label: str, ok: bool, detail: str = "") -> None:
+    print(f"  {'PASS' if ok else 'FAIL'}  {label}{(' - ' + detail) if detail else ''}")
+    if not ok:
+        failures.append(label)
+
+
+def measured(solid) -> dict:
+    """Width, rise, pullback and the bends, off the built solid."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_SurfaceType
+
+    ends, bends = [], set()
+    for face in solid.Faces():
+        surface = BRepAdaptor_Surface(face.wrapped)
+        kind = surface.GetType()
+        if kind == GeomAbs_SurfaceType.GeomAbs_Plane:
+            ends.append(face.Center())
+        elif kind == GeomAbs_SurfaceType.GeomAbs_Torus:
+            bends.add(round(surface.Torus().MajorRadius(), 3))
+    box = solid.BoundingBox()
+    right = max(ends, key=lambda c: c.x)
+    return {"width": box.xlen, "rise": right.z, "pullback": -right.y,
+            "bends": sorted(bends), "ends": ends}
+
+
+def main() -> int:
+    print("\nEvery published bend builds, and measures what it claims")
+    for name, bar in handlebars.BARS.items():
+        try:
+            solid, _ = verify.build(handlebars.code_for(**bar.dimensions()))
+        except Exception as error:  # noqa: BLE001 - the report is the point
+            check(f"{name} builds", False, f"{type(error).__name__}: {error}")
+            continue
+        got = measured(solid)
+        check(f"{name}: {bar.width:g} x {bar.rise:g} rise x {bar.pullback:g} back",
+              abs(got["width"] - bar.width) <= 0.5
+              and abs(got["rise"] - bar.rise) <= 0.5
+              and abs(got["pullback"] - bar.pullback) <= 0.5
+              and solid.isValid(),
+              f"{got['width']:.1f} x {got['rise']:.1f} x {got['pullback']:.1f}")
+
+    print("\nA bar is the same on both sides")
+    solid, _ = verify.build(handlebars.code_for(
+        **handlebars.BARS["road_medium"].dimensions()))
+    got = measured(solid)
+    left, right = sorted(got["ends"], key=lambda c: c.x)
+    check("the two ends mirror each other",
+          abs(left.x + right.x) < 1e-6 and abs(left.y - right.y) < 1e-6
+          and abs(left.z - right.z) < 1e-6,
+          f"{left.x:.4f} vs {right.x:.4f}")
+
+    print("\nA bend that cannot be made is refused, not built")
+    # Room for R14 on a 22mm tube is 0.64 x diameter: the wall folds.
+    cramped = handlebars.code_for(
+        overall_width=600.0, rise=200.0, pullback=120.0, clamp_width=90.0,
+        control_length=230.0, tube_diameter=22.0, wall_thickness=2.0,
+        bend_radius=60.0, rise_angle=40.0)
+    try:
+        verify.build(cramped)
+        check("a bar with no room for its bends is refused", False,
+              "it built anyway")
+    except ValueError as error:
+        check("a bar with no room for its bends is refused",
+              "cannot be bent" in str(error) and "x diameter" in str(error),
+              str(error)[:96])
+    except Exception as error:  # noqa: BLE001
+        check("the refusal is a clear one, not a kernel error", False,
+              f"{type(error).__name__}: {error}")
+
+    print("\nThe radius is reduced to what fits, rather than overrunning")
+    tight = handlebars.BARS["road_medium"]
+    solid, _ = verify.build(handlebars.code_for(**tight.dimensions()))
+    fitted = measured(solid)["bends"]
+    check("one radius for the whole bar", len(fitted) == 1, str(fitted))
+    check("and no larger than the one asked for",
+          fitted[0] <= tight.bend_radius + 1e-6,
+          f"R{fitted[0]:g} for a requested R{tight.bend_radius:g}")
+    check("but still a radius the tube will take",
+          fitted[0] / tight.tube_diameter >= handlebars.TIGHT_BEND,
+          f"{fitted[0] / tight.tube_diameter:.2f} x diameter")
+
+    print("\nThe catalogue serves a named bend, and declines the rest")
+    routed = router.select("a 760mm drag bar")
+    check("a named bend routes", routed is not None
+          and routed.part.id.startswith("handlebar_drag"),
+          routed.part.id if routed else "nothing")
+    check("a bare handlebar does not: it is five dimensions, not a size",
+          router.select("a handlebar") is None)
+    for ask in ("a handlebar riser", "a handlebar clamp", "a bar end weight"):
+        check(f"'{ask}' is not a handlebar", router.select(ask) is None)
+    routed = router.select("ape hangers with 14 inch rise")
+    check("an inch rise is read as one",
+          routed is not None
+          and abs(routed.part.parameters["rise"] - 355.6) < 0.1,
+          str(routed.part.parameters["rise"]) if routed else "nothing")
+    check("and a Japanese request reaches the same bend",
+          (router.select("ドラッグバー") or None) is not None
+          and router.select("ドラッグバー").part.id.startswith("handlebar_drag"))
+
+    print("\nThe part reports what was measured, not what was asked")
+    part = parts.select("a commuter handlebar")
+    report = verify.check(part)
+    rows = {row["metric"]: row for row in report.measured}
+    check("the bar passes its own checks", report.ok, "; ".join(report.problems))
+    for metric in ("overall_width", "rise", "pullback", "symmetry", "tube",
+                   "bend_radius"):
+        check(f"{metric} is measured", metric in rows,
+              rows.get(metric, {}).get("message", "missing"))
+    check("the bend radius is reported against the tube diameter",
+          "x diameter" in rows.get("bend_radius", {}).get("message", ""),
+          rows.get("bend_radius", {}).get("message", ""))
+
+    work = Path(tempfile.mkdtemp(prefix="cadsmith_handlebar_test_"))
+    solid, _ = verify.build(part.code)
+    step = work / "bar.step"
+    cq.exporters.export(cq.Workplane(obj=solid), str(step))
+
+    print("\nA bend too tight to make is flagged wherever it is built")
+    # Built the way a model would write it, not through the family: R25 on a
+    # 22mm tube, which is 1.14 x diameter.
+    corner = [cq.Vector(0, 0, 0), cq.Vector(150, 0, 0), cq.Vector(150, 0, 150)]
+    radius = 25.0
+    into = (corner[1] - corner[0]).normalized()
+    away = (corner[2] - corner[1]).normalized()
+    turn = math.acos(max(-1.0, min(1.0, into.dot(away))))
+    offset = radius * math.tan(turn / 2.0)
+    start, end = corner[1] - into.multiply(offset), corner[1] + away.multiply(offset)
+    middle = corner[1] + away.sub(into).normalized().multiply(
+        radius / math.cos(turn / 2.0) - radius)
+    path = cq.Wire.assembleEdges([
+        cq.Edge.makeLine(corner[0], start),
+        cq.Edge.makeThreePointArc(start, middle, end),
+        cq.Edge.makeLine(end, corner[2])])
+    bent = (cq.Workplane("YZ").circle(11.0).circle(9.0)
+            .sweep(cq.Workplane(path), isFrenet=True))
+    tight_step = work / "tight.step"
+    cq.exporters.export(bent, str(tight_step))
+    tight = spec.measure_step(tight_step)
+    bend_check = next((c for c in spec.manufacturability(tight)
+                       if c.key == "bend_radius"), None)
+    check("the advisory catches it", bend_check is not None
+          and bend_check.passed is False,
+          bend_check.actual if bend_check else "no bend check")
+    check("and it is advisory, because a mandrel bend is a thing to buy",
+          bend_check is not None and not bend_check.hard)
+    check("a tube's own bore is not counted as a drilled hole",
+          not spec.measure_step(step)["holes"],
+          str(spec.measure_step(step)["holes"]))
+
+    print("\nThe drawing dimensions the bend, not its silhouette")
+    views = drawing._project(step)  # noqa: SLF001
+    plan = drawing.plan_sheet(views)
+    wanted = part.parameters["bend_radius"]
+    for view in plan["views"]:
+        radii = [call for call in view["callouts"]
+                 if call.get("kind") == "radius"]
+        if not radii:
+            continue
+        check(f"{view['name']} calls out the centreline radius",
+              all(abs(call["measure"] - wanted) < 0.6 for call in radii),
+              ", ".join(call["label"] for call in radii))
+    labels = [call.get("label", "") for view in plan["views"]
+              for call in view["callouts"]]
+    check("the tube is called out by diameter",
+          any("Ø22" in label for label in labels), str(labels))
+    check("and the bends by radius",
+          any(label.endswith(f"R{wanted:g}") for label in labels), str(labels))
+
+    print("\n" + "=" * 60)
+    if failures:
+        print(f"{len(failures)} CHECK(S) FAILED")
+        for failure in failures:
+            print(f"  - {failure}")
+        return 1
+    print("ALL CHECKS PASSED")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -192,6 +192,32 @@ def bores(solid: Any) -> list[float]:
     return sorted(found)
 
 
+def bends(solid: Any) -> list[tuple[float, float]]:
+    """Every bend in a bent tube: (centreline radius, tube radius).
+
+    A bend leaves a torus whose major radius is the centreline radius a tube
+    bender is set to. Only tori that continue a tube are counted - their
+    minor radius matches a cylinder in the same solid - so a fillet run
+    around the rim of a boss is not reported as a bend in a pipe.
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_SurfaceType
+
+    cylinders, tori = set(), []
+    for face in solid.Faces():
+        surface = BRepAdaptor_Surface(face.wrapped)
+        kind = surface.GetType()
+        if kind == GeomAbs_SurfaceType.GeomAbs_Cylinder:
+            cylinders.add(round(surface.Cylinder().Radius(), 3))
+        elif kind == GeomAbs_SurfaceType.GeomAbs_Torus:
+            torus = surface.Torus()
+            tori.append((torus.MajorRadius(), torus.MinorRadius()))
+
+    found = [(major, minor) for major, minor in tori
+             if any(abs(minor - radius) <= 0.01 for radius in cylinders)]
+    return sorted({(round(major, 3), round(minor, 3)) for major, minor in found})
+
+
 def measure_step(step_path: str | Path) -> dict:
     """Measure the quantities the plan can make claims about."""
     import cadquery as cq
@@ -200,12 +226,23 @@ def measure_step(step_path: str | Path) -> dict:
     solid = shape.val()
     box = solid.BoundingBox()
     holes = bores(solid)
+    tube_bends = bends(solid)
+    # The bore of a bent tube is not a drilled hole - it is what the tube
+    # came with - so it does not belong in a hole count, and it certainly
+    # does not belong in a note about stock drill sizes. A bore that runs on
+    # through the bends is the tube's own.
+    if tube_bends:
+        bore_radii = {minor for _, minor in tube_bends}
+        holes = [diameter for diameter in holes
+                 if not any(abs(diameter / 2.0 - radius) <= 0.01
+                            for radius in bore_radii)]
     return {
         "volume": solid.Volume(),
         "bbox": {"xlen": box.xlen, "ylen": box.ylen, "zlen": box.zlen},
         "is_valid": solid.isValid(),
         "holes": holes,
         "num_holes": len(holes),
+        "bends": tube_bends,
     }
 
 
@@ -493,6 +530,23 @@ def manufacturability(measured: dict) -> list[SpecCheck]:
             actual=(", ".join(f"{d:.2f}" for d in sorted(set(odd))[:6]) + " mm"
                     if odd else "all standard"),
             passed=not odd, hard=False))
+
+    # A bend is the one feature whose radius decides whether the part can be
+    # made at all: under about twice the tube diameter a rotary-draw bend
+    # needs a mandrel, and under one and a half the wall folds instead of
+    # bending. Advisory, because a mandrel bend is a real thing to buy, not
+    # a mistake - and because the ratio is the useful number either way.
+    tube_bends = measured.get("bends") or []
+    if tube_bends:
+        tightest, tube_radius = min(tube_bends,
+                                    key=lambda bend: bend[0] / max(bend[1], 1e-9))
+        diameter = tube_radius * 2.0
+        ratio = tightest / diameter if diameter else 0.0
+        checks.append(SpecCheck(
+            key="bend_radius", label="bends a tube will take",
+            expected="at least 2x the tube diameter",
+            actual=f"R{tightest:.1f} on Ø{diameter:.1f} - {ratio:.2f}x diameter",
+            passed=ratio >= 2.0, hard=False))
 
     box = measured.get("bbox") or {}
     extents = [box.get(a, 0.0) for a in ("xlen", "ylen", "zlen")]

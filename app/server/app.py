@@ -61,6 +61,27 @@ ALLOWED_ARTIFACTS = {
 # from data/dataset_v2, so a demo can be checked against a reference part.
 EXAMPLE_IDS = ["T1_012", "T2_001", "T2_009", "T3_001", "T3_007"]
 
+# The case study: one part, two paths through the app. The drag bar is a
+# named bend and comes from the catalogue exactly and instantly; the second
+# names dimensions no catalogue bend has, so the five agents design it.
+CASE_STUDY_EXAMPLES = [
+    {
+        "id": "bar_drag",
+        "tier": "handlebar",
+        "prompt": "A drag bar, 760 mm wide, on 22 mm tube.",
+    },
+    {
+        "id": "bar_custom",
+        "tier": "handlebar",
+        "prompt": (
+            "A motorcycle handlebar of 22 mm outside diameter tube with a "
+            "2 mm wall: 700 mm wide overall, rising 140 mm from the clamp, "
+            "with 100 mm of pullback, a 130 mm straight in the middle for "
+            "the risers and 200 mm of straight at each end for the grips."
+        ),
+    },
+]
+
 FALLBACK_EXAMPLES = [
     {
         "id": "demo_bracket",
@@ -276,7 +297,8 @@ def examples() -> JSONResponse:
                 }
 
     ordered = [found[i] for i in EXAMPLE_IDS if i in found]
-    return JSONResponse({"examples": ordered + FALLBACK_EXAMPLES})
+    return JSONResponse(
+        {"examples": ordered + CASE_STUDY_EXAMPLES + FALLBACK_EXAMPLES})
 
 
 @app.post("/api/jobs")
