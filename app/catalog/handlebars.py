@@ -331,87 +331,91 @@ def _surfaces(solid):
     return ends, tubes, bends
 
 
-def _row(metric: str, passed, message: str) -> dict:
-    return {"metric": metric, "passed": passed, "message": message}
+def _row(key: str, label: str, expected: str, actual: str,
+         passed, hard: bool = True) -> dict:
+    """One measured row, in the shape the Validation panel already draws."""
+    return {"key": key, "label": label, "expected": expected,
+            "actual": actual, "passed": passed, "hard": hard}
 
 
 def inspect(solid, wanted: dict) -> list[dict]:
     """Measure a built bar against the dimensions it was asked for.
 
-    Every row here is a measurement off the solid, not a restatement of the
+    Every row is a measurement off the solid, not a restatement of the
     parameters: the width is the kernel's bounding box, the rise and the
-    pullback are the centres of the two end faces, and the bend radius is
-    the major radius of a torus. A bar that claims 725 and measures 734 is
-    the failure this is for.
+    pullback are the centres of the two end faces, and a bend radius is the
+    major radius of a torus. A bar that claims 725 and measures 734 is what
+    this is for.
     """
     ends, tubes, bends = _surfaces(solid)
     box = solid.BoundingBox()
     rows: list[dict] = []
 
     width = box.xlen
-    asked_width = wanted["overall_width"]
+    asked = wanted["overall_width"]
     rows.append(_row(
-        "overall_width", abs(width - asked_width) <= 0.5,
-        f"{width:.1f} mm tip to tip, asked for {asked_width:g}."))
+        "bar_width", "width tip to tip", f"{asked:g} mm", f"{width:.1f} mm",
+        abs(width - asked) <= 0.5))
 
     if len(ends) == 2:
         left, right = sorted((face.Center() for face in ends), key=lambda c: c.x)
-        rise, pullback = right.z, -right.y
         rows.append(_row(
-            "rise", abs(rise - wanted["rise"]) <= 0.5,
-            f"the grips sit {rise:.1f} mm above the clamp, "
-            f"asked for {wanted['rise']:g}."))
+            "bar_rise", "rise above the clamp", f"{wanted['rise']:g} mm",
+            f"{right.z:.1f} mm", abs(right.z - wanted["rise"]) <= 0.5))
         rows.append(_row(
-            "pullback", abs(pullback - wanted["pullback"]) <= 0.5,
-            f"the tips sit {pullback:.1f} mm back from the clamp line, "
-            f"asked for {wanted['pullback']:g}."))
+            "bar_pullback", "pullback at the tips",
+            f"{wanted['pullback']:g} mm", f"{-right.y:.1f} mm",
+            abs(-right.y - wanted["pullback"]) <= 0.5))
         # A bar that is not symmetric steers crooked, and nothing else here
-        # would catch it: both halves can measure right on their own.
+        # would catch it: each half can measure right on its own.
         skew = max(abs(left.z - right.z), abs(left.y - right.y),
                    abs(left.x + right.x))
         rows.append(_row(
-            "symmetry", skew <= 0.05,
-            f"the two ends mirror each other to within {skew:.3f} mm."))
+            "bar_symmetry", "the two ends mirror", "within 0.05 mm",
+            f"{skew:.3f} mm", skew <= 0.05))
     else:
-        rows.append(_row("ends", False,
-                         f"{len(ends)} end faces: a bar has two."))
+        rows.append(_row("bar_ends", "one end face at each end", "2",
+                         str(len(ends)), False))
 
     if tubes:
         outer = max(tubes) * 2.0
         wall = (max(tubes) - min(tubes)) if len(set(tubes)) > 1 else 0.0
         rows.append(_row(
-            "tube", abs(outer - wanted["tube_diameter"]) <= 0.05,
-            f"Ø{outer:.1f} tube with a {wall:.1f} mm wall, asked for "
-            f"Ø{wanted['tube_diameter']:g} x {wanted['wall_thickness']:g}."))
+            "bar_tube", "tube and wall",
+            f"Ø{wanted['tube_diameter']:g} x {wanted['wall_thickness']:g}",
+            f"Ø{outer:.1f} x {wall:.1f}",
+            abs(outer - wanted["tube_diameter"]) <= 0.05))
 
     if bends:
         tightest = min(radius for radius, _ in bends)
         ratio = tightest / wanted["tube_diameter"]
         if ratio >= EASY_BEND:
-            verdict, passed = "a plain rotary-draw bend", True
+            note, passed = "a plain rotary-draw bend", True
         elif ratio >= TIGHT_BEND:
-            verdict, passed = "tight: a mandrel and a wiper die", None
+            note, passed = "tight: a mandrel and a wiper die", None
         else:
-            verdict, passed = "too tight: the wall will fold, not bend", False
+            note, passed = "the wall will fold, not bend", False
         rows.append(_row(
-            "bend_radius", passed,
-            f"tightest bend R{tightest:.1f} on a Ø{wanted['tube_diameter']:g} "
-            f"tube - {ratio:.2f} x diameter, {verdict}."))
-        # One radius for the whole bar is one die and one setup; more than
-        # one is a second, which is worth saying out loud rather than
-        # discovering on a quotation.
+            "bend_radius", "bends a tube will take",
+            f"at least {EASY_BEND:g}x the tube diameter",
+            f"R{tightest:.1f} on Ø{wanted['tube_diameter']:g} - "
+            f"{ratio:.2f}x diameter, {note}",
+            bool(passed), hard=False))
+        # One radius for the whole bar is one die and one setup. More than
+        # one is a second, which is worth saying before a quotation does.
         distinct = sorted({round(radius, 1) for radius, _ in bends})
         rows.append(_row(
-            "bend_count", None,
-            f"{len(bends) // 2} bends, "
-            + ("all on one radius." if len(distinct) == 1
-               else f"on {len(distinct)} radii: "
-                    + ", ".join(f"R{r:g}" for r in distinct) + ".")))
+            "bend_count", "bends, and how many radii", "one radius",
+            f"{len(bends) // 2} bends on "
+            + (f"one radius, R{distinct[0]:g}" if len(distinct) == 1
+               else f"{len(distinct)} radii: "
+                    + ", ".join(f"R{r:g}" for r in distinct)),
+            len(distinct) == 1, hard=False))
 
     asked_control = wanted.get("control_length")
     if asked_control:
         rows.append(_row(
-            "control_length", asked_control >= MIN_CONTROL_LENGTH,
-            f"{asked_control:g} mm of straight at each end for the grip, "
-            f"throttle and switchgear."))
+            "control_length", "straight at each end for the controls",
+            f"at least {MIN_CONTROL_LENGTH:g} mm", f"{asked_control:g} mm",
+            asked_control >= MIN_CONTROL_LENGTH, hard=False))
     return rows

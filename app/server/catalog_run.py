@@ -85,6 +85,12 @@ def serve(ctx: RunContext, routed: Routed, work_dir) -> dict:
                  "message": "OCCT reports a valid watertight solid."},
                 {"metric": "single_solid", "passed": True,
                  "message": f"{routed.report.num_solids} solid."},
+                # Whatever this family knows to measure about itself. A
+                # washer adds nothing; a bent tube adds the width it came
+                # out at and the radius its tightest bend would need.
+                *[{"metric": row["key"], "passed": row["passed"],
+                   "message": f"{row['label']}: {row['actual']}"}
+                  for row in getattr(routed.report, "measured", []) or []],
                 {"metric": "llm_judge", "passed": None,
                  "message": "No Judge: this part was not generated."},
             ],
@@ -105,6 +111,11 @@ def serve(ctx: RunContext, routed: Routed, work_dir) -> dict:
         "method": routed.source,
         "instruction": "",
         "changes": [],
+        # The same measured rows the agents' runs carry, so the Validation
+        # panel draws them the same way: a number read off the solid, with
+        # what was asked beside it.
+        "spec": ({"checks": list(routed.report.measured)}
+                 if getattr(routed.report, "measured", None) else None),
         "catalog": {
             "part_id": part.id,
             "title": part.title,

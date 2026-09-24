@@ -130,15 +130,20 @@ def main() -> int:
     print("\nThe part reports what was measured, not what was asked")
     part = parts.select("a commuter handlebar")
     report = verify.check(part)
-    rows = {row["metric"]: row for row in report.measured}
+    rows = {row["key"]: row for row in report.measured}
     check("the bar passes its own checks", report.ok, "; ".join(report.problems))
-    for metric in ("overall_width", "rise", "pullback", "symmetry", "tube",
-                   "bend_radius"):
-        check(f"{metric} is measured", metric in rows,
-              rows.get(metric, {}).get("message", "missing"))
+    for key in ("bar_width", "bar_rise", "bar_pullback", "bar_symmetry",
+                "bar_tube", "bend_radius"):
+        check(f"{key} is measured", key in rows,
+              rows.get(key, {}).get("actual", "missing"))
     check("the bend radius is reported against the tube diameter",
-          "x diameter" in rows.get("bend_radius", {}).get("message", ""),
-          rows.get("bend_radius", {}).get("message", ""))
+          "x diameter" in rows.get("bend_radius", {}).get("actual", ""),
+          rows.get("bend_radius", {}).get("actual", ""))
+    check("the rows carry what was asked beside what was measured",
+          all({"key", "label", "expected", "actual", "passed", "hard"}
+              <= set(row) for row in report.measured))
+    check("and the bend ratio is advisory, not a refusal",
+          rows["bend_radius"]["hard"] is False)
 
     work = Path(tempfile.mkdtemp(prefix="cadsmith_handlebar_test_"))
     solid, _ = verify.build(part.code)

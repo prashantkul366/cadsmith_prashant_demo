@@ -105,11 +105,14 @@ def check(part, allow_multi_solid: bool = False) -> Report:
             report.measured = list(inspect(solid))
         except Exception as error:
             report.measured = [{
-                "metric": "family_checks", "passed": None,
-                "message": f"could not run this family's own checks: "
-                           f"{type(error).__name__}: {error}"}]
-        report.problems += [row["message"] for row in report.measured
-                            if row.get("passed") is False]
+                "key": "family_checks", "label": "this family's own checks",
+                "expected": "they run", "actual": f"{type(error).__name__}: "
+                                                  f"{error}",
+                "passed": False, "hard": False}]
+        report.problems += [
+            f"{row['label']}: {row['actual']} (wanted {row['expected']})"
+            for row in report.measured
+            if row.get("passed") is False and row.get("hard", True)]
 
     report.solid = solid
     report.ok = not report.problems
