@@ -6,6 +6,9 @@ Paper/
 
 # Reference PDFs
 *.pdf
+# ...except the expo material, where the PDF is the deliverable for
+# anyone without Office.
+!docs/expo/*.pdf
 
 # Internal notes
 Progress.md
