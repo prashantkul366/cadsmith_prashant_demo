@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from app.catalog import standards
+from app.catalog import handlebars, standards
 
 
 @dataclass(frozen=True)
@@ -350,6 +350,43 @@ _CUSTOM_CONTEXT = (
     "channel for", "bore for", "hole for", "counterbore for",
     "clearance for", "cutout for", "cut-out for", "land for",
 )
+
+#: The word that makes a request a handlebar, and the words that take it
+#: back. A riser, a clamp, a grip and a bar-end weight are all things that
+#: attach to a bar and none of them is one, so they fall through to the
+#: pipeline the way "a bearing housing for a 6203" does.
+_BAR_NOUNS = ("handlebar", "handle bar", "drag bar", "ape hanger",
+              "ape hangers", "tracker bar", "bars for")
+_BAR_CONTEXT = ("riser", "clamp", "grip", "bar end", "bar-end", "barend",
+                "mirror", "lever", "perch", "throttle", "switch", "weight",
+                "mount", "holder", "stem")
+
+#: Named bends, longest name first so "mini ape" is not read as "ape".
+_BAR_STYLES = (
+    ("mini ape", "mini_ape"), ("mini-ape", "mini_ape"),
+    ("ape hanger", "ape"), ("ape bar", "ape"), ("apes", "ape"),
+    ("drag bar", "drag"), ("drag handlebar", "drag"),
+    ("tracker", "tracker"), ("commuter", "commuter"),
+    ("classic", "classic"), ("roadster", "classic"),
+    ("ultra low", "road_ultra_low"), ("ultra-low", "road_ultra_low"),
+    ("low bend", "road_low"), ("low road", "road_low"),
+    ("medium bend", "road_medium"), ("road bar", "road_medium"),
+    ("road handlebar", "road_medium"),
+    ("high bend", "road_high"), ("high road", "road_high"),
+)
+
+#: A width is three or four digits of millimetres, or a couple of dozen
+#: inches. Neither can be confused with a tube size, which is the other
+#: number in the sentence.
+_BAR_WIDTH_MM = re.compile(r"(\d{3,4}(?:\.\d+)?)\s*mm", re.I)
+_BAR_WIDTH_IN = re.compile(r"(2[0-9]|3[0-9]|4[0-5])(?:\.\d+)?\s*(?:in\b|inch|\")", re.I)
+_BAR_RISE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(mm|in\b|inch|\")?\s*(?:of\s+)?rise", re.I)
+_BAR_TUBE = {
+    "7/8": 22.2, "22mm": 22.2, "22 mm": 22.2, "22.2": 22.2,
+    "1 inch": 25.4, '1"': 25.4, "1 in ": 25.4, "25.4": 25.4, "25mm": 25.4,
+    "1-1/4": 31.8, "1 1/4": 31.8, "31.8": 31.8,
+}
 
 _SIZE = re.compile(r"\bM\s?(\d+(?:\.\d+)?)(?![\d.])", re.I)
 _LENGTH = re.compile(r"\bM\s?\d+(?:\.\d+)?\s*[x×*]\s*(\d+(?:\.\d+)?)", re.I)
@@ -1168,6 +1205,37 @@ def select(text: str) -> CatalogPart | None:
     if any(word in lowered for word in _CUSTOM_CONTEXT):
         return None
 
+    if any(word in lowered for word in _BAR_NOUNS):
+        if any(word in lowered for word in _BAR_CONTEXT):
+            return None
+        style = next((name for word, name in _BAR_STYLES if word in lowered),
+                     None)
+        if style is None:
+            # "A handlebar" on its own says nothing about which one, and a
+            # bar is five dimensions rather than a size. The pipeline can
+            # design one; the catalogue will not guess.
+            return None
+        overrides: dict[str, float] = {}
+        width = _BAR_WIDTH_MM.search(text)
+        inches = _BAR_WIDTH_IN.search(text)
+        if width:
+            overrides["overall_width"] = float(width.group(1))
+        elif inches:
+            overrides["overall_width"] = round(float(inches.group(1)) * 25.4, 1)
+        rise = _BAR_RISE.search(text)
+        if rise:
+            unit = (rise.group(2) or "mm").lower()
+            value = float(rise.group(1))
+            overrides["rise"] = round(value * 25.4, 1) if unit != "mm" else value
+        for spelling, diameter in _BAR_TUBE.items():
+            if spelling in lowered:
+                overrides["tube_diameter"] = diameter
+                break
+        try:
+            return handlebar(style, **overrides)
+        except KeyError:
+            return None
+
     if "bearing" in lowered:
         found = _BEARING.search(text)
         if found and found.group(1) in standards.BEARINGS:
@@ -1231,6 +1299,29 @@ def size_lengths(size: str) -> float:
     return round(diameter * 3.0, 1)
 
 
+def handlebar(style: str = "road_medium", **overrides) -> CatalogPart:
+    """A motorcycle handlebar, bent to a published set of dimensions.
+
+    The table in ``handlebars.py`` holds bars that exist - four production
+    road bends, the drawing this study was given, and the shapes the custom
+    trade names - and every one of them is the same tube bent to different
+    numbers, which is what makes a handlebar worth building parametrically
+    rather than one model per style.
+    """
+    bar = handlebars.BARS[style]
+    dimensions = bar.dimensions()
+    dimensions.update({name: value for name, value in overrides.items()
+                       if value is not None})
+    width = dimensions["overall_width"]
+    tube = dimensions["tube_diameter"]
+    return CatalogPart(
+        id=f"handlebar_{style}_w{width:g}_d{tube:g}",
+        title=f"{bar.title}, {width:g} mm wide on {tube:g} mm tube",
+        standard=f"handlebar - {bar.source}",
+        code=handlebars.code_for(**dimensions),
+        parameters=dimensions)
+
+
 #: Every family this module builds, by name. ``select`` reads a request and
 #: picks one; this is for reaching a builder directly, when the family is
 #: already known and only the sizes are in question.
@@ -1253,4 +1344,5 @@ BUILDERS = {
     "retaining_ring": retaining_ring,
     "shaft_collar": shaft_collar,
     "rigid_coupling": rigid_coupling,
+    "handlebar": handlebar,
 }

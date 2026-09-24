@@ -28,7 +28,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
 
-from app.catalog import japanese, library, parts, standards, verify
+from app.catalog import (handlebars, japanese, library, parts,
+                         standards, verify)
 from app.catalog.parts import CatalogPart
 
 # A standard part named inside a bigger noun is a component of a custom part,
@@ -631,7 +632,8 @@ def describe() -> dict:
                 "compression springs", "timing pulleys", "spur gears",
                 "shafts (keyed, grooved)", "parallel keys", "shaft collars",
                 "shaft couplings", "plain bushings", "retaining rings",
-                "set screws", "threaded rod"]
+                "set screws", "threaded rod",
+                f"handlebars ({len(handlebars.BARS)} bends)"]
     if backends["cq_gears"]:
         families += ["helical", "herringbone", "ring", "rack", "bevel"]
     if backends["cq_warehouse"]:

@@ -138,6 +138,21 @@ COUNTS = (
 #: Plain nouns and qualifiers. Longest first throughout: 平歯車 must win over
 #: 歯車, and 六角穴付きボルト over ボルト.
 TERMS = (
+    # handlebars, and the things that hold one
+    #
+    # Before the shafts, because ハンドルバー ends in バー and a bare バー
+    # further down would take it apart. ライザー and クランプ are here so
+    # that a request for the riser or the clamp says so in English and the
+    # router declines it, exactly as it declines "a handlebar riser" - the
+    # part that holds a bar is not a bar.
+    ("ハンドルバー", "handlebar"),
+    ("ドラッグバー", "drag bar"),
+    ("エイプハンガー", "ape hanger"),
+    ("トラッカーバー", "tracker bar"),
+    ("ライザー", "riser"),
+    ("ハンドルクランプ", "handlebar clamp"),
+    ("グリップ", "grip"),
+
     # shafts and what goes on them
     #
     # First in the table, because several of these end in ねじ or contain
