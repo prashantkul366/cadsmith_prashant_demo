@@ -201,6 +201,38 @@ def main() -> int:
     check("and the bends by radius",
           any(label.endswith(f"R{wanted:g}") for label in labels), str(labels))
 
+    print("\nAnd it dimensions the path, the way the reference sheet does")
+    front = next(v for v in plan["views"] if v["name"] == "FRONT")
+    across = sorted(round(dim["measure"], 2) for dim in front["dimensions"]
+                    if not dim["vertical"])
+    # A ladder: where every straight ends, then the overall width outside
+    # them all. The bounding box alone - one number - is not a drawing
+    # anyone can bend a tube from.
+    check("the front view stacks a ladder of widths",
+          len(across) >= 4, str(across))
+    check("with the overall width the largest of them",
+          across and abs(across[-1] - part.parameters["overall_width"]) < 0.6,
+          str(across))
+    check("and each one wider than the last, so none is drawn twice",
+          all(b - a > 1.0 for a, b in zip(across, across[1:])), str(across))
+    # The envelope of this bar is 148 tall - tube included - and its rise is
+    # 126. The drawing has to say 126, because that is what it is bent to.
+    rises = [round(dim["measure"], 2) for dim in front["dimensions"]
+             if dim["vertical"]]
+    check("the height is the rise to the grips, not the envelope",
+          any(abs(rise - part.parameters["rise"]) < 0.6 for rise in rises),
+          str(rises))
+    # Every dimension line has to be inside the frame it was drawn on.
+    for view in plan["views"]:
+        ys = [dim["p1"][1] + dim["offset"] for dim in view["dimensions"]]
+        check(f"{view['name']} keeps its dimensions on the sheet",
+              all(drawing.FRAME_T < y < drawing.FRAME_B for y in ys),
+              str([round(y, 1) for y in ys]))
+        label_y = view["label_at"][1]
+        below = [y for y in ys if not view["name"] == "ISO" and y > label_y]
+        check(f"{view['name']} puts its label below them, not through them",
+              not below, str([round(y, 1) for y in below]))
+
     print("\n" + "=" * 60)
     if failures:
         print(f"{len(failures)} CHECK(S) FAILED")

@@ -126,6 +126,8 @@ from OCP.GCPnts import GCPnts_QuasiUniformDeflection
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_ShapeEnum
 from OCP.TopoDS import TopoDS
+from OCP.BRepGProp import BRepGProp
+from OCP.GProp import GProp_GProps
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 
@@ -241,17 +243,25 @@ def project(direction, x_direction):
         x_dir = gp_Vec(position.XDirection())
         y_dir = gp_Vec(position.YDirection())
         middle_u = (surface.FirstUParameter() + surface.LastUParameter()) / 2.0
+        def on_centreline(angle):
+            return gp_Pnt(
+                centre.X() + torus.MajorRadius() * (
+                    math.cos(angle) * x_dir.X() + math.sin(angle) * y_dir.X()),
+                centre.Y() + torus.MajorRadius() * (
+                    math.cos(angle) * x_dir.Y() + math.sin(angle) * y_dir.Y()),
+                centre.Z() + torus.MajorRadius() * (
+                    math.cos(angle) * x_dir.Z() + math.sin(angle) * y_dir.Z()))
+
         # The middle of the bend, on its centreline: where a radius leader
         # puts its arrow.
-        crown = gp_Pnt(
-            centre.X() + torus.MajorRadius() * (
-                math.cos(middle_u) * x_dir.X() + math.sin(middle_u) * y_dir.X()),
-            centre.Y() + torus.MajorRadius() * (
-                math.cos(middle_u) * x_dir.Y() + math.sin(middle_u) * y_dir.Y()),
-            centre.Z() + torus.MajorRadius() * (
-                math.cos(middle_u) * x_dir.Z() + math.sin(middle_u) * y_dir.Z()))
+        crown = on_centreline(middle_u)
         u, v = flat(centre)
         mid_u, mid_v = flat(crown)
+        # Where the bend starts and stops being a bend. These are the
+        # vertices of the tube's path, and a drawing of a bent tube
+        # dimensions them - not its bounding box.
+        first_u, first_v = flat(on_centreline(surface.FirstUParameter()))
+        last_u, last_v = flat(on_centreline(surface.LastUParameter()))
         bends.append({
             "u": u, "v": v,
             "r": round(torus.MajorRadius(), 3),
@@ -259,13 +269,28 @@ def project(direction, x_direction):
             "span": round(abs(surface.LastUParameter()
                               - surface.FirstUParameter()), 4),
             "mu": mid_u, "mv": mid_v,
+            "tangents": [[first_u, first_v], [last_u, last_v]],
         })
+
+    # The flat faces of a tube are its two cut ends, and their centres are
+    # where the path finishes. A drawing measures the rise and the pullback
+    # to those, not to the outside of the tube.
+    tips = []
+    explorer = TopExp_Explorer(shape.wrapped, TopAbs_ShapeEnum.TopAbs_FACE)
+    while explorer.More():
+        face = TopoDS.Face_s(explorer.Current())
+        explorer.Next()
+        if BRepAdaptor_Surface(face).GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
+            continue
+        properties = GProp_GProps()
+        BRepGProp.SurfaceProperties_s(face, properties)
+        tips.append(list(flat(properties.CentreOfMass())))
 
     us = [p[0] for line in visible + hidden for p in line]
     vs = [p[1] for line in visible + hidden for p in line]
     return {
         "visible": visible, "hidden": hidden, "circles": circles,
-        "bends": bends,
+        "bends": bends, "tips": tips,
         "basis": [list(ex), list(ey)],
         "bbox": ([min(us), min(vs), max(us), max(vs)] if us else [0, 0, 0, 0]),
     }
@@ -294,8 +319,10 @@ _DXF_MARKER = f"CADSMITH_SHEET_{SHEET_SCHEMA}"
 #: round. Read through the older cache every hole would come out as a round -
 #: Ø12 becoming R6 - so an older one is re-projected rather than trusted.
 #: Schema 3 added the bends: a swept tube's torus faces, which carry the
-#: centreline radius the projected edges only approximate.
-PROJECTION_SCHEMA = 3
+#: centreline radius the projected edges only approximate. Schema 4 added
+#: where each bend starts and stops, and where the tube ends - the vertices
+#: of its path, which is what a drawing of a bent tube dimensions.
+PROJECTION_SCHEMA = 4
 
 
 def _project(step_path: Path, timeout: int = 180,
@@ -654,6 +681,84 @@ def _round_label(group: dict) -> str:
         else f"{group['count']}\u00d7 R{radius}"
 
 
+#: Two path vertices count as the same position when they are this close.
+#: Tighter and a bend's two tangents at one corner read as two dimensions.
+PATH_TOL = 0.5
+
+
+def _path_points(view: dict) -> list[tuple[float, float]]:
+    """The vertices of a bent tube's centreline, in view coordinates.
+
+    Where each bend starts and stops, plus the two cut ends. These are what
+    a drawing of a bent tube dimensions: the bounding box of a handlebar
+    says it is 130.25 deep, which is true, is not a dimension anyone can
+    work to, and is not what the tube was bent to.
+    """
+    bends = view.get("bends") or []
+    if not bends:
+        # No bends, no path. Every flat face of a plate has a centre too,
+        # and dimensioning those as though they were the ends of a tube
+        # would cover the sheet in numbers that mean nothing.
+        return []
+    points: list[tuple[float, float]] = []
+    for bend in bends:
+        for u, v in bend.get("tangents") or []:
+            points.append((u, v))
+    for tip in view.get("tips") or []:
+        points.append((tip[0], tip[1]))
+    return points
+
+
+def _levels(values: list[float]) -> list[tuple[float, int]]:
+    """Distinct positions and how many vertices sit at each, densest first."""
+    grouped: dict[float, int] = {}
+    for value in values:
+        for seen in grouped:
+            if abs(seen - value) <= PATH_TOL:
+                grouped[seen] += 1
+                break
+        else:
+            grouped[value] = 1
+    return sorted(grouped.items(), key=lambda pair: (-pair[1], abs(pair[0])))
+
+
+def _path_profile(view: dict) -> dict:
+    """What a bent tube's centreline offers a drawing to dimension.
+
+    ``level`` is how far the path climbs away from the run it mostly sits on
+    - the rise of a handlebar to its grips - and ``widths`` are the half
+    distances out to the ends of each straight. Both are centreline
+    quantities, because a centreline is the only thing a tube bender can be
+    set to: the outside of a bend is not a length anyone works from.
+    """
+    points = _path_points(view)
+    if len(points) < 2:
+        return {"level": None, "widths": []}
+
+    # The datum is the level most of the path sits at: the clamp run of a
+    # handlebar, the base of a bent bracket.
+    levels = _levels([v for _, v in points])
+    datum = levels[0][0]
+    far = max((v for v, _ in levels), key=lambda v: abs(v - datum))
+
+    level = None
+    if abs(far - datum) > PATH_TOL:
+        at_datum = min((p for p in points if abs(p[1] - datum) <= PATH_TOL),
+                       key=lambda p: abs(p[0]))
+        at_far = min((p for p in points if abs(p[1] - far) <= PATH_TOL),
+                     key=lambda p: abs(p[0]))
+        level = (at_datum, at_far, abs(far - datum))
+
+    # Where every straight starts and stops. A bender is fed one straight at
+    # a time, so the drawing has to say where each one ends - the reference
+    # sheet stacks that whole ladder under the view, shortest first, with
+    # the overall width outside them all. The last vertex is dropped: it is
+    # the cut end, and the overall width already measures across it.
+    spans = sorted({round(abs(u), 3) for u, _ in points if abs(u) > PATH_TOL})
+    widths = spans[:-1] if len(spans) > 1 else spans
+    return {"level": level, "widths": widths, "datum": datum}
+
+
 def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
     """Where everything in one view goes, without drawing any of it.
 
@@ -670,6 +775,29 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
     cx, cy = _cell_centre(meta["cell"])
     umin, vmin, umax, vmax = view["bbox"]
     uc, vc = (umin + umax) / 2.0, (vmin + vmax) / 2.0
+
+    # A bent tube is dimensioned along its centreline, so the envelope gives
+    # way to the path: a handlebar rises 126 to its grips and stands 148
+    # tall, and 126 is the one it was bent to.
+    path = (_path_profile(view) if dimension.strip()
+            else {"level": None, "widths": []})
+
+    # A view is centred in its cell until its dimensions need the room. A
+    # bar carries a ladder of widths under it where a bracket carries one,
+    # so the view slides up the cell until the last of them is inside the
+    # frame - which is what a draughtsman does with the sheet before
+    # drawing anything on it. Only a ladder moves a view: every other part
+    # on the sheet stays where it has always been.
+    ceiling = CELLS_T + meta["cell"][1] * CELL_H + 3.0
+    floor = CELLS_T + (meta["cell"][1] + 1) * CELL_H - 3.0
+    if path["widths"] and "width" in dimension:
+        half_height = (vmax - vmin) * scale / 2.0
+        # Every dimension line in the ladder, the gap under the last of
+        # them, and the view label, which is the lowest thing in the cell.
+        wanted = (cy + half_height + DIM_OFFSET
+                  + len(path["widths"]) * DIM_STEP + 15.0)
+        headroom = (cy - half_height) - (ceiling + 8.0)
+        cy -= max(0.0, min(wanted - floor, max(headroom, 0.0)))
 
     def to_sheet(u: float, v: float) -> tuple[float, float]:
         return (cx + (u - uc) * scale, cy - (v - vc) * scale)
@@ -720,12 +848,33 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
         plan["centre_lines"].append((px - reach, py, px + reach, py))
         plan["centre_lines"].append((px, py - reach, px, py + reach))
 
+    # Shortest nearest the view, longest furthest out - so the overall
+    # length sits outside the positions that make it up, and no dimension
+    # line crosses another's text.
+    rows = 0
     if "width" in dimension:
+        for half in path["widths"]:
+            x1, _ = to_sheet(-half, vc)
+            x2, _ = to_sheet(half, vc)
+            plan["dimensions"].append({
+                "p1": (x1, bottom), "p2": (x2, bottom),
+                "offset": DIM_OFFSET + rows * DIM_STEP, "vertical": False,
+                "measure": half * 2.0})
+            rows += 1
         plan["dimensions"].append({
             "p1": (left, bottom), "p2": (right, bottom),
-            "offset": DIM_OFFSET, "vertical": False,
+            "offset": DIM_OFFSET + rows * DIM_STEP, "vertical": False,
             "measure": umax - umin})
-    if "height" in dimension:
+        rows += 1
+
+    if path["level"] is not None:
+        (datum_u, datum_v), (far_u, far_v), measure = path["level"]
+        _, y1 = to_sheet(datum_u, datum_v)
+        _, y2 = to_sheet(far_u, far_v)
+        plan["dimensions"].append({
+            "p1": (left, y1), "p2": (left, y2),
+            "offset": -DIM_OFFSET, "vertical": True, "measure": measure})
+    elif "height" in dimension:
         plan["dimensions"].append({
             "p1": (left, top), "p2": (left, bottom),
             "offset": -DIM_OFFSET, "vertical": True,
@@ -736,12 +885,13 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
     # the holes go cannot be made from that drawing - it is the single thing
     # that separated this sheet from a manufacturable one.
     groups = _hole_patterns(circles)
+    placed: set[tuple[float, float]] = set()
     # One step out from whatever overall dimension this view already carries -
     # any of them, not only the width. A view that carries the height alone
     # was starting feature dimensions on the line the height was already
     # drawn on, and a pitch written over an overall length is a drawing
     # someone has to come back and ask about.
-    level = 1 if dimension.strip() else 0
+    level = max(rows, 1) if dimension.strip() else 0
     positioned = 0
 
     def below_line(at_y: float) -> float:
@@ -782,6 +932,13 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
             continue
         for circle in members:
             px, py = to_sheet(circle["u"], circle["v"])
+            # Concentric circles are one feature at one place - a
+            # counterbore, or the wall and bore of a tube seen end-on - and
+            # saying where it is twice is a second dimension line carrying
+            # the same number.
+            if (round(px, 2), round(py, 2)) in placed:
+                continue
+            placed.add((round(px, 2), round(py, 2)))
             on_centre_u = abs(circle["u"] - uc) < PATTERN_TOL
             on_centre_v = abs(circle["v"] - vc) < PATTERN_TOL
             if on_centre_u and on_centre_v:
@@ -871,9 +1028,26 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
             "label": _round_label(group)})
     plan["rounds_uncalled"] = rounds[MAX_ROUND_CALLOUTS:]
 
+    seen: set[tuple] = set()
+    unique = []
+    for dim in plan["dimensions"]:
+        # The offset is deliberately not part of this: two dimension lines
+        # between the same two points carrying the same number are one
+        # dimension drawn twice, and stacking the second one further out
+        # does not make it a different dimension. The end view of a tube
+        # measures the pitch of its wall and then of its bore, which are
+        # the same pitch.
+        key = (round(dim["p1"][0], 2), round(dim["p1"][1], 2),
+               round(dim["p2"][0], 2), round(dim["p2"][1], 2),
+               dim["vertical"], round(dim["measure"], 3))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(dim)
+    plan["dimensions"] = unique
+
     below = bottom + (DIM_OFFSET + level * DIM_STEP + 10.0
                      if ("width" in dimension or level) else 5.0)
-    floor = CELLS_T + (meta["cell"][1] + 1) * CELL_H - 3.0
     plan["label_at"] = (cx, min(below + 5.0, floor))
     return plan
 

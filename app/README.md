@@ -702,6 +702,20 @@ same bend came out `R45` in the front view and `R56` in the view from above.
 The tube itself is called out where it is seen end-on, `Ø22` outside and
 `Ø18` in, which is how the reference drawing specifies it too.
 
+**A bent tube is dimensioned along its path, not around its box.** The
+bounding box of the commuter bar is 648 x 130.25 x 148, and only the first
+of those is a number anyone can work to: 148 is the rise plus a tube, and
+130.25 is the pullback plus a tube seen at an angle. So the projection
+records the path - where each bend starts and stops, taken off the torus
+faces, and where the tube is cut, taken off the centres of its two flat
+faces - and the sheet dimensions that instead: a ladder of widths out to
+each bend tangent, `63.12 / 151.15 / 174.41 / 262.44`, stacked shortest
+first under the overall `648`, with the rise `126` and the pullback `110`
+measured to the centreline. That is the pattern of the reference drawing,
+and it is what a bender is set from. A view slides up its cell far enough
+for the last rung of the ladder to stay inside the frame; every other part
+on the sheet is laid out exactly where it was.
+
 Ask for a named bend - "a drag bar", "mini ape hangers", "a commuter
 handlebar", ドラッグバー - and it is served from the catalogue exactly and
 instantly. Ask for "a handlebar" and it is not: a bar is five dimensions
