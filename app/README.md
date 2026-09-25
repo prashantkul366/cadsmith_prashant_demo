@@ -877,12 +877,26 @@ and a model name:
 # .env - git-ignored, so no key ever reaches the repository
 CADSMITH_LLM_BASE_URL=https://<your-tunnel>/v1
 CADSMITH_LLM_API_KEY=<the endpoint's key, if it wants one>
+CADSMITH_LLM_MODEL=<what it is serving, e.g. Qwen/Qwen3-VL-8B-Instruct>
 ```
 
 Pick **Custom (OpenAI-compatible)** in the app; the model dropdown is filled
-from the endpoint's own `/v1/models`, so whatever it is serving - a Qwen3-VL
-instruct model, for instance - appears there for both the generation and the
-Judge slots. Check it end to end before a demo with:
+from the endpoint's own `/v1/models`, so whatever it is serving appears there
+for both the generation and the Judge slots. `CADSMITH_LLM_MODEL` names it up
+front, which matters where a vLLM server is serving exactly one model and
+nobody but its owner knows the id - without it the app starts with two
+problems to go and fix in the UI.
+
+**The reply is streamed, and that is not cosmetic.** A self-hosted endpoint is
+usually reached through a tunnel or a reverse proxy, and those cut a request
+off when the origin has sent nothing for a while - Cloudflare's limit is 100
+seconds. An 8B model writing a whole CadQuery script goes past that without
+difficulty, and the Coder died on a `524` here while the model was working
+perfectly well. Asking for a stream puts the first token a second or two away
+and leaves nothing idle in between, so the proxy has no reason to intervene;
+the reasoning panel filling in as the model writes comes free with it. An
+endpoint that refuses to stream is asked the old way, once, with a note saying
+so. Check it end to end before a demo with:
 
 ```bash
 .venv/bin/python -m app.tools.doctor        # reachability and the model list

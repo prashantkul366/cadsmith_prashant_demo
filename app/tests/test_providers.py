@@ -63,6 +63,10 @@ class FakeOpenAIServer(BaseHTTPRequestHandler):
     requests: list[dict] = []
     reject_images: bool = False
     wrap_json_in_prose: bool = True
+    #: Every real OpenAI-compatible endpoint streams, and the app asks for a
+    #: stream first because a self-hosted one is usually behind a proxy that
+    #: cuts off a quiet request. Set False to stand in for one that does not.
+    streams: bool = True
 
     def log_message(self, *_args):
         pass
@@ -91,10 +95,30 @@ class FakeOpenAIServer(BaseHTTPRequestHandler):
         system = next((m["content"] for m in body.get("messages", [])
                        if m.get("role") == "system"), "")
         text = self._reply_for(system)
+        if body.get("stream") and FakeOpenAIServer.streams:
+            self._stream(text)
+            return
         self._json(200, {
             "choices": [{"message": {"role": "assistant", "content": text}}],
             "usage": {"prompt_tokens": 1234, "completion_tokens": 567},
         })
+
+    def _stream(self, text: str):
+        """The same reply, in server-sent chunks, usage last."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+
+        def frame(payload: dict) -> None:
+            self.wfile.write(b"data: " + json.dumps(payload).encode() + b"\n\n")
+            self.wfile.flush()
+
+        for at in range(0, len(text), 64):
+            frame({"choices": [{"delta": {"content": text[at:at + 64]}}]})
+        frame({"choices": [],
+               "usage": {"prompt_tokens": 1234, "completion_tokens": 567}})
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
 
     def _reply_for(self, system: str) -> str:
         if "Planner Agent" in system:
@@ -198,6 +222,66 @@ def main() -> int:
           job.tokens.get("input_tokens", 0) >= 1234
           and job.tokens.get("output_tokens", 0) >= 567,
           str(job.tokens))
+
+    print("\nThe reply is streamed, so a proxy has nothing to time out on")
+    # A self-hosted endpoint is usually reached through a tunnel or a
+    # reverse proxy, and those cut a request off when the origin has sent
+    # nothing for a while - Cloudflare's limit is 100 seconds. An 8B model
+    # writing a whole CadQuery script goes past that, and the Coder died on
+    # a 524 while the model was working perfectly well. Streaming keeps the
+    # first byte close and nothing in between idle.
+    FakeOpenAIServer.requests.clear()
+    deltas: list[tuple[str, str]] = []
+    streaming = OpenAICompatibleClient(
+        LLMConfig(provider="custom", kind="openai_compatible", base_url=base_url,
+                  api_key="test-key", generation_model="fake-small",
+                  judge_model="fake-large"),
+        on_delta=lambda kind, text: deltas.append((kind, text)))
+    reply = streaming.messages.create(
+        model="ignored", max_tokens=1024, system="You are the Coder Agent.",
+        messages=[{"role": "user", "content": "Write it."}])
+    check("the request asked for a stream",
+          FakeOpenAIServer.requests[-1].get("stream") is True,
+          str(FakeOpenAIServer.requests[-1].get("stream")))
+    check("and for the usage that does not come with one by default",
+          (FakeOpenAIServer.requests[-1].get("stream_options") or {})
+          .get("include_usage") is True)
+    check("the chunks are reassembled into the whole reply",
+          reply.content[0].text == CODE,
+          f"{len(reply.content[0].text)} chars of {len(CODE)}")
+    check("usage survives the stream",
+          reply.usage.input_tokens == 1234 and reply.usage.output_tokens == 567,
+          f"{reply.usage.input_tokens}/{reply.usage.output_tokens}")
+    check("and the fragments were published as they arrived",
+          len(deltas) > 1 and all(kind == "text:generation" for kind, _ in deltas)
+          and "".join(text for _, text in deltas) == CODE,
+          f"{len(deltas)} fragment(s)")
+
+    print("\nAn endpoint that will not stream is asked the old way")
+    FakeOpenAIServer.requests.clear()
+    FakeOpenAIServer.streams = False
+    notes: list[str] = []
+    stubborn = OpenAICompatibleClient(
+        LLMConfig(provider="custom", kind="openai_compatible", base_url=base_url,
+                  api_key="test-key", generation_model="fake-small",
+                  judge_model="fake-large"),
+        on_note=notes.append)
+    first = stubborn.messages.create(
+        model="ignored", max_tokens=1024, system="You are the Coder Agent.",
+        messages=[{"role": "user", "content": "Write it."}])
+    check("the reply comes back anyway", first.content[0].text == CODE)
+    check("and it said so rather than failing the run",
+          notes and "would not stream" in notes[0], str(notes))
+    tried = len(FakeOpenAIServer.requests)
+    second = stubborn.messages.create(
+        model="ignored", max_tokens=1024, system="You are the Coder Agent.",
+        messages=[{"role": "user", "content": "Again."}])
+    check("the next call does not pay for a failed stream again",
+          second.content[0].text == CODE
+          and len(FakeOpenAIServer.requests) == tried + 1
+          and FakeOpenAIServer.requests[-1].get("stream") is None,
+          f"{len(FakeOpenAIServer.requests) - tried} request(s)")
+    FakeOpenAIServer.streams = True
 
     print("\nA model that refuses images falls back instead of failing")
     FakeOpenAIServer.requests.clear()

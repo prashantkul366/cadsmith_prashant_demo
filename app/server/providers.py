@@ -50,6 +50,11 @@ class ProviderSpec:
     base_url: str = ""
     env_key: str = ""
     env_base_url: str = ""
+    #: Where a self-hosted endpoint's model id comes from. A hosted provider
+    #: has a catalogue of models with a sensible default; a vLLM server is
+    #: usually serving exactly one, and its name is not guessable, so it is
+    #: named beside the URL rather than picked from a list every session.
+    env_model: str = ""
     needs_key: bool = True
     #: Fallback models, used only when the provider cannot be asked what it
     #: has. Every provider here is queried for its real model list first.
@@ -118,9 +123,12 @@ BUILTIN: dict[str, ProviderSpec] = {
         kind="openai_compatible",
         env_key="CADSMITH_LLM_API_KEY",
         env_base_url="CADSMITH_LLM_BASE_URL",
+        env_model="CADSMITH_LLM_MODEL",
         needs_key=False,
         hint="Set CADSMITH_LLM_BASE_URL (and CADSMITH_LLM_API_KEY if needed) "
-             "for vLLM, llama.cpp, Together, Groq, OpenRouter, and so on",
+             "for vLLM, llama.cpp, Together, Groq, OpenRouter, and so on; "
+             "CADSMITH_LLM_MODEL names the model where the endpoint serves "
+             "one, and is otherwise picked in the app",
     ),
 }
 
@@ -248,14 +256,21 @@ def resolve(
     effort: str = "",
 ) -> LLMConfig:
     spec = BUILTIN.get(provider_id) or BUILTIN[DEFAULT_PROVIDER]
+    # What the request asked for, then what the environment names, then the
+    # provider's own default. A self-hosted endpoint has no default because
+    # nobody but its owner knows what it is serving, so naming it in .env is
+    # the difference between the app starting ready and the app starting
+    # with two problems to go and fix in the UI.
+    named = os.getenv(spec.env_model, "").strip() if spec.env_model else ""
+    fallback = named or spec.default_generation_model
     return LLMConfig(
         provider=spec.id,
         kind=spec.kind,
         base_url=_base_url_for(spec),
         api_key=_api_key_for(spec),
-        generation_model=generation_model or spec.default_generation_model,
+        generation_model=generation_model or fallback,
         judge_model=judge_model or spec.default_judge_model
-                    or generation_model or spec.default_generation_model,
+                    or generation_model or fallback,
         judge_vision=judge_vision,
         effort=normalise_effort(effort) or DEFAULT_EFFORT,
     )
@@ -742,9 +757,15 @@ def repair_json(text: str) -> str:
 class OpenAICompatibleClient:
     """Presents the Anthropic client surface over /chat/completions."""
 
-    def __init__(self, config: LLMConfig, on_note=None):
+    def __init__(self, config: LLMConfig, on_note=None, on_delta=None):
         self.config = config
         self._on_note = on_note
+        self._coalescer = _Coalescer(
+            lambda kind, text: on_delta and on_delta(kind, text))
+        #: Cleared the first time the endpoint refuses a streamed request, so
+        #: a server that only answers in one piece is asked that way from
+        #: then on rather than paying for a failed stream every call.
+        self._stream_ok = True
 
     # -- surface ------------------------------------------------------------
 
@@ -764,14 +785,14 @@ class OpenAICompatibleClient:
             payload_messages, _ = _strip_images(payload_messages)
 
         try:
-            text, usage = self._post(target, payload_messages, max_tokens)
+            text, usage = self._post(target, payload_messages, max_tokens, role)
         except _VisionUnsupported:
             payload_messages, stripped = _strip_images(payload_messages)
             if stripped:
                 self._note(
                     f"{target} rejected the rendered image; the Judge is "
                     f"running on kernel metrics alone.")
-            text, usage = self._post(target, payload_messages, max_tokens)
+            text, usage = self._post(target, payload_messages, max_tokens, role)
 
         if _JSON_EXPECTED in system:
             text = repair_json(text)
@@ -798,35 +819,145 @@ class OpenAICompatibleClient:
         return "judge" if system.startswith("You are the Validator Agent") \
             else "generation"
 
-    def _post(self, model: str, messages: list[dict],
-              max_tokens: int) -> tuple[str, _Usage]:
+    def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
+        return headers
 
-        body = {
+    def _body(self, model: str, messages: list[dict],
+              max_tokens: int) -> dict:
+        return {
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": 0,
         }
 
+    def _fail(self, status: int, detail: str, model: str) -> None:
+        if status == 400 and _VISION_ERROR.search(detail):
+            raise _VisionUnsupported(detail)
+        raise RuntimeError(
+            f"{self.config.provider} returned {status} for "
+            f"model '{model}': {detail}")
+
+    def _post(self, model: str, messages: list[dict], max_tokens: int,
+              role: str = "generation") -> tuple[str, _Usage]:
+        if self._stream_ok:
+            try:
+                return self._post_streaming(model, messages, max_tokens, role)
+            except _VisionUnsupported:
+                raise
+            except _StreamUnsupported as exc:
+                self._stream_ok = False
+                self._note(
+                    f"{self.config.base_url} would not stream ({exc}); "
+                    f"asking for the whole reply at once instead.")
+        return self._post_whole(model, messages, max_tokens)
+
+    def _post_streaming(self, model: str, messages: list[dict],
+                        max_tokens: int, role: str) -> tuple[str, _Usage]:
+        """Read the reply as it is written.
+
+        Not for the look of it. A self-hosted endpoint is usually reached
+        through a reverse proxy or a tunnel, and those cut a request off
+        when the origin has sent nothing for a while - Cloudflare's limit is
+        100 seconds, and an 8B model writing a whole CadQuery script goes
+        past that without difficulty. It killed the Coder here with a 524
+        while the model was still working perfectly well. Streaming means
+        the first token arrives in a second or two and nothing in between is
+        ever idle, so the proxy has no reason to intervene.
+        """
+        body = self._body(model, messages, max_tokens)
+        body["stream"] = True
+        # Usage does not come with the chunks unless it is asked for. An
+        # endpoint that does not know the option ignores it, and the run
+        # simply reports no tokens for that call.
+        body["stream_options"] = {"include_usage": True}
+
+        parts: list[str] = []
+        reasoning: list[str] = []
+        usage = _Usage()
+        try:
+            with httpx.stream("POST",
+                              f"{self.config.base_url}/chat/completions",
+                              headers=self._headers(), json=body,
+                              timeout=REQUEST_TIMEOUT) as response:
+                if response.status_code >= 400:
+                    detail = response.read().decode("utf-8", "replace")[:600]
+                    if response.status_code in (400, 404, 422):
+                        # Could be the stream parameter, could be the
+                        # images. The vision message is the specific one,
+                        # so it wins; anything else is worth one retry
+                        # without streaming before giving up on the call.
+                        if _VISION_ERROR.search(detail):
+                            raise _VisionUnsupported(detail)
+                        raise _StreamUnsupported(f"{response.status_code}")
+                    self._fail(response.status_code, detail, model)
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    chunk = line[5:].strip()
+                    if not chunk or chunk == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(chunk)
+                    except json.JSONDecodeError:
+                        continue
+                    raw_usage = event.get("usage") or {}
+                    if raw_usage:
+                        usage = _Usage(
+                            input_tokens=int(raw_usage.get("prompt_tokens", 0) or 0),
+                            output_tokens=int(raw_usage.get("completion_tokens", 0) or 0))
+                    for choice in event.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        piece = delta.get("content") or ""
+                        if piece:
+                            parts.append(piece)
+                            self._coalescer.add(f"text:{role}", piece)
+                        thought = (delta.get("reasoning")
+                                   or delta.get("reasoning_content") or "")
+                        if thought:
+                            reasoning.append(thought)
+                            self._coalescer.add(f"thinking:{role}", thought)
+        except (_VisionUnsupported, _StreamUnsupported, RuntimeError):
+            raise
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"Could not reach {self.config.provider} at "
+                f"{self.config.base_url}: {exc}") from exc
+        finally:
+            self._coalescer.flush()
+
+        text = "".join(parts)
+        if not text.strip():
+            if reasoning:
+                raise RuntimeError(
+                    f"{self.config.provider} model '{model}' replied with "
+                    f"reasoning only and no content. The pipeline reads the "
+                    f"content field, so this model cannot be used for that "
+                    f"role.")
+            # Nothing at all came back. A server that acknowledges the
+            # stream parameter and then says nothing is not one to keep
+            # streaming to.
+            raise _StreamUnsupported("the stream carried no content")
+        return text, usage
+
+    def _post_whole(self, model: str, messages: list[dict],
+                    max_tokens: int) -> tuple[str, _Usage]:
         try:
             response = httpx.post(
                 f"{self.config.base_url}/chat/completions",
-                headers=headers, json=body, timeout=REQUEST_TIMEOUT)
+                headers=self._headers(),
+                json=self._body(model, messages, max_tokens),
+                timeout=REQUEST_TIMEOUT)
         except httpx.HTTPError as exc:
             raise RuntimeError(
                 f"Could not reach {self.config.provider} at "
                 f"{self.config.base_url}: {exc}") from exc
 
         if response.status_code >= 400:
-            detail = response.text[:600]
-            if response.status_code == 400 and _VISION_ERROR.search(detail):
-                raise _VisionUnsupported(detail)
-            raise RuntimeError(
-                f"{self.config.provider} returned {response.status_code} for "
-                f"model '{model}': {detail}")
+            self._fail(response.status_code, response.text[:600], model)
 
         payload = response.json()
         choices = payload.get("choices") or []
@@ -1096,13 +1227,19 @@ class _VisionUnsupported(RuntimeError):
     """The model refused an image; retry without one."""
 
 
+class _StreamUnsupported(RuntimeError):
+    """The endpoint would not stream; ask for the whole reply instead."""
+
+
 def build_client(config: LLMConfig, on_note=None, on_delta=None):
     """Return a client for this configuration.
 
     ``on_delta(kind, text)`` receives streamed fragments as they arrive, where
-    kind is "thinking:<role>" or "text:<role>". Only the Claude backends
-    produce them; the OpenAI-compatible adapter is unchanged.
+    kind is "thinking:<role>" or "text:<role>". Both backends produce them:
+    the OpenAI-compatible one streams because a self-hosted endpoint is
+    usually behind a proxy that cuts off a request the origin has been quiet
+    on, and showing the reply as it is written comes free with that.
     """
     if config.kind in ("anthropic", "bedrock"):
         return ClaudeClient(config, on_note=on_note, on_delta=on_delta)
-    return OpenAICompatibleClient(config, on_note=on_note)
+    return OpenAICompatibleClient(config, on_note=on_note, on_delta=on_delta)
