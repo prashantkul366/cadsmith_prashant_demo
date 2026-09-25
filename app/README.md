@@ -866,6 +866,57 @@ rejects it — so the refinement loop is exercised rather than skipped.
 Better than a real key for reproducing a failure, because the misbehaviour is
 deterministic.
 
+## Editing a part that arrived without a feature tree
+
+A STEP file from NX or SolidWorks is a *dead* solid: faces, edges and the
+surfaces under them, and nothing else. Neither AP203, AP214 nor AP242
+carries construction history, and neither does Parasolid XT - the tree
+stays inside the CAD that made it. So `app/server/direct.py` does not
+import a tree, it recovers one, which is what NX calls Synchronous
+Technology and SolidWorks calls Direct Editing.
+
+```
+Solid: 120 x 80 x 12 mm, volume 103,623 mm3
+Features:
+  hole_8p5: 4x Ø8.5 through hole, rectangular pattern 90 x 50
+  hole_30:  1x Ø30 through hole
+  fillet_6: 4x R6 fillet
+```
+
+That is read from topology alone, off a file this app did not write. A
+full-sweep cylinder with material outside it is a hole; a partial sweep is
+a blend along an edge; a torus is a corner fillet. The positions give the
+pattern, which is what lets a person say "the mounting holes" and be
+understood.
+
+**Selectors are re-derived, never stored.** The oldest sore in this field
+is topological naming: face 7 is not face 7 after the first edit. Nothing
+here holds a face between edits - a selector is a description, resolved
+against the current solid every time - so a selector that no longer matches
+fails by name instead of quietly editing something else.
+
+**The model names the edit; the kernel performs it.** Asked to write the
+geometry for a part like this, a model produces a plausible script and a
+wrong solid - measured on the agent path, four iterations, four wrong
+parts. Asked which of three named features to change and what to, the same
+8B model answers in forty tokens:
+
+| Asked for | Chose | Result |
+|---|---|---|
+| "open the mounting holes out to M10 clearance, 11 mm" | `resize_hole hole_8p5 → 11` | 103,623 → 101,785 mm³ |
+| "get rid of the corner fillets" | `remove fillet_6` | 15 → 11 faces |
+| "the big bore isn't needed, remove it" | `remove hole_30` | 103,623 → 112,105 mm³ |
+| "break the top edges with a 2 mm radius" | `add_fillet R2 top` | 15 → 28 faces |
+| "make it out of titanium" | *nothing* | "edits only modify geometry" |
+
+Every volume above is exactly the metal added or removed, which is the
+point: the edit is checked by measuring the result, not by trusting the
+operation. Three verbs so far - `remove`, `resize_hole`, `add_fillet`.
+Moving a face and re-solving its neighbours is the obvious absentee, and it
+is left out on purpose: that is where OCCT is weaker than the kernels NX
+and SolidWorks sit on, so the vocabulary is built around removal and
+replacement instead.
+
 ## Running against a self-hosted vLLM
 
 Any OpenAI-compatible endpoint works the same way, including a vLLM server
@@ -947,6 +998,8 @@ bends the catalogue serves need no model at all.
 .venv/bin/python -m pytest app/tests/test_encoding.py   # UTF-8 everywhere (Windows)
 .venv/bin/python -m app.tests.test_handlebars       # the case study: ten bends
                                                     # built, measured and drawn
+.venv/bin/python -m app.tests.test_direct           # editing an imported solid
+                                                    # that has no feature tree
 .venv/bin/python -m app.tests.test_layout           # panel geometry, real browser
 .venv/bin/python -m app.tests.test_thinking_stream  # streamed reasoning, and the
                                                     # effort the run asked for
