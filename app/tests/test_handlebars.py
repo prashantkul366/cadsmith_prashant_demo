@@ -233,6 +233,48 @@ def main() -> int:
         check(f"{view['name']} puts its label below them, not through them",
               not below, str([round(y, 1) for y in below]))
 
+    print("\nEvery bend answers to the words the trade uses for it")
+    # The chart a custom shop sells off says "mini apes" and "apes"; the
+    # catalogue said those were not handlebars at all. And "a high road
+    # handlebar" came back as the medium bend, because the sentence also
+    # contains "road handlebar" - a silent substitution, which is the one
+    # thing the router exists to prevent.
+    spoken = {
+        "a drag bar": "drag", "a drag handlebar": "drag",
+        "tracker bars": "tracker", "a tracker handlebar": "tracker",
+        "an ultra low handlebar": "road_ultra_low",
+        "an ultra-low bend handlebar": "road_ultra_low",
+        "a low bend handlebar": "road_low", "a low road handlebar": "road_low",
+        "a road handlebar": "road_medium", "a road bar": "road_medium",
+        "a medium bend handlebar": "road_medium",
+        "a high bend handlebar": "road_high",
+        "a high road handlebar": "road_high",
+        "a commuter handlebar": "commuter",
+        "a classic handlebar": "classic", "a roadster handlebar": "classic",
+        "mini apes": "mini_ape", "mini ape hangers": "mini_ape",
+        "a mini-ape handlebar": "mini_ape",
+        "apes": "ape", "ape hangers": "ape", "an ape bar": "ape",
+    }
+    wrong = []
+    for phrase, style in spoken.items():
+        routed = router.select(phrase)
+        if routed is None or not routed.part.id.startswith(f"handlebar_{style}_"):
+            wrong.append(f"{phrase} -> "
+                         f"{routed.part.id if routed else 'nothing'}")
+    check("all ten answer to their own names, in every phrasing",
+          not wrong, "; ".join(wrong[:3]))
+    check("a qualifier beats the family it qualifies",
+          router.select("a high road handlebar").part.id.startswith(
+              "handlebar_road_high_")
+          and router.select("mini ape hangers").part.id.startswith(
+              "handlebar_mini_ape_"))
+    # "apes" is a bar. "shapes", "aperture" and "landscape" contain it and
+    # are not, which is why the nouns are matched on word boundaries.
+    for innocent in ("a bracket with a tapered shape", "an aperture plate",
+                     "a landscape bracket", "a grip for a shaped handle"):
+        check(f"'{innocent}' is not read as a handlebar",
+              router.select(innocent) is None and not router.options(innocent))
+
     print("\nOne request with several right answers offers all of them")
     # No bend named. Four bends rather than a refusal, and rather than one
     # of the ten picked quietly.

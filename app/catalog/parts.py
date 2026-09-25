@@ -361,12 +361,22 @@ _CUSTOM_CONTEXT = (
 #: attach to a bar and none of them is one, so they fall through to the
 #: pipeline the way "a bearing housing for a 6203" does.
 _BAR_NOUNS = ("handlebar", "handle bar", "drag bar", "ape hanger",
-              "ape hangers", "tracker bar", "bars for")
+              "ape bar", "mini ape", "ape", "tracker bar", "road bar",
+              "bars for")
+#: Matched on word boundaries rather than as substrings, with an optional
+#: plural. The custom trade says "mini apes" and "apes" as often as it says
+#: "ape hangers", and a substring test cannot be told that "apes" is a bar
+#: while "shapes" and "aperture" are not.
+_BAR_NOUN_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(word) for word in _BAR_NOUNS) + r")s?\b",
+    re.I)
 _BAR_CONTEXT = ("riser", "clamp", "grip", "bar end", "bar-end", "barend",
                 "mirror", "lever", "perch", "throttle", "switch", "weight",
                 "mount", "holder", "stem")
 
-#: Named bends, longest name first so "mini ape" is not read as "ape".
+#: Named bends. Matched longest-first - see ``_BAR_STYLE_ORDER`` - because
+#: several of these contain each other: "a high road handlebar" was coming
+#: back as the medium bend, since "road handlebar" is also in the sentence.
 _BAR_STYLES = (
     ("mini ape", "mini_ape"), ("mini-ape", "mini_ape"),
     ("ape hanger", "ape"), ("ape bar", "ape"), ("apes", "ape"),
@@ -375,10 +385,41 @@ _BAR_STYLES = (
     ("classic", "classic"), ("roadster", "classic"),
     ("ultra low", "road_ultra_low"), ("ultra-low", "road_ultra_low"),
     ("low bend", "road_low"), ("low road", "road_low"),
-    ("medium bend", "road_medium"), ("road bar", "road_medium"),
-    ("road handlebar", "road_medium"),
+    ("medium bend", "road_medium"),
     ("high bend", "road_high"), ("high road", "road_high"),
 )
+
+#: Triggers that name the family rather than the bend, and so are read only
+#: when nothing above matched. "A road handlebar" means the medium bend
+#: because that is the middle of the range - but "a high road handlebar"
+#: contains those same words and means the high one. Longest-first cannot
+#: settle that, because the vaguer trigger is the longer string.
+_BAR_FAMILY = (
+    ("road bar", "road_medium"), ("road handlebar", "road_medium"),
+)
+
+def _named_bend(lowered: str) -> Optional[str]:
+    """Which bend this sentence names, when it names two.
+
+    "Mini ape hangers" carries both "mini ape" and "ape hanger"; "a high
+    road handlebar" carries both "high road" and "road handlebar". Neither
+    longest-first nor table order settles those - "ape hanger" is the longer
+    string and the vaguer bend - so the leftmost match wins, and the longer
+    one only breaks a tie at the same position.
+
+    That is a rule about English rather than about handlebars: a qualifier
+    comes before the noun it qualifies, so the match that starts earliest is
+    the most specific thing the sentence said.
+    """
+    best: Optional[tuple[int, int, str]] = None
+    for word, name in _BAR_STYLES:
+        at = lowered.find(word)
+        if at < 0:
+            continue
+        ranked = (at, -len(word), name)
+        if best is None or ranked < best:
+            best = ranked
+    return best[2] if best else None
 
 #: A width is three or four digits of millimetres, or a couple of dozen
 #: inches. Neither can be confused with a tube size, which is the other
@@ -1321,14 +1362,17 @@ def _bar_request(text: str):
     about what was asked for.
     """
     lowered = text.lower()
-    if not any(word in lowered for word in _BAR_NOUNS):
+    if not _BAR_NOUN_RE.search(lowered):
         return None
     # A riser, a clamp, a grip and a bar-end weight all attach to a bar and
     # none of them is one.
     if any(word in lowered for word in _BAR_CONTEXT):
         return None
 
-    style = next((name for word, name in _BAR_STYLES if word in lowered), None)
+    style = _named_bend(lowered)
+    if style is None:
+        style = next((name for word, name in _BAR_FAMILY if word in lowered),
+                     None)
     overrides: dict[str, float] = {}
     width = _BAR_WIDTH_MM.search(text)
     inches = _BAR_WIDTH_IN.search(text)
