@@ -25,6 +25,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+from app.catalog import japanese
+
 # A top-level parametric assignment: `name = 12.5  # mm`.  Anchored to column
 # zero so locals inside functions or loops are left alone.
 _ASSIGNMENT = re.compile(
@@ -71,6 +73,16 @@ _SHAPE_ONLY = re.compile(
 _MAYBE_STRUCTURAL = re.compile(r"\b(add|remove|delete|cut|drill|move)\b")
 
 _COUNT_TOKENS = {"count", "num", "number", "qty", "teeth"}
+
+# The half of a compound parameter name that says *what is measured*, as
+# opposed to the half that says *of what*: bore_diameter is the diameter of
+# the bore, teeth_number the number of the teeth.  Anything not in here is
+# read as the feature half.
+_MEASUREMENTS = {
+    "diameter", "dia", "radius", "rad", "thickness", "depth", "height",
+    "length", "width", "angle", "size", "count", "num", "number", "qty",
+    "spacing", "gap", "clearance", "distance", "offset",
+}
 _LENGTH_UNIT = re.compile(r"\b(mm|millimet(?:er|re)s?|cm|degrees?|deg)\b|°|⌀")
 
 
@@ -160,14 +172,29 @@ def _score(parameter: Parameter, words: set[str], counting: bool) -> int:
     hits = parts & words
     if not hits:
         return 0
+
+    # A compound name identifies a feature as well as a dimension, and the
+    # feature half is the one that has to be named.  "set the diameter to
+    # 50mm" on a gear otherwise lands on bore_diameter - the one diameter
+    # nobody meant, and one that would swallow the whole part.  A name that
+    # is a bare dimension (thickness, length) has no feature half to insist
+    # on, so those still take an unqualified instruction.
+    feature = parts - _MEASUREMENTS
+    if feature and not (feature & words):
+        return 0
+
     # Every word of the name being present is a much stronger signal than one
     # of several ("hole diameter" beating "diameter" when both could match).
     score = len(hits) * 2 + (3 if parts <= words else 0)
 
     is_count = bool(parts & _COUNT_TOKENS)
-    if counting and is_count:
+    # The penalty is for an instruction that is plainly *measuring* - "8mm
+    # holes" must not change hole_count.  An instruction that says a counting
+    # word itself is not measuring, whether or not it asks for a delta:
+    # "make it 40 teeth" is as much a count as "four more teeth".
+    if is_count and (counting or hits & _COUNT_TOKENS):
         score += 3
-    elif not counting and is_count:
+    elif is_count:
         score -= 3
     return score
 
@@ -186,6 +213,16 @@ def plan_edit(code: str, instruction: str) -> EditPlan:
     if not available:
         return EditPlan([], "the script declares no top-level parameters")
 
+    # Every pattern below reads English words, so a Japanese instruction
+    # matches none of them and lands on the Refiner - slower, and with no
+    # model backend, refused outright. Rewriting it into the vocabulary those
+    # patterns already speak keeps the guard intact: English text never
+    # reaches the rewrite and so cannot be changed by it. The refusals are
+    # what matter most - 「補強リブを追加する」 has to still come out as a rib,
+    # or the editor patches some unrelated number and reports it as one.
+    if japanese.has_japanese(instruction):
+        instruction = japanese.to_english_instruction(instruction)
+
     text = instruction.lower().strip()
     words = _instruction_tokens(text)
     values = _numbers(text)
@@ -197,6 +234,17 @@ def plan_edit(code: str, instruction: str) -> EditPlan:
     if not values:
         return EditPlan([], "no target value was given")
 
+    # A qualifier the script does not know about means the instruction is
+    # about a feature that does not exist here - "the flange diameter" on a
+    # script with only hole_diameter must not quietly resize the holes.
+    # Checked before the scoring because it explains the refusal better than
+    # any score can, and because it holds whatever the scores turn out to be.
+    known = set().union(*(_tokens(p.name) for p in available.values()))
+    stray = _domain_words(text) - known
+    if stray:
+        return EditPlan(
+            [], f"the script has no {' or '.join(sorted(stray))} parameter")
+
     delta = bool(_INCREASE.search(text) or _DECREASE.search(text))
     # "two more holes" counts; "8mm holes" measures.
     counting = delta and not _LENGTH_UNIT.search(text)
@@ -207,21 +255,24 @@ def plan_edit(code: str, instruction: str) -> EditPlan:
     )
     best, best_score = scored[0]
     if best_score <= 0:
+        # A dimension the script measures of something in particular, asked
+        # for without saying of what: "the thickness" where there is a base
+        # and a support one, or "the diameter" of a gear that declares only a
+        # bore. Naming the candidates is far more use than "no parameter
+        # matches", which is true only when nothing was recognised at all.
+        near = sorted(p.name for p in available.values()
+                      if _tokens(p.name) & words)
+        if len(near) > 1:
+            return EditPlan([], f"ambiguous between {' and '.join(near)}")
+        if near:
+            return EditPlan(
+                [], f"say which one - the script declares only {near[0]}")
         return EditPlan([], "no parameter matches the words used")
 
     runner_up = scored[1][1] if len(scored) > 1 else 0
     if runner_up == best_score:
         tied = [p.name for p, s in scored if s == best_score]
         return EditPlan([], f"ambiguous between {' and '.join(tied)}")
-
-    # A qualifier the script does not know about means the instruction is
-    # about a feature that does not exist here - "the flange diameter" on a
-    # script with only hole_diameter must not quietly resize the holes.
-    known = set().union(*(_tokens(p.name) for p in available.values()))
-    stray = _domain_words(text) - known
-    if stray:
-        return EditPlan(
-            [], f"the script has no {' or '.join(sorted(stray))} parameter")
 
     # Adding or removing usually means new geometry, unless it is plainly
     # more of something the script already counts.
@@ -293,3 +344,106 @@ def apply_changes(code: str, changes: list[Change]) -> str:
 
 def describe(changes: list[Change]) -> str:
     return ", ".join(f"{c.name} {c.old:g} → {c.new:g}" for c in changes)
+
+
+# ---------------------------------------------------------------------------
+# The same parameters, described well enough to put a control on each
+# ---------------------------------------------------------------------------
+
+#: Names that are a count of something rather than a measurement of it.
+#: Wider than ``_COUNT_TOKENS``, which exists to disambiguate an instruction;
+#: this one only has to recognise something that is not a length.
+_COUNTING = _COUNT_TOKENS | {
+    "sides", "segments", "steps", "starts", "spokes", "coil", "coils",
+    "turns", "flutes", "lobes",
+}
+
+#: Names measured in degrees. Anything else with a length-like name is read
+#: as millimetres, which is what the kernel reports and what every dimension
+#: in this app is quoted in.
+_ANGULAR = {"angle", "angles", "deg", "degrees", "taper", "helix", "twist"}
+
+
+def _kind(name: str) -> str:
+    tokens = _tokens(name)
+    if tokens & _ANGULAR:
+        return "angle"
+    if tokens & _COUNTING:
+        return "count"
+    return "length"
+
+
+def _step_for(span: float) -> float:
+    """A step fine enough to be useful and coarse enough to be usable."""
+    for ceiling, step in ((2.0, 0.01), (20.0, 0.1), (200.0, 0.5), (2000.0, 1.0)):
+        if span <= ceiling:
+            return step
+    return 5.0
+
+
+def _range_for(kind: str, value: float) -> tuple[float, float, float]:
+    """A slider range around the value the script currently declares.
+
+    Anchored to that value rather than to a table of part types, because
+    there is no such table: the scripts are written by a model. Three times
+    the current value covers the changes people actually make, and the number
+    field beside the slider takes anything the kernel will build, so the
+    range bounds the *slider*, never the parameter.
+    """
+    if kind == "count":
+        return 1.0, max(12.0, round(value * 3)), 1.0
+    if kind == "angle":
+        # Bounded by the half-turn, but still anchored: a gear's 20 degree
+        # pressure angle on a 1-179 slider is a sliver, and the useful moves
+        # are all within a few degrees of where it already is.
+        return 1.0, min(180.0, max(45.0, round(value * 2))), 0.5
+    high = max(10.0, round(value * 3, 6)) if value > 0 else 10.0
+    step = _step_for(high)
+    return step, high, step
+
+
+def _label(name: str) -> str:
+    """``hole_diameter`` -> ``Hole diameter``.
+
+    Not translated: these are the script's own identifiers, and a person
+    editing a value needs to see the name the code uses. The unit beside it
+    is what carries the meaning, and that is a symbol in either language.
+    """
+    words = name.replace("_", " ").strip()
+    return words[:1].upper() + words[1:] if words else name
+
+
+def describe_parameters(code: str) -> list[dict]:
+    """Every top-level parameter, with enough about it to draw a control.
+
+    Read from the same assignments ``apply_changes`` rewrites, so a control
+    that appears here is one the patcher can actually change - the browser
+    never decides for itself what counts as a parameter.
+    """
+    described = []
+    for parameter in parameters(code).values():
+        # What the name means and how the number is written are separate
+        # questions. A spring's `active_coils = 8.0` is a count whatever its
+        # spelling - labelling it 8 mm is simply wrong - while whether the
+        # patcher writes 12 or 12.0 stays with is_integer, which is what
+        # apply_changes honours.
+        kind = _kind(parameter.name)
+        low, high, step = _range_for(kind, parameter.value)
+        # A value already outside the computed range is the range's problem,
+        # not the value's: widen rather than clamp, or the slider would open
+        # holding a number the script does not have.
+        low = min(low, parameter.value)
+        high = max(high, parameter.value)
+        described.append({
+            "name": parameter.name,
+            "label": _label(parameter.name),
+            "value": parameter.value,
+            "line": parameter.line,
+            "kind": kind,
+            "unit": {"angle": "°", "count": "", "length": "mm"}[kind],
+            "integer": parameter.is_integer,
+            "min": low,
+            "max": high,
+            "step": step,
+        })
+    return described

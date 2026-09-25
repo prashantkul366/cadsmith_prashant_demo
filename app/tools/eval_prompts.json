@@ -1,0 +1,457 @@
+{
+  "_comment": [
+    "Prompts the app is graded on, with what a kernel can settle about each.",
+    "",
+    "Every expectation here is a measurement, never a matter of taste: a",
+    "bounding box, a hole count, a bore diameter, a volume. That is the whole",
+    "point - a score you can argue with is not a baseline. Anything about a",
+    "part that only a person can judge stays out of this file and goes to a",
+    "person.",
+    "",
+    "bbox is [xlen, ylen, zlen] in mm and may hold nulls for axes the prompt",
+    "does not fix. holes counts through and blind bores. bore_dia lists the",
+    "diameters that must appear, each once. volume_mm3 is checked to",
+    "volume_pct, which defaults to 10 - loose on purpose, because it is there",
+    "to catch a part built at the wrong scale, not to grade a fillet.",
+    "",
+    "catalogue: true marks a request the standard-parts catalogue should",
+    "answer with no model call at all. Those are the cheapest checks in the",
+    "file and the ones most likely to regress silently.",
+    "tier is easy | medium | hard | very hard | catalogue, so a run can be read by difficulty rather than as one number. A hard case with an empty expect block is still scored: built at all, and watertight, which for an open-ended request is the measure that matters."
+  ],
+  "cases": [
+    {
+      "id": "block-plain",
+      "prompt": "A rectangular block 50mm long, 30mm wide and 20mm tall.",
+      "expect": {
+        "bbox": [
+          50,
+          30,
+          20
+        ],
+        "holes": 0,
+        "volume_mm3": 30000
+      },
+      "tier": "easy"
+    },
+    {
+      "id": "cylinder-bore",
+      "prompt": "A cylinder 150mm diameter and 50mm long with a 5mm diameter hole through the centre.",
+      "expect": {
+        "bbox": [
+          150,
+          150,
+          50
+        ],
+        "holes": 1,
+        "bore_dia": [
+          5
+        ]
+      },
+      "tier": "easy"
+    },
+    {
+      "id": "plate-four-holes",
+      "prompt": "A flat plate 100mm by 60mm by 8mm thick with four 6mm holes, one 10mm in from each corner.",
+      "expect": {
+        "bbox": [
+          100,
+          60,
+          8
+        ],
+        "holes": 4,
+        "bore_dia": [
+          6,
+          6,
+          6,
+          6
+        ]
+      },
+      "tier": "easy"
+    },
+    {
+      "id": "plate-counterbore",
+      "prompt": "A steel plate 80mm square and 12mm thick with a single 8mm hole through the centre.",
+      "expect": {
+        "bbox": [
+          80,
+          80,
+          12
+        ],
+        "holes": 1,
+        "bore_dia": [
+          8
+        ]
+      },
+      "tier": "easy"
+    },
+    {
+      "id": "tube",
+      "prompt": "A tube 40mm outside diameter, 30mm inside diameter and 60mm long.",
+      "expect": {
+        "bbox": [
+          40,
+          40,
+          60
+        ],
+        "holes": 1,
+        "bore_dia": [
+          30
+        ]
+      },
+      "tier": "easy"
+    },
+    {
+      "id": "l-bracket",
+      "prompt": "An L-shaped bracket, 80mm by 60mm, 5mm wall thickness, 40mm wide.",
+      "expect": {
+        "bbox": [
+          80,
+          40,
+          60
+        ]
+      },
+      "tier": "medium"
+    },
+    {
+      "id": "hex-prism",
+      "prompt": "A hexagonal prism 30mm across the flats and 25mm tall.",
+      "expect": {
+        "bbox": [
+          null,
+          null,
+          25
+        ],
+        "holes": 0
+      },
+      "tier": "medium"
+    },
+    {
+      "id": "flange",
+      "prompt": "A round flange 120mm outside diameter, 15mm thick, with a 40mm bore and six 9mm bolt holes on a 90mm pitch circle.",
+      "expect": {
+        "bbox": [
+          120,
+          120,
+          15
+        ],
+        "holes": 7,
+        "bore_dia": [
+          9,
+          9,
+          9,
+          9,
+          9,
+          9,
+          40
+        ]
+      },
+      "tier": "medium"
+    },
+    {
+      "id": "shaft-step",
+      "prompt": "A stepped shaft: 20mm diameter for 40mm long, then 12mm diameter for 30mm long.",
+      "expect": {
+        "bbox": [
+          20,
+          20,
+          70
+        ],
+        "holes": 0
+      },
+      "tier": "medium"
+    },
+    {
+      "id": "spacer",
+      "prompt": "A spacer 25mm outside diameter, 10.5mm bore, 8mm long.",
+      "expect": {
+        "bbox": [
+          25,
+          25,
+          8
+        ],
+        "holes": 1,
+        "bore_dia": [
+          10.5
+        ]
+      },
+      "tier": "easy"
+    },
+    {
+      "id": "cover-plate",
+      "prompt": "A cover plate 150mm by 100mm by 6mm with a 50mm diameter hole in the middle.",
+      "expect": {
+        "bbox": [
+          150,
+          100,
+          6
+        ],
+        "holes": 1,
+        "bore_dia": [
+          50
+        ]
+      },
+      "tier": "easy"
+    },
+    {
+      "id": "angle-bar",
+      "prompt": "An equal angle bar, 50mm by 50mm legs, 6mm thick, 200mm long.",
+      "expect": {
+        "bbox": [
+          200,
+          50,
+          50
+        ]
+      },
+      "tier": "medium"
+    },
+    {
+      "id": "washer-catalogue",
+      "prompt": "An M10 flat washer.",
+      "expect": {
+        "bbox": [
+          20,
+          20,
+          2
+        ],
+        "holes": 1,
+        "bore_dia": [
+          10.5
+        ],
+        "catalogue": true
+      },
+      "tier": "catalogue"
+    },
+    {
+      "id": "bearing-catalogue",
+      "prompt": "A 6203 ball bearing.",
+      "_note": "Three bores, not one: the 17mm shaft bore plus the two raceway faces between the rings, which are cylindrical voids and are counted as such.",
+      "expect": {
+        "bbox": [
+          40,
+          40,
+          12
+        ],
+        "holes": 3,
+        "bore_dia": [
+          17
+        ],
+        "catalogue": true
+      },
+      "tier": "catalogue"
+    },
+    {
+      "id": "screw-catalogue",
+      "prompt": "An M8x30 socket head cap screw.",
+      "expect": {
+        "catalogue": true
+      },
+      "tier": "catalogue"
+    },
+    {
+      "id": "gear-catalogue",
+      "prompt": "A 20 tooth spur gear, module 2.",
+      "_note": "Tip diameter is module x (teeth + 2) = 44 by definition, which is the check worth making. Face width and bore are the router's defaults for an unspecified gear - five modules and 8mm - not the builder's own signature defaults.",
+      "expect": {
+        "bbox": [
+          44,
+          44,
+          10
+        ],
+        "bore_dia": [
+          8
+        ],
+        "catalogue": true
+      },
+      "tier": "catalogue"
+    },
+    {
+      "id": "nut-catalogue",
+      "prompt": "An M12 hex nut.",
+      "expect": {
+        "holes": 1,
+        "catalogue": true
+      },
+      "tier": "catalogue"
+    },
+    {
+      "id": "pin-catalogue",
+      "prompt": "A 6mm dowel pin 30mm long.",
+      "expect": {
+        "bbox": [
+          6,
+          6,
+          30
+        ],
+        "holes": 0,
+        "catalogue": true
+      },
+      "tier": "catalogue"
+    },
+    {
+      "id": "motor-mount",
+      "prompt": "A NEMA 17 motor mounting plate, 6mm thick, with the four mounting holes and a 23mm central clearance hole.",
+      "expect": {
+        "holes": 5
+      },
+      "tier": "medium"
+    },
+    {
+      "id": "pulley-catalogue",
+      "prompt": "A GT2 timing pulley with 20 teeth and a 5mm bore.",
+      "expect": {
+        "bore_dia": [
+          5
+        ],
+        "catalogue": true
+      },
+      "tier": "catalogue"
+    },
+    {
+      "id": "shaft-keyway",
+      "tier": "hard",
+      "prompt": "A 25mm diameter shaft, 120mm long, with a 8mm wide by 4mm deep keyway 40mm long starting 10mm from one end.",
+      "expect": {
+        "bbox": [
+          25,
+          25,
+          120
+        ]
+      }
+    },
+    {
+      "id": "bearing-housing",
+      "tier": "hard",
+      "prompt": "A bearing housing block 90mm by 70mm by 40mm with a 47mm bore through the middle for a 6204 bearing and four M6 clearance holes on a 70mm by 50mm pattern.",
+      "expect": {
+        "bbox": [
+          90,
+          70,
+          40
+        ],
+        "holes": 5,
+        "bore_dia": [
+          47,
+          6.6,
+          6.6,
+          6.6,
+          6.6
+        ]
+      }
+    },
+    {
+      "id": "pipe-flange",
+      "tier": "hard",
+      "prompt": "A pipe flange 165mm outside diameter, 20mm thick, with an 80mm bore and eight 18mm bolt holes on a 127mm pitch circle.",
+      "expect": {
+        "bbox": [
+          165,
+          165,
+          20
+        ],
+        "holes": 9
+      }
+    },
+    {
+      "id": "l-bracket-gussets",
+      "tier": "hard",
+      "prompt": "An L bracket 100mm tall and 80mm deep, 60mm wide, 8mm thick, with two triangular gussets, and two 9mm holes in each leg.",
+      "expect": {
+        "holes": 4
+      }
+    },
+    {
+      "id": "heat-sink",
+      "tier": "hard",
+      "prompt": "A heat sink base 80mm by 80mm by 6mm with ten fins 2mm thick and 30mm tall running the full length, evenly spaced.",
+      "expect": {
+        "bbox": [
+          80,
+          80,
+          36
+        ]
+      }
+    },
+    {
+      "id": "enclosure-lid",
+      "tier": "hard",
+      "prompt": "A rectangular enclosure 120mm by 80mm by 40mm tall with 3mm walls, open at the top, with a 2mm lip around the inside of the opening and four M3 mounting bosses in the corners.",
+      "expect": {
+        "bbox": [
+          120,
+          80,
+          40
+        ]
+      }
+    },
+    {
+      "id": "manifold",
+      "tier": "very hard",
+      "prompt": "A hydraulic manifold block 100mm by 60mm by 50mm with a 12mm bore running the full length, two 8mm cross drillings meeting it at right angles from the top, and four M8 mounting holes in the corners of the base.",
+      "expect": {
+        "bbox": [
+          100,
+          60,
+          50
+        ]
+      }
+    },
+    {
+      "id": "vee-pulley",
+      "tier": "very hard",
+      "prompt": "A vee belt pulley 100mm outside diameter and 20mm wide with a single 38 degree included angle groove, a 20mm bore and a 6mm keyway.",
+      "expect": {
+        "bore_dia": [
+          20
+        ]
+      }
+    },
+    {
+      "id": "planet-carrier",
+      "tier": "very hard",
+      "prompt": "A planetary gear carrier plate 90mm diameter and 10mm thick with three 12mm planet pin holes on a 55mm pitch circle and a 25mm central bore.",
+      "expect": {
+        "bbox": [
+          90,
+          90,
+          10
+        ],
+        "holes": 4,
+        "bore_dia": [
+          12,
+          12,
+          12,
+          25
+        ]
+      }
+    },
+    {
+      "id": "helical-gear",
+      "tier": "very hard",
+      "prompt": "A helical gear, 24 teeth, module 2, 20mm face width, 15 degree helix angle, with a 12mm bore.",
+      "expect": {
+        "bore_dia": [
+          12
+        ]
+      }
+    },
+    {
+      "id": "moulded-cover",
+      "tier": "very hard",
+      "prompt": "An injection moulded cover 100mm by 60mm by 25mm deep with uniform 2.5mm walls, 1.5 degree draft on all vertical faces, three internal ribs and a snap fit lip around the rim.",
+      "expect": {}
+    },
+    {
+      "id": "spline-hub",
+      "tier": "very hard",
+      "prompt": "A hub 60mm outside diameter and 30mm long with a 6 tooth straight sided involute spline bore of 26mm major diameter.",
+      "expect": {
+        "bbox": [
+          60,
+          60,
+          30
+        ]
+      }
+    }
+  ]
+}

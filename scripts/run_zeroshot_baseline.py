@@ -74,7 +74,7 @@ def load_entries(tiers: list[str], limit_per_tier: int = 0) -> list[dict]:
             continue
 
         tier_entries = []
-        with open(filepath) as f:
+        with open(filepath, encoding="utf-8") as f:
             for line in f:
                 tier_entries.append(json.loads(line))
 
@@ -237,7 +237,7 @@ def main():
         "limit_per_tier": args.limit_per_tier,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    with open(config_file, "w") as f:
+    with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
     print(f"Loading benchmark entries...")
@@ -253,7 +253,7 @@ def main():
     # Resume support
     completed_ids = set()
     if results_file.exists():
-        with open(results_file) as f:
+        with open(results_file, encoding="utf-8") as f:
             for line in f:
                 try:
                     r = json.loads(line)
@@ -284,7 +284,7 @@ def main():
 
         record = run_single_entry(entry, experiment_dir)
 
-        with open(results_file, "a") as f:
+        with open(results_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
 
         total_done += 1
@@ -338,7 +338,7 @@ def main():
 
     # Token costs
     total_in, total_out = 0, 0
-    with open(results_file) as f:
+    with open(results_file, encoding="utf-8") as f:
         for line in f:
             r = json.loads(line)
             t = r.get("tokens", {})

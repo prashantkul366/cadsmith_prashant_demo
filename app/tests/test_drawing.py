@@ -1,0 +1,487 @@
+"""The drawing sheet, checked against the conventions it claims to follow.
+
+A sheet that looks like an engineering drawing and is not one is worse than
+an obvious picture, so these check the claims rather than the appearance:
+that the views are arranged in first angle, that they share one stated
+preferred scale, and that the numbers on the sheet are the numbers the kernel
+measured.
+
+Runs the real kernel - it builds a part, exports it to STEP and projects it.
+
+Run:  .venv/bin/python -m app.tests.test_drawing
+"""
+
+from __future__ import annotations
+
+import math
+import re
+import shutil
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import cadquery as cq  # noqa: E402
+import ezdxf  # noqa: E402
+
+from app.server import drawing  # noqa: E402
+
+SVG = "{http://www.w3.org/2000/svg}"
+
+failures: list[str] = []
+
+
+def check(label: str, ok: bool, detail: str = "") -> None:
+    print(f"  {'PASS' if ok else 'FAIL'}  {label}{(' - ' + detail) if detail else ''}")
+    if not ok:
+        failures.append(label)
+
+
+# A plate with an off-centre through hole: three different overall lengths, so
+# a view placed wrongly or a dimension read off the wrong axis shows up.
+PLATE_X, PLATE_Y, PLATE_Z, HOLE_D = 60.0, 40.0, 12.0, 10.0
+
+
+def build_step(into: Path) -> tuple[Path, dict]:
+    solid = (cq.Workplane("XY")
+             .box(PLATE_X, PLATE_Y, PLATE_Z, centered=(True, True, False))
+             .faces(">Z").workplane().hole(HOLE_D))
+    step = into / "model.step"
+    cq.exporters.export(solid, str(step))
+    shape = solid.val()
+    box = shape.BoundingBox()
+    return step, {
+        "bounding_box": {"xlen": box.xlen, "ylen": box.ylen, "zlen": box.zlen},
+        "volume": shape.Volume(),
+        "is_valid": True,
+    }
+
+
+def texts(root) -> list[tuple[str, float, float]]:
+    out = []
+    for node in root.iter(SVG + "text"):
+        body = "".join(node.itertext()).strip()
+        if body:
+            out.append((body, float(node.get("x", 0)), float(node.get("y", 0))))
+    return out
+
+
+def view_boxes(root) -> dict[str, tuple[float, float, float, float]]:
+    """The drawn extent of each view, from the projected line work itself."""
+    cells = {"FRONT": (0, 0), "LEFT": (1, 0), "TOP": (0, 1), "ISO": (1, 1)}
+    boxes: dict[str, tuple[float, float, float, float]] = {}
+    points: dict[str, list[tuple[float, float]]] = {n: [] for n in cells}
+    for node in root.iter(SVG + "polyline"):
+        for pair in (node.get("points") or "").split():
+            x, y = (float(v) for v in pair.split(","))
+            for name, (col, row) in cells.items():
+                left = drawing.FRAME_L + col * drawing.CELL_W
+                top = drawing.CELLS_T + row * drawing.CELL_H
+                if (left <= x <= left + drawing.CELL_W
+                        and top <= y <= top + drawing.CELL_H):
+                    points[name].append((x, y))
+                    break
+    for name, found in points.items():
+        if found:
+            boxes[name] = (min(p[0] for p in found), min(p[1] for p in found),
+                           max(p[0] for p in found), max(p[1] for p in found))
+    return boxes
+
+
+def centre(box) -> tuple[float, float]:
+    return ((box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0)
+
+
+def main() -> int:
+    work = Path(tempfile.mkdtemp(prefix="cadsmith_drawing_test_"))
+    try:
+        step, geometry = build_step(work)
+        sheet = drawing.build_sheet(step, geometry, "a test plate",
+                                    "JOB-TEST", 0)
+        root = ET.fromstring(sheet)
+        found = texts(root)
+        labels = {body: (x, y) for body, x, y in found}
+        words = [body for body, _, _ in found]
+
+        print("\nThe sheet itself")
+        check("it is an A3 sheet in millimetres",
+              root.get("viewBox") == "0 0 420.0 297.0"
+              and root.get("width", "").endswith("mm"),
+              f'{root.get("width")} viewBox={root.get("viewBox")}')
+
+        print("\nFirst angle (ISO 128-30 A.2)")
+        for label in ("FRONT", "VIEW FROM ABOVE", "VIEW FROM LEFT", "ISOMETRIC"):
+            check(f"{label} is on the sheet", label in labels)
+        drawn = view_boxes(root)
+        for name in ("FRONT", "TOP", "LEFT"):
+            check(f"the {name} view has line work in it",
+                  name in drawn, str(sorted(drawn)))
+        if {"FRONT", "TOP", "LEFT"} <= set(drawn):
+            front, above, left = drawn["FRONT"], drawn["TOP"], drawn["LEFT"]
+            check("the view from above is placed underneath the front view",
+                  above[1] > front[3],
+                  f"top {above[1]:.0f} vs front bottom {front[3]:.0f}")
+            check("the view from above lines up with the front view",
+                  abs(centre(above)[0] - centre(front)[0]) < 0.5
+                  and abs((above[2] - above[0]) - (front[2] - front[0])) < 0.5,
+                  f"centre {centre(above)[0]:.1f} vs {centre(front)[0]:.1f}")
+            check("the view from the left is placed on the right",
+                  left[0] > front[2],
+                  f"left edge {left[0]:.0f} vs front right {front[2]:.0f}")
+            check("and lines up with the front view's height",
+                  abs(centre(left)[1] - centre(front)[1]) < 0.5
+                  and abs((left[3] - left[1]) - (front[3] - front[1])) < 0.5,
+                  f"centre {centre(left)[1]:.1f} vs {centre(front)[1]:.1f}")
+
+        print("\nOne scale, stated, and a preferred one")
+        scale = next((w for w in words if re.fullmatch(r"\d+:\d+", w)), "")
+        check("a scale is stated on the sheet", bool(scale), scale or "none")
+        if scale:
+            a, b = (float(n) for n in scale.split(":"))
+            check("and it is an ISO 5455 preferred ratio",
+                  any(abs(a / b - s) < 1e-9 for s in drawing.PREFERRED_SCALES),
+                  scale)
+
+        print("\nDrawn at the scale it says it is")
+        if scale and "FRONT" in drawn:
+            factor = float(scale.split(":")[0]) / float(scale.split(":")[1])
+            width = drawn["FRONT"][2] - drawn["FRONT"][0]
+            height = drawn["FRONT"][3] - drawn["FRONT"][1]
+            check("the front view measures the part times the stated scale",
+                  abs(width - PLATE_X * factor) < 0.5
+                  and abs(height - PLATE_Z * factor) < 0.5,
+                  f"{width:.1f} x {height:.1f} mm on the sheet, "
+                  f"expected {PLATE_X * factor:g} x {PLATE_Z * factor:g}")
+        if scale and "TOP" in drawn:
+            factor = float(scale.split(":")[0]) / float(scale.split(":")[1])
+            depth = drawn["TOP"][3] - drawn["TOP"][1]
+            check("and so does the view from above",
+                  abs(depth - PLATE_Y * factor) < 0.5,
+                  f"{depth:.1f} mm, expected {PLATE_Y * factor:g}")
+
+        print("\nThe numbers are the kernel's")
+        for axis, value in (("x", PLATE_X), ("y", PLATE_Y), ("z", PLATE_Z)):
+            check(f"the {axis} length is dimensioned as {value:g}",
+                  f"{value:g}" in words,
+                  ", ".join(w for w in words if re.fullmatch(r"[\d.]+", w)))
+        check("the hole is called out by diameter",
+              f"Ø{HOLE_D:g}" in words,
+              ", ".join(w for w in words if w.startswith("Ø")) or "no Ø")
+        check("the title block carries the measured size",
+              any(f"{PLATE_X:g} x {PLATE_Y:g} x {PLATE_Z:g}" == w for w in words),
+              next((w for w in words if " x " in w), "none"))
+
+        print("\nLine work follows ISO 128-2")
+        widths = {node.get("stroke-width") for node in root.iter()
+                  if node.get("stroke-width")}
+        check("two line widths in a 2:1 ratio",
+              {str(drawing.W_THICK), str(drawing.W_THIN)} <= widths,
+              ", ".join(sorted(widths)))
+        dashes = [node.get("stroke-dasharray") for node in root.iter()
+                  if node.get("stroke-dasharray")]
+        check("hidden detail is dashed", any(d == "2.4,1.2" for d in dashes))
+        check("circular features get a long-dash-dot centre line",
+              any(d and d.count(",") == 3 for d in dashes),
+              ", ".join(sorted(set(d for d in dashes if d))[:3]))
+
+        print("\nThe title block says how to read the sheet")
+        for field in ("LEGAL OWNER", "TITLE", "DRAWING No.", "DATE OF ISSUE",
+                      "SCALE", "UNITS", "PROJECTION", "SHEET"):
+            check(f"field: {field}", field in labels)
+        check("units are declared in the notes",
+              any("MILLIMETRES" in w for w in words))
+        check("and no tolerance is claimed that nobody specified",
+              any("NO TOLERANCES" in w for w in words))
+
+        print("\nThe projection symbol is the first angle one")
+        circles = [c for c in root.iter(SVG + "circle")]
+        check("it is drawn as two concentric circles beside a trapezoid",
+              len(circles) == 2
+              and circles[0].get("cx") == circles[1].get("cx"),
+              f"{len(circles)} circle(s)")
+        if len(circles) == 2:
+            # First angle places the view from the left on the right, so the
+            # end view (the circles) sits to the right of the side view.
+            trapezoid = next(
+                (p for p in root.iter(SVG + "path")
+                 if (p.get("d") or "").count("L") == 3
+                 and (p.get("d") or "").endswith("Z")
+                 and p.get("fill") == "none"), None)
+            check("with the circles on the right of it", trapezoid is not None
+                  and float(circles[0].get("cx"))
+                  > max(float(v) for v in re.findall(
+                      r"[ML](-?[\d.]+),", trapezoid.get("d"))),
+                  "trapezoid then circles" if trapezoid is not None
+                  else "no trapezoid found")
+        # A drawing that gives the overall size and the hole diameters, and
+        # never says where the holes are, cannot be made from. These are the
+        # dimensions that separate a description of a part from a drawing of
+        # one.
+        print("\nFeatures are positioned, not just counted")
+        patterned = (cq.Workplane("XY")
+                     .box(100.0, 60.0, 8.0)
+                     .faces(">Z").workplane()
+                     .rect(80.0, 40.0, forConstruction=True).vertices().hole(6.0)
+                     .faces(">Z").workplane().hole(25.0))
+        pat_step = work / "patterned.step"
+        cq.exporters.export(patterned, str(pat_step))
+        pat_plan = drawing.plan_sheet(drawing._project(pat_step))  # noqa: SLF001
+        top = next(v for v in pat_plan["views"] if v["name"] == "TOP")
+        measures = sorted(round(d["measure"], 2) for d in top["dimensions"])
+        check("the hole pattern's pitches are dimensioned",
+              80.0 in measures and 40.0 in measures, str(measures))
+
+        leaders = [c.get("label") for c in top["callouts"]]
+        check("four identical holes are called out once, not four times",
+              "4\u00d7 \u00d86" in leaders, str(leaders))
+        check("and the lone bore keeps a plain diameter",
+              "\u00d825" in leaders, str(leaders))
+
+        # A bolt circle is the other arrangement worth recognising: its PCD
+        # says everything, and positioning six holes individually would bury
+        # the sheet.
+        flanged = (cq.Workplane("XY").circle(60.0).extrude(10.0)
+                   .faces(">Z").workplane()
+                   .polarArray(45.0, 0.0, 360.0, 6).hole(9.0))
+        flange_step = work / "flange.step"
+        cq.exporters.export(flanged, str(flange_step))
+        flange_plan = drawing.plan_sheet(drawing._project(flange_step))  # noqa: SLF001
+        ftop = next(v for v in flange_plan["views"] if v["name"] == "TOP")
+        flabels = [c.get("label") or "" for c in ftop["callouts"]]
+        check("a bolt circle is called out by its pitch circle diameter",
+              any("PCD" in label and label.startswith("6\u00d7") for label in flabels),
+              str(flabels))
+
+        # ------------------------------------------------------------------
+        # A round is a radius. Every circular edge used to be read as a hole,
+        # so the corner fillets of a box came out as "4x Ø10" - a hole that
+        # is not there, twice the size of the round that is - and their
+        # centres were dimensioned from the datum as though they were one.
+        print("\nRounds are radii, holes are diameters")
+        container = (cq.Workplane("XY")
+                     .box(60.0, 40.0, 30.0, centered=(True, True, False))
+                     .edges("|Z").fillet(5.0)
+                     .faces(">Z").shell(-2.0))
+        box_step = work / "container.step"
+        cq.exporters.export(container, str(box_step))
+        box_plan = drawing.plan_sheet(drawing._project(box_step))  # noqa: SLF001
+        btop = next(v for v in box_plan["views"] if v["name"] == "TOP")
+        blabels = [c.get("label") or "" for c in btop["callouts"]]
+        check("the outer corners are called out as a radius",
+              "4\u00d7 R5" in blabels, str(blabels))
+        check("and the ones the wall thickness leaves inside them too",
+              "4\u00d7 R3" in blabels, str(blabels))
+        check("no round is called out as a hole",
+              not any("\u00d8" in label for label in blabels), str(blabels))
+        check("every round callout is a radius dimension",
+              all(c.get("kind") == "radius" for c in btop["callouts"]),
+              str([c.get("kind") for c in btop["callouts"]]))
+        # A centre mark says "there is a hole here". Inside the solid corner
+        # of a filleted box it says something untrue.
+        check("and no fillet earns a centre mark",
+              not btop["centre_lines"], f'{len(btop["centre_lines"])} line(s)')
+        measures = sorted(round(d["measure"], 2) for d in btop["dimensions"])
+        check("nor is a fillet centre dimensioned from the datum",
+              measures == [40.0], str(measures))
+
+        # The awkward shapes the kernel hands over, checked directly: one
+        # hole is often two half-edges, and one fillet is the same quarter
+        # turn twice over - once at the top of the corner and once at the
+        # bottom. Adding sweeps blindly would turn the second into a hole.
+        quarter, half = math.pi / 2, math.pi
+        stacked = [{"u": 10, "v": 10, "r": 5.0, "span": quarter,
+                    "a0": 0.0, "a1": 90.0, "mu": 13.5, "mv": 13.5}] * 2
+        halves = [{"u": 0, "v": 0, "r": 4.0, "span": half,
+                   "a0": 0.0, "a1": 180.0, "mu": 0.0, "mv": 4.0},
+                  {"u": 0, "v": 0, "r": 4.0, "span": half,
+                   "a0": 180.0, "a1": 360.0, "mu": 0.0, "mv": -4.0}]
+        legacy = [{"u": 0.0, "v": 0.0, "r": 3.0}]
+        check("one fillet seen twice is still one round",
+              not drawing._distinct_circles(stacked)[0]["closed"])  # noqa: SLF001
+        check("a hole modelled as two half-edges is still a hole",
+              drawing._distinct_circles(halves)[0]["closed"])  # noqa: SLF001
+        check("and a projection from before any of this reads as it used to",
+              drawing._distinct_circles(legacy)[0]["closed"])  # noqa: SLF001
+
+        # Both conventions on one sheet: rounded corners and real holes.
+        rounded = (cq.Workplane("XY")
+                   .box(100.0, 60.0, 8.0, centered=(True, True, False))
+                   .edges("|Z").fillet(10.0)
+                   .faces(">Z").workplane().rarray(70.0, 40.0, 2, 2).hole(6.0))
+        rounded_step = work / "rounded.step"
+        cq.exporters.export(rounded, str(rounded_step))
+        round_plan = drawing.plan_sheet(drawing._project(rounded_step))  # noqa: SLF001
+        rtop = next(v for v in round_plan["views"] if v["name"] == "TOP")
+        rlabels = [c.get("label") or "" for c in rtop["callouts"]]
+        check("holes keep their diameter when a part also has rounds",
+              "4\u00d7 \u00d86" in rlabels, str(rlabels))
+        check("and the corners still read as R",
+              "4\u00d7 R10" in rlabels, str(rlabels))
+        # Two leaders that leave a view in the same direction write their
+        # text in the same place, and a radius over a diameter is unreadable.
+        elbows = [c["elbow"] for c in rtop["callouts"]]
+        check("their leaders do not land on each other",
+              all(abs(a[0] - b[0]) > 6.0 or abs(a[1] - b[1]) > 4.0
+                  for i, a in enumerate(elbows) for b in elbows[i + 1:]),
+              str([(round(x, 1), round(y, 1)) for x, y in elbows]))
+        # A view carrying an overall dimension has to push feature dimensions
+        # out past it, whichever overall it is.
+        offsets = sorted({round(d["offset"], 2) for d in rtop["dimensions"]
+                          if d["vertical"]})
+        check("a hole pitch is not drawn over an overall length",
+              len(offsets) == len(set(offsets)) and len(offsets) >= 2,
+              str(offsets))
+
+        # Every leader has to end somewhere a reader can follow it to.
+        for view in pat_plan["views"] + flange_plan["views"]:
+            left, top_y, right, bottom = view["box"]
+            for call in view["callouts"]:
+                ex, ey = call["elbow"]
+                check(f"{view['name']} leader {call.get('label')} stays near its view",
+                      left - 40 <= ex <= right + 40
+                      and top_y - 40 <= ey <= bottom + 40,
+                      f"elbow {ex:.1f},{ey:.1f} for box "
+                      f"{left:.1f},{top_y:.1f},{right:.1f},{bottom:.1f}")
+
+        # A drawing outlives the code that drew it: the run directory keeps
+        # it for good, so a convention fixed today has to reach the sheets
+        # already cached or the fix never arrives where anyone looks.
+        print("\nCached drawings from older code")
+        cached_dir = work / "cached"
+        cached_dir.mkdir()
+        shutil.copy(box_step, cached_dir / "model.step")
+        (cached_dir / "drawing.svg").write_text(
+            '<svg viewBox="0 0 420.0 297.0"><text>4× Ø10</text></svg>',
+            encoding="utf-8")
+        rebuilt = drawing.ensure_sheet(cached_dir, "container", "JOB-TEST", 0)
+        body = rebuilt.read_text(encoding="utf-8")
+        check("a sheet drawn by older code is drawn again",
+              "R5" in body and "Ø10" not in body,
+              f"{len(body)} bytes")
+        check("and the one this code drew is served from the cache",
+              drawing.ensure_sheet(cached_dir, "container", "JOB-TEST", 0)
+              .read_text(encoding="utf-8") == body)
+        # The projection is cached too, and an older one has no record of
+        # how far each circular edge sweeps - which would read every hole as
+        # a round.
+        stale = cached_dir / "projection.json"
+        stale.write_text(
+            '{"FRONT": {"visible": [], "hidden": [], "circles": [],'
+            ' "basis": [[1,0,0],[0,1,0]], "bbox": [0,0,1,1]}}', encoding="utf-8")
+        views = drawing._project(box_step, cache=stale)  # noqa: SLF001
+        check("a projection cached before that was recorded is taken again",
+              any("span" in circle
+                  for view in views.values() for circle in view["circles"]),
+              str(sorted(views)))
+
+        print("\nA specification, once there is one to state")
+        from app.server import specification
+        spec = specification.read(
+            {"specification": {"material": "aluminium 6082-T6",
+                               "process": "machined",
+                               "tolerance_class": "ISO 2768-m",
+                               "finish": "as machined",
+                               "fits": [{"feature": "spigot", "size_mm": 30,
+                                         "fit": "h7"}]}},
+            "a bearing block for a 6203 with M8 fixings")
+        spec_notes = drawing.note_lines({"is_valid": True}, spec)
+        joined = " | ".join(spec_notes)
+        check("the general tolerance class is stated",
+              any("ISO 2768-m" in line for line in spec_notes), joined[:80])
+        check("and the material with it",
+              any("6082-T6" in line for line in spec_notes), joined[:80])
+        check("a bearing's fits come from the table, not the model",
+              any("H7" in line and "6203" in line for line in spec_notes),
+              joined[:120])
+        # ISO 286 reads the case of the letter: H7 is a hole, h7 a shaft.
+        # Shouting the note must not turn one into the other.
+        check("a shaft tolerance stays lower case",
+              any("k6" in line for line in spec_notes)
+              and not any("K6" in line for line in spec_notes), joined[:120])
+        check("and the sheet says who proposed it",
+              any("PROPOSED BY THE PLANNER" in line for line in spec_notes))
+        check("with nothing specified it still refuses to claim a tolerance",
+              any("NO TOLERANCES ARE SPECIFIED" in line
+                  for line in drawing.note_lines({"is_valid": True}, None)))
+
+        print("\nThe same drawing as DXF")
+        # The SVG is a picture of the drawing; the DXF is the drawing. Its
+        # dimensions carry the geometry they measure, so this asks the file
+        # what it measures rather than reading back a string.
+        doc = drawing.build_dxf(step, geometry, "a test plate", "JOB-TEST", 0)
+        model = doc.modelspace()
+        dims = [e for e in model if e.dxftype() == "DIMENSION"]
+        check("it carries real DIMENSION entities, not drawn lines",
+              len(dims) == 4, f"{len(dims)} dimension(s)")
+        measured = sorted(round(d.get_measurement(), 4) for d in dims)
+        check("and they measure the part, not the sheet",
+              measured == sorted([PLATE_X, PLATE_Y, PLATE_Z, HOLE_D]),
+              f"{measured} vs {sorted([PLATE_X, PLATE_Y, PLATE_Z, HOLE_D])}")
+
+        layers = {e.dxf.layer for e in model}
+        # The container's corners, read back out of the file: a CAM system
+        # opening the DXF has to see a radius where the sheet says R, or the
+        # two halves of the same drawing disagree. Type 4 is RADIUS.
+        box_doc = drawing.build_dxf(box_step, {"is_valid": True},
+                                    "container", "JOB-TEST", 0)
+        box_kinds = sorted({e.dxf.dimtype & 7 for e in box_doc.modelspace()
+                            if e.dxftype() == "DIMENSION"})
+        check("a round is a radius dimension in the file as well",
+              4 in box_kinds, f"dimension types {box_kinds}")
+
+        check("line work is separated onto drawing-office layers",
+              {"OUTLINE", "HIDDEN", "CENTRE", "DIMENSIONS", "FRAME"} <= layers,
+              ", ".join(sorted(layers)))
+        check("outlines are the thick line group and hidden detail the thin",
+              doc.layers.get("OUTLINE").dxf.lineweight == drawing._LW_THICK
+              and doc.layers.get("HIDDEN").dxf.lineweight == drawing._LW_THIN,
+              f'{doc.layers.get("OUTLINE").dxf.lineweight} / '
+              f'{doc.layers.get("HIDDEN").dxf.lineweight}')
+        check("hidden and centre layers carry the right line types",
+              doc.layers.get("HIDDEN").dxf.linetype.upper().startswith("DASHED")
+              and doc.layers.get("CENTRE").dxf.linetype.upper().startswith("CENTER"),
+              f'{doc.layers.get("HIDDEN").dxf.linetype} / '
+              f'{doc.layers.get("CENTRE").dxf.linetype}')
+
+        style = doc.dimstyles.get("ISO-129")
+        check("the dimension style follows ISO 129-1",
+              style.dxf.dimtxt == drawing.TEXT
+              and style.dxf.dimtad == 1        # value above the line
+              and style.dxf.dimtih == 0        # aligned, not forced horizontal
+              and style.dxf.dimblk == "",      # closed filled arrowhead
+              f"text {style.dxf.dimtxt}, above={style.dxf.dimtad}, "
+              f"arrow={style.dxf.dimblk!r}")
+
+        written = work / "drawing.dxf"
+        doc.saveas(written)
+        reopened = ezdxf.readfile(written)
+        audit = reopened.audit()
+        check("and it is a file another CAD system can open",
+              not audit.errors,
+              f"{written.stat().st_size} bytes, "
+              f"{len(audit.errors)} error(s), {len(audit.fixes)} fix(es)")
+        check("whose dimensions still measure the part when re-read",
+              sorted(round(e.get_measurement(), 4)
+                     for e in reopened.modelspace()
+                     if e.dxftype() == "DIMENSION")
+              == sorted([PLATE_X, PLATE_Y, PLATE_Z, HOLE_D]),
+              str(sorted(round(e.get_measurement(), 4)
+                         for e in reopened.modelspace()
+                         if e.dxftype() == "DIMENSION")))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+    print("\n" + "=" * 60)
+    if failures:
+        print(f"{len(failures)} CHECK(S) FAILED:")
+        for name in failures:
+            print(f"   - {name}")
+        return 1
+    print("ALL CHECKS PASSED")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

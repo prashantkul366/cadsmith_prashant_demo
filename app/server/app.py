@@ -25,8 +25,9 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-from . import providers, tls
-from .drawing import ensure_sheet
+from . import catalog_run, i18n, providers, tls
+from .drawing import ensure_dxf, ensure_sheet
+from .edits import Change, describe_parameters, parameters
 from .jobs import JobManager, JobOptions, STATUS_DONE, STATUS_ERROR
 
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +43,7 @@ MEDIA_TYPES = {
     ".png": "image/png",
     ".json": "application/json",
     ".svg": "image/svg+xml",
+    ".dxf": "image/vnd.dxf",
 }
 
 ALLOWED_ARTIFACTS = {
@@ -52,11 +54,43 @@ ALLOWED_ARTIFACTS = {
     "geometry.json",
     "validation.json",
     "drawing.svg",
+    "drawing.dxf",
+    # The front-elevation thumbnail on an option card, when one request had
+    # more than one right answer.
+    "option.svg",
 }
 
 # Curated starting prompts.  The tiered ones are the exact benchmark entries
 # from data/dataset_v2, so a demo can be checked against a reference part.
 EXAMPLE_IDS = ["T1_012", "T2_001", "T2_009", "T3_001", "T3_007"]
+
+# The case study: one part, three paths through the app. The drag bar is a
+# named bend and comes from the catalogue exactly and instantly; "a
+# handlebar" names no bend and comes back as four of them to pick between;
+# the last names dimensions no catalogue bend has, so the five agents
+# design it.
+CASE_STUDY_EXAMPLES = [
+    {
+        "id": "bar_drag",
+        "tier": "handlebar",
+        "prompt": "A drag bar, 760 mm wide, on 22 mm tube.",
+    },
+    {
+        "id": "bar_options",
+        "tier": "handlebar",
+        "prompt": "A handlebar.",
+    },
+    {
+        "id": "bar_custom",
+        "tier": "handlebar",
+        "prompt": (
+            "A motorcycle handlebar of 22 mm outside diameter tube with a "
+            "2 mm wall: 700 mm wide overall, rising 140 mm from the clamp, "
+            "with 100 mm of pullback, a 130 mm straight in the middle for "
+            "the risers and 200 mm of straight at each end for the grips."
+        ),
+    },
+]
 
 FALLBACK_EXAMPLES = [
     {
@@ -131,12 +165,15 @@ def _probe_offscreen_render() -> dict:
         ok = dims[0] > 0 and dims[1] > 0
         _render_capability = {
             "ok": ok,
+            "code": "ready" if ok else "nopixels",
             "detail": "offscreen rendering available" if ok else
                       "render window produced no pixels",
         }
     except Exception as exc:
         _render_capability = {
             "ok": False,
+            "code": "error",
+            "data": {"reason": f"{type(exc).__name__}: {exc}"},
             "detail": (
                 f"{type(exc).__name__}: {exc}. On headless Linux install a "
                 "software GL backend (apt-get install libosmesa6)."
@@ -153,7 +190,9 @@ def _health() -> dict:
     try:
         import cadquery
 
-        checks["cadquery"] = {"ok": True, "detail": f"version {cadquery.__version__}"}
+        checks["cadquery"] = {"ok": True, "code": "version",
+                              "data": {"v": cadquery.__version__},
+                              "detail": f"version {cadquery.__version__}"}
     except Exception as exc:
         checks["cadquery"] = {"ok": False, "detail": str(exc)}
 
@@ -162,6 +201,8 @@ def _health() -> dict:
     ready = [p for p in providers.status() if p["ready"]]
     checks["model_backend"] = {
         "ok": bool(ready),
+        "code": "ready" if ready else "none",
+        "data": {"names": ", ".join(p["label"] for p in ready)},
         "detail": ("ready: " + ", ".join(p["label"] for p in ready)) if ready
                   else "No model backend configured - set a provider key in "
                        ".env or paste one in the app. Recorded runs still "
@@ -172,16 +213,61 @@ def _health() -> dict:
         import trimesh  # noqa: F401
         import scipy  # noqa: F401
 
-        checks["metrics"] = {"ok": True, "detail": "trimesh and scipy available"}
+        checks["metrics"] = {"ok": True, "code": "ready",
+                             "detail": "trimesh and scipy available"}
     except Exception as exc:
         checks["metrics"] = {"ok": False, "detail": str(exc)}
 
+    # `detail` stays the English sentence, so anything reading the API keeps
+    # working and a check with no translation still says something. `code`
+    # and `data` are what let the browser say it in the reader's language.
     trust = tls.status()
     checks["tls_trust"] = {"ok": trust["ok"], "detail": trust["detail"]}
+    if trust.get("code"):
+        checks["tls_trust"]["code"] = trust["code"]
+    if trust.get("data"):
+        checks["tls_trust"]["data"] = trust["data"]
+
+    # The catalogue reports ok whether or not the optional gear and fastener
+    # libraries are installed - without them it simply covers less - and says
+    # what is actually available.
+    try:
+        from app.catalog import router as catalog_router
+
+        described = catalog_router.describe()
+        live = [name for name, present in described["backends"].items() if present]
+        missing = [name for name, present in described["backends"].items()
+                   if not present]
+        detail = f"{len(described['families'])} part families"
+        if live:
+            detail += f" ({', '.join(live)})"
+        if missing:
+            # Actionable rather than merely factual: the usual reason these
+            # are absent is a machine without git, and the fix is one line.
+            detail += (f" - {', '.join(missing)} not installed; helical, "
+                       f"bevel and rack gears and the wider fastener range "
+                       f"need 'pip install -r app/requirements-catalog.txt'")
+        # The counts and the library names are machine facts, so the browser
+        # can say this in the reader's own language instead of quoting our
+        # English at them. Every other check's detail really is a quote - a
+        # version string, a path, a library's own error - and stays as it is.
+        checks["catalog"] = {"ok": True, "detail": detail, "code": "families",
+                             "families": len(described["families"]),
+                             "live": live, "missing": missing}
+    except Exception as exc:
+        checks["catalog"] = {"ok": True,
+                             "detail": f"catalogue unavailable: {exc}"}
 
     return {
         "ok": all(c["ok"] for c in checks.values()),
-        "can_generate": checks["cadquery"]["ok"] and checks["model_backend"]["ok"],
+        # A standard part is answered from the catalogue with no model call,
+        # so the app can generate *something* as soon as CadQuery works.
+        # Whether the agents can run is a separate question, and the banner
+        # says so - greying out Generate entirely would refuse work the app
+        # can plainly do.
+        "can_generate": checks["cadquery"]["ok"] and (
+            checks["model_backend"]["ok"] or checks["catalog"]["ok"]),
+        "can_run_agents": checks["cadquery"]["ok"] and checks["model_backend"]["ok"],
         "checks": checks,
         "providers": providers.status(),
     }
@@ -206,7 +292,7 @@ def examples() -> JSONResponse:
         path = DATA_DIR / filename
         if not path.exists():
             continue
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             try:
@@ -221,29 +307,54 @@ def examples() -> JSONResponse:
                 }
 
     ordered = [found[i] for i in EXAMPLE_IDS if i in found]
-    return JSONResponse({"examples": ordered + FALLBACK_EXAMPLES})
+    return JSONResponse(
+        {"examples": ordered + CASE_STUDY_EXAMPLES + FALLBACK_EXAMPLES})
 
 
 @app.post("/api/jobs")
 async def create_job(request: Request) -> JSONResponse:
     body = await _json_body(request)
     prompt = (body.get("prompt") or "").strip()
+    raw_options = body.get("options") if isinstance(body.get("options"), dict) else {}
+    # The switch in the interface wins over the browser's own preference:
+    # someone who moved it did so on purpose.
+    lang = (i18n.normalise(raw_options.get("lang")) if raw_options.get("lang")
+            else _lang(request))
     if not prompt:
-        raise HTTPException(status_code=400, detail="A prompt is required.")
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.needprompt", lang))
     if len(prompt) > 4000:
-        raise HTTPException(status_code=400, detail="Prompt is too long.")
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.promptlong", lang))
 
     status = _health()
     if not status["checks"]["cadquery"]["ok"]:
         raise HTTPException(
             status_code=503,
-            detail="CadQuery is not available in this environment: "
-                   + status["checks"]["cadquery"]["detail"],
+            detail=i18n.t("http.nocadquery", lang,
+                          detail=status["checks"]["cadquery"]["detail"]),
         )
-    options = JobOptions.from_dict(body.get("options"))
+    options = JobOptions.from_dict({**raw_options, "lang": lang})
     issues = providers.problems(options.llm_config())
     if issues:
-        raise HTTPException(status_code=503, detail=" ".join(issues))
+        # A standard part is answered from the catalogue with no model call at
+        # all, so refusing it for want of a provider key contradicts both the
+        # health check, which reports can_generate on the strength of the
+        # catalogue alone, and the banner, which tells the reader in as many
+        # words that standard parts still work. Ask the catalogue first and
+        # only refuse what actually needs an agent.
+        served_by_catalogue = False
+        if options.use_catalog:
+            try:
+                # Either an exact answer, or several that are all correct -
+                # "a handlebar" is four bends and needs no agent for any of
+                # them, so it must not be refused for want of a key either.
+                served_by_catalogue = (catalog_run.find(prompt) is not None
+                                       or bool(catalog_run.find_options(prompt)))
+            except Exception:
+                served_by_catalogue = False
+        if not served_by_catalogue:
+            raise HTTPException(status_code=503, detail=" ".join(issues))
     if options.use_vision and not status["checks"]["vision_render"]["ok"]:
         options.use_vision = False  # degrade rather than fail mid-run
 
@@ -254,52 +365,196 @@ async def create_job(request: Request) -> JSONResponse:
 @app.post("/api/jobs/{job_id}/edit")
 async def edit_job(job_id: str, request: Request) -> JSONResponse:
     """Apply a natural-language change to the job's latest version."""
+    lang = _lang(request)
     job = manager.get(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="No such job.")
+        raise HTTPException(status_code=404, detail=i18n.t("http.nojob", lang))
     if not job.versions:
         raise HTTPException(
-            status_code=409, detail="That run produced nothing to edit.")
+            status_code=409, detail=i18n.t("http.nothingtoedit", lang))
     if job.status in ("queued", "running"):
         raise HTTPException(
-            status_code=409, detail="That run is still working; wait for it to finish.")
+            status_code=409, detail=i18n.t("http.stillworking", lang))
 
     body = await _json_body(request)
     instruction = (body.get("instruction") or "").strip()
     if not instruction:
-        raise HTTPException(status_code=400, detail="An instruction is required.")
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.needinstruction", lang))
     if len(instruction) > 1000:
-        raise HTTPException(status_code=400, detail="Instruction is too long.")
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.instructionlong", lang))
+
+    # An edit reports itself in whatever language the switch is on now,
+    # which need not be the language the run was started in.
+    job.options.lang = lang
 
     status = _health()
     if not status["checks"]["cadquery"]["ok"]:
         raise HTTPException(
             status_code=503,
-            detail="CadQuery is not available, so nothing can be rebuilt.")
+            detail=i18n.t("http.norebuild", lang))
 
     base_version = body.get("version")
     if base_version is not None:
         try:
             base_version = int(base_version)
         except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="Invalid version.")
+            raise HTTPException(status_code=400,
+                                detail=i18n.t("http.badversion", lang))
         if not any(v.get("iteration") == base_version for v in job.versions):
-            raise HTTPException(status_code=404, detail="No such version.")
+            raise HTTPException(status_code=404,
+                                detail=i18n.t("http.noversion", lang))
 
     manager.submit_edit(job, instruction, base_version=base_version)
     return JSONResponse({"job": job.summary()}, status_code=202)
 
 
+def _version_code(job, version: Optional[int], lang: str) -> tuple[int, str]:
+    """The code of the version being worked on, and which one that is.
+
+    Defaults to the newest rather than the one on screen, because a caller
+    that does not say means "the current part"; the panel always says.
+    """
+    if version is None:
+        chosen = job.versions[-1].get("iteration")
+    else:
+        try:
+            chosen = int(version)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400,
+                                detail=i18n.t("http.badversion", lang))
+        if not any(v.get("iteration") == chosen for v in job.versions):
+            raise HTTPException(status_code=404,
+                                detail=i18n.t("http.noversion", lang))
+    path = manager.artifact_path(job.id, chosen, "code.py")
+    if path is None:
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("http.artifactmissing", lang))
+    return chosen, path.read_text(encoding="utf-8")
+
+
+@app.get("/api/jobs/{job_id}/parameters")
+def job_parameters(job_id: str, request: Request,
+                   version: Optional[int] = None) -> JSONResponse:
+    """The numbers this version's script declares, ready to put a control on.
+
+    Derived rather than stored: the code is the source of truth, and reading
+    it here is what stops the browser from deciding for itself what counts
+    as a parameter.
+
+    Read from disk rather than from the job's version list, which is only
+    filled in when a run finishes: the browser asks for these the moment a
+    version is announced on the event stream, and "none yet" is an answer to
+    that question rather than an error.
+    """
+    lang = _lang(request)
+    job = manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=i18n.t("http.nojob", lang))
+
+    if version is None:
+        chosen = job.versions[-1].get("iteration") if job.versions else None
+    else:
+        try:
+            chosen = int(version)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400,
+                                detail=i18n.t("http.badversion", lang))
+
+    path = (manager.artifact_path(job.id, chosen, "code.py")
+            if chosen is not None else None)
+    if path is None:
+        return JSONResponse({"version": chosen, "parameters": []})
+    return JSONResponse({
+        "version": chosen,
+        "parameters": describe_parameters(path.read_text(encoding="utf-8")),
+    })
+
+
+@app.post("/api/jobs/{job_id}/parameters")
+async def set_job_parameters(job_id: str, request: Request) -> JSONResponse:
+    """Rebuild this part with the values given, and nothing else changed.
+
+    No model call and no interpretation: the caller names the parameters, so
+    the only questions left are whether they exist and whether the numbers
+    are numbers. Both are answered here, so a bad value is a refusal the
+    caller can read rather than a run that fails on the event stream.
+    """
+    lang = _lang(request)
+    job = manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=i18n.t("http.nojob", lang))
+    if not job.versions:
+        raise HTTPException(status_code=409,
+                            detail=i18n.t("http.nothingtoedit", lang))
+    if job.status in ("queued", "running"):
+        raise HTTPException(status_code=409,
+                            detail=i18n.t("http.stillworking", lang))
+
+    status = _health()
+    if not status["checks"]["cadquery"]["ok"]:
+        raise HTTPException(status_code=503,
+                            detail=i18n.t("http.norebuild", lang))
+
+    body = await _json_body(request)
+    wanted = body.get("changes")
+    if not isinstance(wanted, dict) or not wanted:
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.needchanges", lang))
+
+    base_version, code = _version_code(job, body.get("version"), lang)
+    available = parameters(code)
+
+    changes: list[Change] = []
+    for name, value in wanted.items():
+        parameter = available.get(str(name))
+        if parameter is None:
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.noparameter", lang, name=name))
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.badvalue", lang, name=name, value=value))
+        # NaN compares false against everything, so it would slip past a
+        # range check and reach the kernel as a dimension.
+        if number != number or number in (float("inf"), float("-inf")):
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.badvalue", lang, name=name, value=value))
+        if number <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.notpositive", lang, name=name))
+        if abs(number - parameter.value) > 1e-9:
+            changes.append(Change(name=parameter.name,
+                                  old=parameter.value, new=number))
+
+    if not changes:
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.nochange", lang))
+
+    job.options.lang = lang
+    manager.submit_parameters(job, changes, base_version=base_version)
+    return JSONResponse({"job": job.summary(),
+                         "changes": [c.to_dict() for c in changes]},
+                        status_code=202)
+
+
 @app.post("/api/jobs/{job_id}/replay")
 async def replay_job(job_id: str, request: Request) -> JSONResponse:
     """Replay a recorded run: its own events, against its own artifacts."""
+    lang = _lang(request)
     source = manager.get(job_id)
     if source is None:
-        raise HTTPException(status_code=404, detail="No such job.")
+        raise HTTPException(status_code=404, detail=i18n.t("http.nojob", lang))
     if not manager.can_replay(source):
         raise HTTPException(
             status_code=409,
-            detail="That run has no recorded events or geometry to replay.")
+            detail=i18n.t("http.noreplay", lang))
 
     body = await _json_body(request)
     try:
@@ -322,10 +577,22 @@ def list_providers(models: bool = False) -> JSONResponse:
     entries = providers.status()
     if models:
         for entry in entries:
-            if entry["ready"]:
-                entry["models"] = providers.list_models(entry["id"])
+            if not entry["ready"]:
+                continue
+            # The list fills the datalist and nothing else. Choosing the
+            # default from it was worse than the guess it replaced: the ids
+            # this account lists are refused at invoke time, and the two it
+            # serves are not listed.
+            entry["models"] = providers.list_models(entry["id"])
     return JSONResponse({"providers": entries,
-                         "default": providers.DEFAULT_PROVIDER})
+                         "default": providers.DEFAULT_PROVIDER,
+                         # The effort picker is built from what the API
+                         # accepts, not from a list copied into the browser,
+                         # so pinning CADSMITH_EFFORT to a level the picker
+                         # omits still leaves it selectable.
+                         "efforts": providers.effort_choices(),
+                         "effort": (providers.DEFAULT_EFFORT
+                                    or providers.EFFORT_DEFAULT)})
 
 
 @app.post("/api/providers/{provider_id}/key")
@@ -336,13 +603,15 @@ async def set_provider_key(provider_id: str, request: Request) -> JSONResponse:
     the response says only whether the provider is now usable.
     """
     if provider_id not in providers.BUILTIN:
-        raise HTTPException(status_code=404, detail="Unknown provider.")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("http.noprovider", _lang(request)))
 
     body = await _json_body(request)
     api_key = (body.get("api_key") or "").strip()
     base_url = (body.get("base_url") or "").strip()
     if len(api_key) > 500 or len(base_url) > 500:
-        raise HTTPException(status_code=400, detail="Value is too long.")
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.valuelong", _lang(request)))
 
     providers.set_session_key(provider_id, api_key=api_key, base_url=base_url)
 
@@ -361,10 +630,11 @@ def list_jobs() -> JSONResponse:
 
 
 @app.get("/api/jobs/{job_id}")
-def get_job(job_id: str) -> JSONResponse:
+def get_job(job_id: str, request: Request) -> JSONResponse:
+    lang = _lang(request)
     job = manager.get(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="No such job.")
+        raise HTTPException(status_code=404, detail=i18n.t("http.nojob", lang))
     sink = manager.sink(job_id)
     return JSONResponse({
         "job": job.summary(),
@@ -381,7 +651,8 @@ async def stream_events(job_id: str, request: Request, from_seq: int = 0):
     """
     sink = manager.sink(job_id)
     if sink is None:
-        raise HTTPException(status_code=404, detail="No such job.")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("http.nojob", _lang(request)))
 
     last_event_id = request.headers.get("last-event-id")
     if last_event_id and last_event_id.isdigit():
@@ -426,45 +697,83 @@ async def stream_events(job_id: str, request: Request, from_seq: int = 0):
 
 
 @app.get("/api/jobs/{job_id}/v/{version}/{artifact}")
-def get_artifact(job_id: str, version: int, artifact: str):
+def get_artifact(job_id: str, version: int, artifact: str, request: Request):
+    lang = _lang(request)
     if artifact not in ALLOWED_ARTIFACTS:
-        raise HTTPException(status_code=404, detail="Unknown artifact.")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("http.noartifact", lang))
 
-    # The drawing sheet is derived from the STEP solid, so it is built on
+    # Both drawings are derived from the STEP solid, so they are built on
     # first request and cached beside the other artifacts.
-    if artifact == "drawing.svg":
+    if artifact in ("drawing.svg", "drawing.dxf"):
         job = manager.get(job_id)
         if job is None:
-            raise HTTPException(status_code=404, detail="No such job.")
+            raise HTTPException(status_code=404,
+                                detail=i18n.t("http.nojob", lang))
         version_dir = job.directory / f"v{int(version)}"
         if not version_dir.is_dir():
-            raise HTTPException(status_code=404, detail="No such version.")
+            raise HTTPException(status_code=404,
+                                detail=i18n.t("http.noversion", lang))
+        # The lettering is part of the drawing, so the sheet is built and
+        # cached in the language it was asked for. English keeps the plain
+        # filename, which is what every sheet already on disk is.
+        build = ensure_sheet if artifact == "drawing.svg" else ensure_dxf
         try:
-            ensure_sheet(version_dir, job.prompt, job.id, int(version))
+            built = build(version_dir, job.prompt, job.id, int(version),
+                          lang=lang)
         except Exception as exc:
             raise HTTPException(
                 status_code=500,
-                detail=f"Could not build the drawing: {exc}") from exc
+                detail=i18n.t("http.nodrawing", lang, error=exc)) from exc
+        # A localised sheet is cached under its own name, so it is served
+        # from here rather than through the lookup below, which resolves the
+        # plain one.
+        if built is not None and built.name != artifact:
+            return FileResponse(
+                built,
+                media_type=MEDIA_TYPES.get(built.suffix,
+                                           "application/octet-stream"),
+                filename=(f"{job_id}_v{version}_{artifact}"
+                          if artifact == "drawing.dxf" else None))
 
     path = manager.artifact_path(job_id, version, artifact)
     if path is None:
-        raise HTTPException(status_code=404, detail="Artifact not available.")
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("http.artifactmissing", lang))
 
     filename = f"{job_id}_v{version}_{artifact}"
     return FileResponse(
         path,
         media_type=MEDIA_TYPES.get(path.suffix, "application/octet-stream"),
-        filename=filename if artifact in ("model.stl", "model.step", "code.py") else None,
+        filename=filename if artifact in ("model.stl", "model.step",
+                                          "code.py", "drawing.dxf") else None,
     )
+
+
+def _lang(request: Optional[Request]) -> str:
+    """The language to answer this request in.
+
+    An explicit ``?lang=`` wins, because the interface has a switch and the
+    person may have moved it away from what their browser advertises.
+    Otherwise ``Accept-Language`` decides, which is what a first visit has.
+    """
+    if request is None:
+        return i18n.DEFAULT_LANG
+    explicit = request.query_params.get("lang")
+    if explicit:
+        return i18n.normalise(explicit)
+    return i18n.from_header(request.headers.get("accept-language"))
 
 
 async def _json_body(request: Request) -> dict:
     try:
         body = await request.json()
     except Exception:
-        raise HTTPException(status_code=400, detail="Expected a JSON body.")
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.jsonbody", _lang(request)))
     if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="Expected a JSON object.")
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.jsonobject", _lang(request)))
     return body
 
 
@@ -477,18 +786,41 @@ async def _json_body(request: Request) -> dict:
 def index() -> HTMLResponse:
     page = WEB_DIR / "index.html"
     if not page.exists():
-        raise HTTPException(status_code=500, detail="Frontend is not built.")
-    return HTMLResponse(page.read_text())
+        raise HTTPException(status_code=500, detail=i18n.t("http.nofrontend"))
+    return HTMLResponse(page.read_text(encoding="utf-8"))
+
+
+class _RevalidatingStatic(StaticFiles):
+    """Serve the interface, but never let a browser keep an old copy.
+
+    The app is a local tool that gets pulled and restarted, and a cached
+    app.js against a fresh style.css is a broken-looking page with nothing
+    wrong in it - a gizmo that does not draw, a control that does nothing,
+    and no error anywhere to explain either. Revalidation costs one 304 per
+    file per load on localhost, which is nothing next to an hour of looking
+    for a bug that was fixed yesterday.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
 
 
 if WEB_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+    app.mount("/static", _RevalidatingStatic(directory=str(WEB_DIR)),
+              name="static")
 
 
 @app.on_event("startup")
 def _startup() -> None:
     restored = manager.load_from_disk()
+    # Sweep once at startup rather than on every run: pruning is the kind of
+    # thing that should be visible in the log at a moment someone is reading
+    # it, not a surprise midway through a job.
+    pruned = manager.prune()
     status = _health()
-    print(f"CADSmith app ready - {restored} past run(s) restored")
+    print(f"CADSmith app ready - {restored} past run(s) restored"
+          + (f", {pruned} old run(s) removed" if pruned else ""))
     for name, check in status["checks"].items():
         print(f"  [{'ok ' if check['ok'] else 'MISS'}] {name}: {check['detail']}")

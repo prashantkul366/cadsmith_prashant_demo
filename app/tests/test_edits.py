@@ -14,7 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.server.edits import apply_changes, describe, parameters, plan_edit
+from app.server.edits import (Change, apply_changes, describe,
+                             describe_parameters, parameters, plan_edit)
 
 CODE = """import cadquery as cq
 
@@ -105,6 +106,72 @@ def main() -> int:
     check("trailing comment preserved",
           commented.strip() == "thickness = 9.0  # mm, per the drawing",
           commented.strip())
+
+    print("\nDescribed well enough to put a control on")
+    described = {d["name"]: d for d in describe_parameters(CODE)}
+    check("every patchable parameter is described",
+          set(described) == set(parameters(CODE)),
+          ", ".join(sorted(described)))
+    check("a count is a count, and a whole number",
+          described["hole_count"]["kind"] == "count"
+          and described["hole_count"]["integer"]
+          and described["hole_count"]["step"] == 1,
+          str(described["hole_count"]))
+    check("a length is measured in mm",
+          described["base_thickness"]["kind"] == "length"
+          and described["base_thickness"]["unit"] == "mm",
+          str(described["base_thickness"]))
+    check("the slider brackets the value it opens on",
+          all(d["min"] <= d["value"] <= d["max"] for d in described.values()),
+          ", ".join(f"{d['name']}={d['value']:g} in [{d['min']:g},{d['max']:g}]"
+                    for d in described.values()
+                    if not d["min"] <= d["value"] <= d["max"]) or "all inside")
+    check("the slider never offers a value the patcher would refuse",
+          all(d["min"] > 0 for d in described.values()),
+          ", ".join(f"{d['name']} min={d['min']:g}" for d in described.values()
+                    if d["min"] <= 0) or "all positive")
+    check("the label is the script's own name, made readable",
+          described["hole_diameter"]["label"] == "Hole diameter",
+          described["hole_diameter"]["label"])
+
+    # A spring writes `active_coils = 8.0`. What the name means and how the
+    # number is spelled are different questions, and reading the float as a
+    # length labelled it "8 mm".
+    floaty = {d["name"]: d for d in describe_parameters(
+        "active_coils = 8.0\nwire_diameter = 2.0\n")}
+    check("a count written as a float is still a count",
+          floaty["active_coils"]["kind"] == "count"
+          and floaty["active_coils"]["unit"] == ""
+          and floaty["active_coils"]["integer"] is False,
+          str(floaty["active_coils"]))
+    check("and the patcher keeps it a float",
+          "active_coils = 12.0" in apply_changes(
+              "active_coils = 8.0\n",
+              [Change(name="active_coils", old=8.0, new=12.0)]),
+          apply_changes("active_coils = 8.0\n",
+                        [Change(name="active_coils", old=8.0, new=12.0)]).strip())
+
+    angled = {d["name"]: d for d in describe_parameters(
+        "taper_angle = 12.0\npressure_angle = 20.0\n")}
+    check("an angle is measured in degrees, near where it sits",
+          all(d["kind"] == "angle" and d["unit"] == "\u00b0"
+              and d["max"] <= 180 for d in angled.values()),
+          ", ".join(f"{d['name']} {d['min']:g}-{d['max']:g}{d['unit']}"
+                    for d in angled.values()))
+
+    # The whole point of one parser: a control that appears must be one the
+    # patcher can actually move.
+    moved = apply_changes(CODE, [
+        Change(name=d["name"], old=d["value"], new=d["max"])
+        for d in described.values()])
+    check("every described control is one apply_changes can move",
+          all(f"{d['name']} =" in moved for d in described.values())
+          and parameters(moved) and all(
+              abs(parameters(moved)[n].value - d["max"]) < 1e-9
+              for n, d in described.items()),
+          ", ".join(f"{n}={parameters(moved)[n].value:g}"
+                    for n in sorted(described))[:80])
+    check("and the moved script is still valid Python", _compiles(moved))
 
     print(f"\n{'=' * 58}")
     if failures:

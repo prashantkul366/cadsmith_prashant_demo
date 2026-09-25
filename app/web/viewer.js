@@ -25,15 +25,17 @@ const Viewer = (() => {
   let dist = 300, theta = -Math.PI * 0.28, phi = Math.PI * 0.34;
   let spin = true, wire = false;
 
-  scene.add(new THREE.HemisphereLight(0xBFD4EE, 0x141821, 0.85));
+  scene.add(new THREE.HemisphereLight(0xEAEEF5, 0x4A4A4A, 0.85));
   const key = new THREE.DirectionalLight(0xffffff, 0.95);
   key.position.set(1, 0.7, 1.4); scene.add(key);
-  const fill = new THREE.DirectionalLight(0x9FC0EA, 0.4);
+  const fill = new THREE.DirectionalLight(0xC9CFD8, 0.4);
   fill.position.set(-1.2, -0.6, 0.4); scene.add(fill);
   const rim = new THREE.DirectionalLight(0xffffff, 0.28);
   rim.position.set(0, -1, -1); scene.add(rim);
 
-  const grid = new THREE.GridHelper(600, 30, 0x2A3442, 0x1A2029);
+  // Against the design's #4C4C4C viewport rather than the old near-black
+  // one: a grid mixed for a dark scene disappears on a mid grey.
+  const grid = new THREE.GridHelper(600, 30, 0x6E6E6E, 0x5A5A5A);
   grid.rotation.x = Math.PI / 2; grid.position.z = -0.4;
   grid.material.transparent = true; grid.material.opacity = 0.55;
   scene.add(grid);
@@ -129,6 +131,31 @@ const Viewer = (() => {
     });
   }
 
+  /* ── build reveal ─────────────────────────────────────────────────────
+     A new version does not simply pop into place: it fades and scales up over
+     ~0.4s so successive refinement iterations read as the part being reworked
+     rather than as an unexplained flicker. `building` orbits the camera while
+     the pipeline is running, independently of the user's own SPIN toggle.   */
+  let reveal = 1;          // 0 → 1 while animating in
+  let building = false;
+
+  function startReveal() { reveal = 0; }
+
+  function stepReveal() {
+    if (reveal >= 1 || !model) return;
+    reveal = Math.min(1, reveal + 0.042);
+    const e = 1 - Math.pow(1 - reveal, 3);      // easeOutCubic
+    model.scale.setScalar(0.93 + 0.07 * e);
+    eachMaterial((m, isLine) => {
+      m.transparent = true;
+      m.opacity = (isLine ? 0.32 : 1) * e;
+    });
+    if (reveal >= 1) {
+      model.scale.setScalar(1);
+      applyModes();                              // restore exact final state
+    }
+  }
+
   function applyModes() {
     eachMaterial((m, isLine) => {
       m.needsUpdate = true;
@@ -149,7 +176,7 @@ const Viewer = (() => {
 
     const group = new THREE.Group();
     const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
-      color: 0x8FB4E8, metalness: 0.22, roughness: 0.55,
+      color: 0xE8E8E6, metalness: 0.08, roughness: 0.62,
       flatShading: false, side: THREE.DoubleSide,
     }));
     group.add(mesh);
@@ -158,11 +185,12 @@ const Viewer = (() => {
     const edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(geometry, 22),
       new THREE.LineBasicMaterial({
-        color: 0xD6E2F2, transparent: true, opacity: 0.32,
+        color: 0x8A8A88, transparent: true, opacity: 0.38,
       }));
     group.add(edges);
 
     setModel(group, geometry.boundingBox);
+    startReveal();
     return geometry.boundingBox;
   }
 
@@ -266,35 +294,120 @@ const Viewer = (() => {
   function resize() {
     const w = host.clientWidth, h = host.clientHeight;
     if (!w || !h) return;
-    renderer.setSize(w, h, false);
+    /* setSize must update the canvas CSS size as well as its drawing buffer.
+       Passing false left the element with no CSS size at all, so the browser
+       laid it out at its width/height attributes - which setPixelRatio had
+       multiplied by the display's ratio. On a 2x screen the canvas was drawn
+       twice the size of the stage: the grid and the model spilled over the
+       right-hand cards, which is what read as the panels being see-through,
+       and the overflow swallowed clicks meant for the sliders underneath. */
+    renderer.setSize(w, h);
     cam.aspect = w / h;
     cam.updateProjectionMatrix();
   }
   new ResizeObserver(resize).observe(host);
   resize();
 
+  /* The gizmo is a control, not an ornament: it took over from the ISO,
+     FRONT, TOP and RIGHT buttons, so each arm is a hit target that looks
+     down its own axis, and the hub returns to the isometric. Clicking an
+     axis is how every CAD package does this, which is the point - four
+     buttons replaced by the thing people already reach for. */
   const axisGroup = document.querySelector("#axG");
+  const AXIS_VIEW = { X: "right", Y: "front", Z: "top" };
   function drawAxes() {
-    const R = 20, cx = 30, cy = 30;
+    const R = 23, cx = 30, cy = 30;
     const dirs = [
       ["X", new THREE.Vector3(1, 0, 0), "#F2606A"],
       ["Y", new THREE.Vector3(0, 1, 0), "#3DD68C"],
       ["Z", new THREE.Vector3(0, 0, 1), "#4D8DF6"],
     ];
-    let svg = "";
+    let svg = `<circle cx="${cx}" cy="${cy}" r="6" fill="#FFBE44" stroke="none"/>`
+            + `<circle cx="${cx}" cy="${cy}" r="3" fill="#1E1E1E" stroke="none"/>`;
+    // Rotate each axis into camera space, rather than projecting a point.
+    //
+    // This used to call project() on the world points (1,0,0), (0,1,0) and
+    // (0,0,1) - absolute positions, not directions. Their screen positions
+    // converge as the camera pulls away from the origin, so the three arms
+    // collapsed towards a single spot and the labels stacked on top of each
+    // other: on a 44mm part 300 units out, every arm came back at the 12.65
+    // floor and the gizmo read as one smudged glyph. It also depended on
+    // where `target` happened to be, so the same camera angle drew a
+    // different gizmo for a part modelled away from the origin.
+    //
+    // A direction has no position, so the rotation is the whole answer: x is
+    // rightwards on screen and y upwards, foreshortening falls out of their
+    // magnitude, and the result is the same at any distance.
+    const toView = new THREE.Matrix4().extractRotation(cam.matrixWorldInverse);
     for (const [name, vector, colour] of dirs) {
-      const p = vector.clone().project(cam);
-      const x = cx + p.x * R, y = cy - p.y * R;
+      // An axis pointing straight at the camera still foreshortens to almost
+      // nothing, so keep the direction and keep some foreshortening, but
+      // never let an arm disappear under the hub drawn over it.
+      const p = vector.clone().applyMatrix4(toView);
+      const len = Math.hypot(p.x, p.y) || 1e-6;
+      const reach = R * Math.min(1, 0.55 + 0.45 * len);
+      const x = cx + (p.x / len) * reach, y = cy - (p.y / len) * reach;
+      const lx = cx + (x - cx) * 1.22, ly = cy + (y - cy) * 1.22;
       svg += `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${colour}"/>`;
-      svg += `<text x="${(cx + (x - cx) * 1.32).toFixed(1)}" y="${(cy + (y - cy) * 1.32 + 3).toFixed(1)}" fill="${colour}" font-size="8" font-family="monospace" text-anchor="middle" stroke="none">${name}</text>`;
+      svg += `<text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" fill="${colour}" font-size="8" font-family="monospace" text-anchor="middle" stroke="none">${name}</text>`;
+      svg += `<circle class="axhit" data-view="${AXIS_VIEW[name]}" cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="6.5"><title>${name}</title></circle>`;
     }
-    axisGroup.innerHTML = svg;
+    svg += `<circle class="axhit" data-view="iso" cx="${cx}" cy="${cy}" r="6"><title>ISO</title></circle>`;
+    // Only when it actually changed. This runs once per animation frame, so
+    // rewriting unconditionally replaced the hit targets sixty times a
+    // second - which is a lot of DOM for a still camera, and means the
+    // circles are never the same element long enough to be clicked.
+    if (svg !== lastAxes) {
+      lastAxes = svg;
+      axisGroup.innerHTML = svg;
+    }
   }
+  let lastAxes = "";
+
+  /* The gizmo orbits as well as snaps.
+     It is the part of the viewport a hand already goes to, and dragging it
+     is how every CAD tool spins a model - so it drives the same theta/phi
+     the canvas does. A press that does not move is still a click: release
+     within a few pixels and the axis under it snaps the view, which is what
+     the hit circles are for. Anything further is a turn, and the click is
+     swallowed so the view does not jump at the end of it. */
+  const gizmo = document.querySelector("#axes");
+  let spun = null;
+  gizmo.addEventListener("pointerdown", event => {
+    // Which arm was under the finger, read now: capturing the pointer
+    // retargets every later event to the gizmo itself, so by pointerup the
+    // circle that was pressed is no longer the event's target.
+    const hit = event.target.closest(".axhit");
+    gizmo.setPointerCapture(event.pointerId);
+    spun = { x: event.clientX, y: event.clientY, moved: 0, hit };
+    spin = false;
+    document.querySelector("#spinBtn").classList.remove("on");
+    event.preventDefault();
+  });
+  gizmo.addEventListener("pointermove", event => {
+    if (!spun) return;
+    const dx = event.clientX - spun.x, dy = event.clientY - spun.y;
+    spun.x = event.clientX; spun.y = event.clientY;
+    spun.moved += Math.abs(dx) + Math.abs(dy);
+    // Faster than the canvas: the gizmo is 116px across, so the same wrist
+    // movement has a tenth of the room and would barely turn the part.
+    theta -= dx * 0.022;
+    phi = Math.max(0.02, Math.min(Math.PI - 0.02, phi - dy * 0.022));
+  });
+  gizmo.addEventListener("pointerup", () => {
+    const press = spun;
+    spun = null;
+    if (!press || press.moved > 4 || !press.hit) return;
+    if (api.onView) api.onView(press.hit.dataset.view);
+    view(press.hit.dataset.view, true);
+  });
+  gizmo.addEventListener("pointercancel", () => { spun = null; });
 
   (function loop() {
     requestAnimationFrame(loop);
     if (tween) tween();
-    if (spin && model) theta += 0.0034;
+    stepReveal();
+    if ((spin || building) && model) theta += building && !spin ? 0.0022 : 0.0034;
     cam.position.set(
       target.x + dist * Math.sin(phi) * Math.cos(theta),
       target.y + dist * Math.sin(phi) * Math.sin(theta),
@@ -305,10 +418,16 @@ const Viewer = (() => {
     drawAxes();
   })();
 
-  return {
+  const api = {
     load, clear, fit, view,
+    //: Set by the app so the Spin chip can un-light itself when a fixed
+    //: view is chosen from the gizmo.
+    onView: null,
     get spin() { return spin; },
     set spin(v) { spin = v; },
+    //: Slow orbit while the pipeline works, without touching the SPIN toggle.
+    get building() { return building; },
+    set building(v) { building = !!v; },
     get extents() { return extents; },
     toggleWire() { wire = !wire; applyModes(); return wire; },
     snapshot(white) {
@@ -324,10 +443,12 @@ const Viewer = (() => {
       const url = renderer.domElement.toDataURL("image/png");
       if (white) {
         scene.background = background;
-        eachMaterial((m, isLine) => { if (isLine) m.color.set(0xD6E2F2); });
+        eachMaterial((m, isLine) => { if (isLine) m.color.set(0x8A8A88); });
         applyModes();
       }
       return url;
     },
   };
+
+  return api;
 })();

@@ -12,6 +12,7 @@ Run:  .venv/bin/python -m app.tests.test_providers
 
 from __future__ import annotations
 
+import builtins
 import json
 import shutil
 import sys
@@ -62,6 +63,10 @@ class FakeOpenAIServer(BaseHTTPRequestHandler):
     requests: list[dict] = []
     reject_images: bool = False
     wrap_json_in_prose: bool = True
+    #: Every real OpenAI-compatible endpoint streams, and the app asks for a
+    #: stream first because a self-hosted one is usually behind a proxy that
+    #: cuts off a quiet request. Set False to stand in for one that does not.
+    streams: bool = True
 
     def log_message(self, *_args):
         pass
@@ -90,10 +95,30 @@ class FakeOpenAIServer(BaseHTTPRequestHandler):
         system = next((m["content"] for m in body.get("messages", [])
                        if m.get("role") == "system"), "")
         text = self._reply_for(system)
+        if body.get("stream") and FakeOpenAIServer.streams:
+            self._stream(text)
+            return
         self._json(200, {
             "choices": [{"message": {"role": "assistant", "content": text}}],
             "usage": {"prompt_tokens": 1234, "completion_tokens": 567},
         })
+
+    def _stream(self, text: str):
+        """The same reply, in server-sent chunks, usage last."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+
+        def frame(payload: dict) -> None:
+            self.wfile.write(b"data: " + json.dumps(payload).encode() + b"\n\n")
+            self.wfile.flush()
+
+        for at in range(0, len(text), 64):
+            frame({"choices": [{"delta": {"content": text[at:at + 64]}}]})
+        frame({"choices": [],
+               "usage": {"prompt_tokens": 1234, "completion_tokens": 567}})
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
 
     def _reply_for(self, system: str) -> str:
         if "Planner Agent" in system:
@@ -172,7 +197,7 @@ def main() -> int:
     check("job converged", job.converged, job.error or "")
     check("real geometry was built",
           (job.directory / "v0" / "model.stl").exists())
-    geometry = json.loads((job.directory / "v0" / "geometry.json").read_text())
+    geometry = json.loads((job.directory / "v0" / "geometry.json").read_text(encoding="utf-8"))
     check("the kernel measured the washer",
           abs(geometry["bounding_box"]["xlen"] - 20.0) < 1e-6
           and geometry["is_valid"])
@@ -197,6 +222,66 @@ def main() -> int:
           job.tokens.get("input_tokens", 0) >= 1234
           and job.tokens.get("output_tokens", 0) >= 567,
           str(job.tokens))
+
+    print("\nThe reply is streamed, so a proxy has nothing to time out on")
+    # A self-hosted endpoint is usually reached through a tunnel or a
+    # reverse proxy, and those cut a request off when the origin has sent
+    # nothing for a while - Cloudflare's limit is 100 seconds. An 8B model
+    # writing a whole CadQuery script goes past that, and the Coder died on
+    # a 524 while the model was working perfectly well. Streaming keeps the
+    # first byte close and nothing in between idle.
+    FakeOpenAIServer.requests.clear()
+    deltas: list[tuple[str, str]] = []
+    streaming = OpenAICompatibleClient(
+        LLMConfig(provider="custom", kind="openai_compatible", base_url=base_url,
+                  api_key="test-key", generation_model="fake-small",
+                  judge_model="fake-large"),
+        on_delta=lambda kind, text: deltas.append((kind, text)))
+    reply = streaming.messages.create(
+        model="ignored", max_tokens=1024, system="You are the Coder Agent.",
+        messages=[{"role": "user", "content": "Write it."}])
+    check("the request asked for a stream",
+          FakeOpenAIServer.requests[-1].get("stream") is True,
+          str(FakeOpenAIServer.requests[-1].get("stream")))
+    check("and for the usage that does not come with one by default",
+          (FakeOpenAIServer.requests[-1].get("stream_options") or {})
+          .get("include_usage") is True)
+    check("the chunks are reassembled into the whole reply",
+          reply.content[0].text == CODE,
+          f"{len(reply.content[0].text)} chars of {len(CODE)}")
+    check("usage survives the stream",
+          reply.usage.input_tokens == 1234 and reply.usage.output_tokens == 567,
+          f"{reply.usage.input_tokens}/{reply.usage.output_tokens}")
+    check("and the fragments were published as they arrived",
+          len(deltas) > 1 and all(kind == "text:generation" for kind, _ in deltas)
+          and "".join(text for _, text in deltas) == CODE,
+          f"{len(deltas)} fragment(s)")
+
+    print("\nAn endpoint that will not stream is asked the old way")
+    FakeOpenAIServer.requests.clear()
+    FakeOpenAIServer.streams = False
+    notes: list[str] = []
+    stubborn = OpenAICompatibleClient(
+        LLMConfig(provider="custom", kind="openai_compatible", base_url=base_url,
+                  api_key="test-key", generation_model="fake-small",
+                  judge_model="fake-large"),
+        on_note=notes.append)
+    first = stubborn.messages.create(
+        model="ignored", max_tokens=1024, system="You are the Coder Agent.",
+        messages=[{"role": "user", "content": "Write it."}])
+    check("the reply comes back anyway", first.content[0].text == CODE)
+    check("and it said so rather than failing the run",
+          notes and "would not stream" in notes[0], str(notes))
+    tried = len(FakeOpenAIServer.requests)
+    second = stubborn.messages.create(
+        model="ignored", max_tokens=1024, system="You are the Coder Agent.",
+        messages=[{"role": "user", "content": "Again."}])
+    check("the next call does not pay for a failed stream again",
+          second.content[0].text == CODE
+          and len(FakeOpenAIServer.requests) == tried + 1
+          and FakeOpenAIServer.requests[-1].get("stream") is None,
+          f"{len(FakeOpenAIServer.requests) - tried} request(s)")
+    FakeOpenAIServer.streams = True
 
     print("\nA model that refuses images falls back instead of failing")
     FakeOpenAIServer.requests.clear()
@@ -227,18 +312,80 @@ def main() -> int:
           str(notes))
     FakeOpenAIServer.reject_images = False
 
-    print("\nThe default provider is left alone")
+    print("\nThe Claude backends")
     providers.clear_session_keys()
     default = providers.resolve("anthropic")
-    check("still the models the pipeline itself uses",
-          default.generation_model == "claude-sonnet-4-5-20250929"
-          and default.judge_model == "claude-opus-4-20250514",
+    check("a weaker coder paired with a stronger judge",
+          default.generation_model == "claude-sonnet-5"
+          and default.judge_model == "claude-opus-5",
           f"{default.generation_model} / {default.judge_model}")
-    check("and still the real SDK client",
-          type(providers.build_client(
-              LLMConfig(provider="anthropic", kind="anthropic", base_url="",
-                        api_key="x", generation_model="m", judge_model="m")
-          )).__module__.startswith("anthropic"))
+
+    claude = providers.build_client(
+        LLMConfig(provider="anthropic", kind="anthropic", base_url="",
+                  api_key="x", generation_model="gen", judge_model="jud"))
+    check("wrapped in the streaming client, not the bare SDK",
+          isinstance(claude, providers.ClaudeClient))
+    check("which still presents the SDK surface",
+          hasattr(claude.messages, "create"))
+
+    # The pipeline hardcodes a model id at each call site; the wrapper must
+    # substitute the configured one, keyed on the agent's own system prompt.
+    check("generation prompts route to the generation model",
+          providers.OpenAICompatibleClient._role_for(
+              "You are the Coder Agent") == "generation")
+    check("the Judge's prompt routes to the judge model",
+          providers.OpenAICompatibleClient._role_for(
+              agents.VALIDATOR_SYSTEM) == "judge")
+
+    print("\nBedrock")
+    bedrock = providers.resolve("bedrock")
+    check("model ids carry the anthropic. prefix Bedrock requires",
+          bedrock.generation_model.startswith("anthropic.")
+          and bedrock.judge_model.startswith("anthropic."),
+          f"{bedrock.generation_model} / {bedrock.judge_model}")
+    check("needs no API key - it uses the AWS credential chain",
+          providers.BUILTIN["bedrock"].needs_key is False)
+    check("and says so plainly when credentials are absent",
+          any("AWS credentials" in p for p in providers.problems(bedrock))
+          or providers._aws_identity() != "",
+          "; ".join(providers.problems(bedrock)) or "credentials present")
+
+    # The likeliest way Bedrock fails is a virtualenv without boto3, which
+    # `pip install anthropic` leaves behind unless the [bedrock] extra is
+    # asked for. That used to be reported as bad AWS credentials, sending
+    # the reader off to rotate keys over a missing import - and, worse, the
+    # health banner announced Bedrock ready while the first Generate
+    # answered 503, because the picker and the gate asked different
+    # questions. Both halves are checked here.
+    real_import = builtins.__import__
+
+    def no_boto(name, *args, **kwargs):
+        if name.split(".")[0] in ("boto3", "botocore"):
+            raise ModuleNotFoundError("No module named 'boto3'")
+        return real_import(name, *args, **kwargs)
+
+    providers._aws_cache = (0.0, "", "")
+    builtins.__import__ = no_boto
+    try:
+        blind = providers.problems(bedrock)
+        blind_ready = next(p["ready"] for p in providers.status()
+                           if p["id"] == "bedrock")
+    finally:
+        builtins.__import__ = real_import
+        providers._aws_cache = (0.0, "", "")
+    check("without boto3 it names the dependency, not the credentials",
+          any("boto3" in issue for issue in blind), "; ".join(blind))
+    check("and the picker calls Bedrock unready rather than offering a 503",
+          blind_ready is False)
+
+    # Whatever this machine's credentials are, the banner and the gate have
+    # to give the same answer - that disagreement is what produced a ready
+    # health check and a refused job on the same server.
+    bedrock_ready = next(p["ready"] for p in providers.status()
+                         if p["id"] == "bedrock")
+    check("the picker's readiness and the job gate agree",
+          bedrock_ready == (not providers.problems(bedrock)),
+          f"ready={bedrock_ready} problems={providers.problems(bedrock)}")
 
     server.shutdown()
     shutil.rmtree(runs, ignore_errors=True)

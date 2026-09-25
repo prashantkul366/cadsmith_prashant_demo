@@ -205,13 +205,13 @@ def seed(name: str, manager: JobManager) -> str:
     # Mark provenance: the geometry is real, the agent dialogue was scripted.
     job.source = "fixture"
     meta_file = job.directory / "meta.json"
-    meta = json.loads(meta_file.read_text())
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
     meta["source"] = "fixture"
     meta["fixture_note"] = (
         "Real CadQuery geometry and real VTK renders; agent replies were "
         "scripted by app/tools/seed_demo_run.py, not returned by Claude."
     )
-    meta_file.write_text(json.dumps(meta, indent=2))
+    meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     print(f"    -> {job.id}: converged={job.converged}, "
           f"{len(job.versions)} version(s)")

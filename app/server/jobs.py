@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 import traceback
@@ -24,7 +25,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from .edits import apply_changes, describe, plan_edit
+from . import budget as budget_mod
+from . import catalog_run
+from . import i18n
+from .edits import Change, apply_changes, describe, plan_edit
 from .events import (
     EventSink,
     PHASE_EDIT,
@@ -35,12 +39,18 @@ from .events import (
     STATUS_OK,
     STATUS_STARTED,
 )
-from .providers import DEFAULT_PROVIDER, LLMConfig, resolve
+from .providers import (
+    DEFAULT_PROVIDER,
+    LLMConfig,
+    normalise_effort,
+    resolve,
+)
 from .replay import clone_run, is_replayable, replay_into
 from .instrument import (
     InstrumentedExecutor,
     InstrumentedPipeline,
     InstrumentedValidator,
+    PipelineMessage,
     RunContext,
     install_agent_hooks,
     set_context,
@@ -59,6 +69,12 @@ STATUS_ERROR = "error"
 
 PART_NAME = "part"
 
+#: How many finished runs to keep on disk. Each is a few megabytes of STEP,
+#: STL, renders and drawing sheets, and nothing in the app reads a run it is
+#: not showing. 0 keeps everything, for a machine where the disk is not the
+#: constraint.
+KEEP_RUNS = int(os.getenv("CADSMITH_KEEP_RUNS", "200"))
+
 
 @dataclass
 class JobOptions:
@@ -75,6 +91,23 @@ class JobOptions:
     provider: str = DEFAULT_PROVIDER
     generation_model: str = ""
     judge_model: str = ""
+    #: The language this run reports itself in. Model input is unaffected -
+    #: the agents' prompts stay English whatever this is set to.
+    lang: str = i18n.DEFAULT_LANG
+    #: Tokens this run may spend before it is stopped. On a metered backend a
+    #: loop that will not converge is not a slow run, it is a bill.
+    token_budget: int = budget_mod.DEFAULT_BUDGET
+    #: Answer an unambiguous standard-part request from the catalogue instead
+    #: of generating it. Off reproduces the published pipeline exactly.
+    use_catalog: bool = True
+    #: Give the Planner the published dimensions for any standard part the
+    #: request names. Off reproduces the pipeline as published.
+    ground_dimensions: bool = True
+    #: How hard the agents are asked to think. A simple part answered at low
+    #: effort arrives in a fraction of the time; a hard one is worth the wait.
+    #: Empty leaves the choice to the backend, which reasons at its own
+    #: default. Applies to the Claude backends; other providers ignore it.
+    effort: str = ""
 
     @classmethod
     def from_dict(cls, raw: Optional[dict]) -> "JobOptions":
@@ -86,6 +119,12 @@ class JobOptions:
             provider=str(raw.get("provider") or DEFAULT_PROVIDER),
             generation_model=str(raw.get("generation_model") or ""),
             judge_model=str(raw.get("judge_model") or ""),
+            lang=i18n.normalise(raw.get("lang")),
+            token_budget=max(0, int(raw.get("token_budget")
+                                    or budget_mod.DEFAULT_BUDGET)),
+            use_catalog=bool(raw.get("use_catalog", True)),
+            ground_dimensions=bool(raw.get("ground_dimensions", True)),
+            effort=normalise_effort(raw.get("effort")),
         )
 
     def llm_config(self) -> LLMConfig:
@@ -95,6 +134,7 @@ class JobOptions:
             generation_model=self.generation_model,
             judge_model=self.judge_model,
             judge_vision=self.use_vision,
+            effort=self.effort,
         )
 
 
@@ -191,7 +231,10 @@ class JobManager:
 
         job = Job(id=job_id, prompt=prompt, options=options, directory=directory)
         sink = EventSink(path=directory / "events.jsonl")
-        ctx = RunContext(sink=sink, job_dir=directory, part_name=PART_NAME)
+        ctx = RunContext(sink=sink, job_dir=directory,
+                         part_name=PART_NAME, lang=options.lang,
+                         prompt=prompt,
+                         ground_dimensions=options.ground_dimensions)
 
         with self._lock:
             self._jobs[job_id] = job
@@ -213,21 +256,95 @@ class JobManager:
         set_context(ctx)
         job.status = STATUS_RUNNING
         job.started_at = time.time()
-        sink.emit(PHASE_JOB, STATUS_STARTED, "Pipeline started.",
+        lang = job.options.lang
+        ctx.budget = budget_mod.Budget(limit=job.options.token_budget,
+                                       lang=lang)
+        sink.emit(PHASE_JOB, STATUS_STARTED, i18n.t("job.started", lang),
                   llm=ctx.llm.redacted())
         if ctx.llm.generation_model == ctx.llm.judge_model:
             # The pipeline judges with a stronger, separate model on purpose;
             # one model grading its own work is the bias that design avoids.
             sink.emit(
                 PHASE_JOB, STATUS_INFO,
-                f"Generation and judging both use {ctx.llm.judge_model}, so "
-                f"the Judge is grading its own work. Pick a different judge "
-                f"model for an independent check.")
+                i18n.t("job.samemodel", lang, model=ctx.llm.judge_model))
 
         try:
             from autofab import agents
 
             agents.reset_token_usage()
+
+            # An unambiguous standard part has nothing for five agents to work
+            # out: the dimensions come from the standard and a model can only
+            # introduce error. The router refuses anything ambiguous and
+            # verifies whatever it does return, so reaching here means a sound
+            # solid is already in hand. Anything unexpected falls through to
+            # the pipeline rather than failing the run.
+            routed = None
+            shortlist = None
+            if job.options.use_catalog:
+                try:
+                    routed = catalog_run.find(job.prompt)
+                    # Nothing exact, but possibly several that are all
+                    # right: "a handlebar" is four bends rather than one
+                    # under-specified part. Only asked when select found
+                    # nothing, so an exact request is never turned into a
+                    # question.
+                    if routed is None:
+                        shortlist = catalog_run.find_options(job.prompt)
+                except Exception as error:
+                    sink.emit(PHASE_JOB, STATUS_INFO,
+                              i18n.t("job.catalogskipped", lang, error=error))
+            if routed is None and shortlist:
+                try:
+                    catalog_run.serve_options(
+                        ctx, shortlist, job.directory / "work")
+                    job.source = "catalog"
+                    job.converged = True
+                    job.design_plan = {}
+                    job.llm_calls = 0
+                    job.tokens = agents.get_token_usage()
+                    job.versions = list(ctx.versions)
+                    job.status = STATUS_DONE
+                    job.finished_at = time.time()
+                    self._write_meta(job)
+                    sink.emit(PHASE_JOB, STATUS_OK,
+                              i18n.t("job.catalogoptions", lang,
+                                     n=len(ctx.versions)),
+                              converged=True, tokens=job.tokens,
+                              llm_calls=0, source="catalog")
+                    return
+                except Exception as error:
+                    sink.emit(
+                        PHASE_JOB, STATUS_INFO,
+                        i18n.t("job.catalogunbuildable", lang, error=error))
+                    ctx.source = "pipeline"
+                    ctx.iteration = 0
+            if routed is not None:
+                try:
+                    catalog_run.serve(ctx, routed, job.directory / "work")
+                    # The job itself is catalogue-sourced, not just its
+                    # version - otherwise History shows it as an ordinary
+                    # converged run and the provenance is lost.
+                    job.source = "catalog"
+                    job.converged = True
+                    job.design_plan = {}
+                    job.llm_calls = 0
+                    job.tokens = agents.get_token_usage()
+                    job.versions = list(ctx.versions)
+                    job.status = STATUS_DONE
+                    job.finished_at = time.time()
+                    self._write_meta(job)
+                    sink.emit(PHASE_JOB, STATUS_OK,
+                              i18n.t("job.catalogserved", lang),
+                              converged=True, tokens=job.tokens,
+                              llm_calls=0, source="catalog")
+                    return
+                except Exception as error:
+                    sink.emit(
+                        PHASE_JOB, STATUS_INFO,
+                        i18n.t("job.catalogunbuildable", lang, error=error))
+                    ctx.source = "pipeline"
+
             pipeline = InstrumentedPipeline(
                 output_dir=str(job.directory / "work"),
                 max_error_retries=job.options.max_error_retries,
@@ -246,7 +363,7 @@ class JobManager:
 
             try:
                 (job.directory / "result.json").write_text(
-                    json.dumps(result.to_dict(), indent=2)
+                    json.dumps(result.to_dict(), indent=2), encoding="utf-8"
                 )
             except OSError:
                 pass
@@ -254,19 +371,28 @@ class JobManager:
             sink.emit(
                 PHASE_JOB,
                 STATUS_OK,
-                "Converged." if result.converged else
-                "Finished without converging - showing the best attempt.",
+                i18n.t("job.converged" if result.converged
+                       else "job.notconverged", lang),
                 converged=result.converged,
                 iterations=len(result.iterations),
                 llm_calls=result.total_llm_calls,
                 tokens=job.tokens,
+                spend=budget_mod.summary(job.tokens, ctx.budget),
                 total_ms=result.total_time_ms,
             )
         except Exception as exc:  # surfaced to the client, never swallowed
             job.status = STATUS_ERROR
-            job.error = f"{type(exc).__name__}: {exc}"
+            # A run stopped at its ceiling explains itself; anything else is
+            # an error whose type the person needs to see.
+            job.error = (
+                str(exc)
+                if isinstance(exc, (PipelineMessage, budget_mod.BudgetExceeded))
+                else f"{type(exc).__name__}: {exc}")
             job.versions = list(ctx.versions)
+            job.tokens = agents.get_token_usage()
             sink.emit(PHASE_JOB, STATUS_FAILED, job.error,
+                      tokens=job.tokens,
+                      spend=budget_mod.summary(job.tokens, ctx.budget),
                       traceback=traceback.format_exc()[-4000:])
         finally:
             job.finished_at = time.time()
@@ -286,20 +412,43 @@ class JobManager:
         """
         sink = self.sink(job.id)
         if sink is not None:
-            sink.emit(PHASE_JOB, STATUS_QUEUED, "Edit queued.",
+            sink.emit(PHASE_JOB, STATUS_QUEUED,
+                      i18n.t("edit.queued", job.options.lang),
                       instruction=instruction, base_version=base_version)
         job.status = STATUS_QUEUED
         self._pool.submit(self._run_edit, job, instruction, base_version)
 
+    def submit_parameters(self, job: Job, changes: list[Change],
+                          base_version: Optional[int] = None) -> None:
+        """Queue a rebuild from values a person set directly.
+
+        The same work as an edit that maps onto a parameter, minus the part
+        that has to guess which parameter was meant: the panel names them.
+        """
+        sink = self.sink(job.id)
+        summary = describe(changes)
+        if sink is not None:
+            sink.emit(PHASE_JOB, STATUS_QUEUED,
+                      i18n.t("edit.queued", job.options.lang),
+                      instruction=summary, base_version=base_version)
+        job.status = STATUS_QUEUED
+        self._pool.submit(self._run_edit, job, summary, base_version, changes)
+
     def _run_edit(self, job: Job, instruction: str,
-                  base_version: Optional[int] = None) -> None:
+                  base_version: Optional[int] = None,
+                  changes: Optional[list[Change]] = None) -> None:
         """Apply an edit, by parameter patch where possible or the Refiner.
 
         The two paths differ in more than speed.  A patch changes a number the
         script already declares, so the kernel alone can confirm the result.
         The Refiner writes new code, so the full validation - vision Judge
         included - is worth its cost.
+
+        ``changes`` skips the interpretation entirely: the parameter panel
+        already knows which numbers it is setting, so there is nothing to
+        infer and nothing that could be inferred wrongly.
         """
+        lang = job.options.lang
         sink = self.sink(job.id)
         ctx = self.context(job.id)
         if sink is None:
@@ -308,10 +457,15 @@ class JobManager:
             # Never fail silently here: the client is waiting on the stream.
             job.status = STATUS_DONE
             sink.emit(PHASE_JOB, STATUS_FAILED,
-                      "That run cannot be edited in this session.", edit=True)
+                      i18n.t("edit.nocontext", lang), edit=True)
             return
 
         ctx.llm = job.options.llm_config()
+        ctx.budget = budget_mod.Budget(limit=job.options.token_budget,
+                                       lang=lang)
+        # An edit reports itself in whatever language the switch is on now,
+        # which need not be the language the run was started in.
+        ctx.lang = lang
         set_context(ctx)
         job.status = STATUS_RUNNING
         started = time.time()
@@ -328,15 +482,16 @@ class JobManager:
                      if v.get("iteration") == base_version),
                     job.versions[-1])
             source_dir = job.directory / f"v{previous['iteration']}"
-            code = (source_dir / "code.py").read_text()
+            code = (source_dir / "code.py").read_text(encoding="utf-8")
             next_index = max(v["iteration"] for v in job.versions) + 1
 
-            plan = plan_edit(code, instruction)
-            if plan.possible:
-                new_code = apply_changes(code, plan.changes)
+            plan = plan_edit(code, instruction) if changes is None else None
+            if changes is not None or plan.possible:
+                applied = changes if changes is not None else plan.changes
+                new_code = apply_changes(code, applied)
                 ctx.method = "parameter patch"
-                ctx.changes = [c.to_dict() for c in plan.changes]
-                sink.emit(PHASE_EDIT, STATUS_OK, describe(plan.changes),
+                ctx.changes = [c.to_dict() for c in applied]
+                sink.emit(PHASE_EDIT, STATUS_OK, describe(applied),
                           method=ctx.method, instruction=instruction,
                           changes=ctx.changes,
                           base_version=previous["iteration"])
@@ -346,18 +501,15 @@ class JobManager:
                 job.status = STATUS_DONE
                 sink.emit(
                     PHASE_JOB, STATUS_FAILED,
-                    f"That is not a parameter change ({plan.reason}), so it "
-                    f"needs the Refiner agent - but no model backend is "
-                    f"available: {_llm_problems(job)[0]} Try naming a "
-                    f"dimension the script declares.",
+                    i18n.t("edit.needsrefiner", lang, reason=plan.reason,
+                           problem=_llm_problems(job)[0]),
                     edit=True)
                 return
             else:
                 ctx.method = "refiner agent"
                 ctx.changes = []
                 sink.emit(PHASE_EDIT, STATUS_INFO,
-                          f"Not a parameter change ({plan.reason}) - "
-                          f"asking the Refiner agent.",
+                          i18n.t("edit.askingrefiner", lang, reason=plan.reason),
                           method=ctx.method, instruction=instruction,
                           reason=plan.reason)
                 new_code = agents.refine_geometry(
@@ -385,8 +537,8 @@ class JobManager:
                 job.status = STATUS_DONE
                 sink.emit(
                     PHASE_JOB, STATUS_FAILED,
-                    f"That change could not be built: {result.error_type}. "
-                    f"The previous version is unchanged.",
+                    i18n.t("edit.unbuildable", lang,
+                           error_type=result.error_type),
                     error=(result.error or "")[-2000:], edit=True)
                 return
 
@@ -408,16 +560,24 @@ class JobManager:
             job.versions = list(ctx.versions)
             job.tokens = agents.get_token_usage()
             job.status = STATUS_DONE
-            sink.emit(PHASE_JOB, STATUS_OK, "Edit applied.",
+            sink.emit(PHASE_JOB, STATUS_OK, i18n.t("edit.applied", lang),
                       edit=True, method=ctx.method,
                       total_ms=(time.time() - started) * 1000,
                       tokens=job.tokens, iterations=len(job.versions))
         except Exception as exc:
             job.status = STATUS_DONE
             sink.emit(PHASE_JOB, STATUS_FAILED,
-                      f"The edit failed: {type(exc).__name__}: {exc}",
+                      i18n.t("edit.failed", lang,
+                             error=f"{type(exc).__name__}: {exc}"),
                       traceback=traceback.format_exc()[-4000:], edit=True)
         finally:
+            # Every terminal path of an edit lands here, including the early
+            # returns for a refused or unbuildable change. Without this the
+            # job kept reporting the *original* run's finish time, so an API
+            # client polling finished_at could not tell an edit had happened
+            # at all - the browser only got away with it because it follows
+            # the event stream instead.
+            job.finished_at = time.time()
             ctx.source, ctx.method = "pipeline", ""
             ctx.instruction, ctx.changes = "", []
             set_context(None)
@@ -449,7 +609,10 @@ class JobManager:
             replay_of=source.id,
         )
         sink = EventSink(path=directory / "events.jsonl")
-        ctx = RunContext(sink=sink, job_dir=directory, part_name=PART_NAME)
+        ctx = RunContext(sink=sink, job_dir=directory,
+                         part_name=PART_NAME, lang=job.options.lang,
+                         prompt=job.prompt,
+                         ground_dimensions=job.options.ground_dimensions)
 
         with self._lock:
             self._jobs[job_id] = job
@@ -458,7 +621,7 @@ class JobManager:
 
         self._write_meta(job)
         sink.emit(PHASE_JOB, STATUS_QUEUED,
-                  f"Replaying a recorded run ({source.id}).",
+                  i18n.t("job.replaying", job.options.lang, source=source.id),
                   prompt=source.prompt, replay_of=source.id, replayed=True)
         self._pool.submit(self._run_replay, job, source.directory, speed)
         return job
@@ -470,9 +633,11 @@ class JobManager:
         job.status = STATUS_RUNNING
         job.started_at = time.time()
         try:
-            replay_into(sink, source_dir, speed=speed)
+            replay_into(sink, source_dir, speed=speed,
+                        lang=job.options.lang)
             job.status = STATUS_DONE
-            sink.emit(PHASE_JOB, STATUS_OK, "Replay finished.",
+            sink.emit(PHASE_JOB, STATUS_OK,
+                      i18n.t("job.replayfinished", job.options.lang),
                       converged=job.converged, replayed=True,
                       iterations=len(job.versions))
         except Exception as exc:
@@ -487,7 +652,7 @@ class JobManager:
     def _write_meta(self, job: Job) -> None:
         try:
             (job.directory / "meta.json").write_text(
-                json.dumps(job.summary(), indent=2, default=str)
+                json.dumps(job.summary(), indent=2, default=str), encoding="utf-8"
             )
         except OSError:
             pass
@@ -505,7 +670,7 @@ class JobManager:
                 if directory.name in self._jobs:
                     continue
             try:
-                meta = json.loads(meta_file.read_text())
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
 
@@ -530,13 +695,16 @@ class JobManager:
             # A job interrupted by a restart can never resume; mark it honestly.
             if job.status in (STATUS_QUEUED, STATUS_RUNNING):
                 job.status = STATUS_ERROR
-                job.error = "Interrupted by a server restart."
+                job.error = i18n.t("job.interrupted", job.options.lang)
 
             # A restored run must stay editable, which needs both a writable
             # log and a context carrying the versions it already has.
             sink = EventSink.from_file(directory / "events.jsonl",
                                        keep_appending=True)
-            ctx = RunContext(sink=sink, job_dir=directory, part_name=PART_NAME)
+            ctx = RunContext(sink=sink, job_dir=directory,
+                             part_name=PART_NAME, lang=job.options.lang,
+                             prompt=job.prompt,
+                             ground_dimensions=job.options.ground_dimensions)
             ctx.versions = list(job.versions)
             if job.versions:
                 ctx.iteration = max(v.get("iteration", 0) for v in job.versions)
@@ -547,3 +715,51 @@ class JobManager:
                 self._contexts[job.id] = ctx
             restored += 1
         return restored
+
+    # -- keeping the disk from filling ---------------------------------------
+
+    def prune(self, keep: Optional[int] = None) -> int:
+        """Delete all but the newest ``keep`` runs. Returns how many went.
+
+        A run directory holds a STEP, an STL, three-view renders, a cached
+        projection and a drawing sheet per version, so a few hundred runs is
+        real disk. Nothing here is precious - every run is reproducible from
+        its prompt - but a demo that fills the disk stops being a demo, and
+        the failure arrives as an unrelated-looking write error much later.
+
+        Newest by when the run was created, not by file mtime: opening an old
+        run writes its drawing cache, and that should not promote it.
+        """
+        limit = KEEP_RUNS if keep is None else keep
+        if limit <= 0:
+            return 0
+
+        with self._lock:
+            candidates = [
+                job for job in self._jobs.values()
+                # A queued or running job is being written to right now, and
+                # its directory is the only copy of what it has produced.
+                if job.status in (STATUS_DONE, STATUS_ERROR)
+            ]
+        candidates.sort(key=lambda j: j.created_at, reverse=True)
+        doomed = candidates[limit:]
+
+        removed = 0
+        for job in doomed:
+            try:
+                shutil.rmtree(job.directory, ignore_errors=False)
+            except OSError:
+                # Windows holds a file open now and then; leaving the run
+                # registered means the next sweep tries again.
+                continue
+            with self._lock:
+                self._jobs.pop(job.id, None)
+                sink = self._sinks.pop(job.id, None)
+                self._contexts.pop(job.id, None)
+            if sink is not None:
+                try:
+                    sink.close()
+                except Exception:
+                    pass
+            removed += 1
+        return removed

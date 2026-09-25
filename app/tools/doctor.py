@@ -201,6 +201,12 @@ def check_configuration(args) -> dict:
     except Exception as exc:
         warn("certificate trust", f"could not configure: {exc}")
 
+    # Taken before .env is loaded, so each variable can be reported with
+    # where it came from. Without that, a value inherited from the terminal
+    # and a value read out of the file look identical - and editing the file
+    # does nothing to the first, which is a confusing half hour.
+    from_shell = set(os.environ)
+
     try:
         from dotenv import load_dotenv
 
@@ -217,14 +223,39 @@ def check_configuration(args) -> dict:
     interesting = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CADSMITH_LLM_API_KEY",
                    "CADSMITH_LLM_BASE_URL", "OLLAMA_BASE_URL",
                    "LMSTUDIO_BASE_URL", "CADSMITH_LLM_TIMEOUT"]
-    for name in interesting:
+    # Bedrock's variables are reported whether or not they are set, because
+    # "no usable AWS credentials" and "you are in a different terminal from
+    # the one you typed them in" look identical from the outside - and the
+    # second is the common one. A $Env: or export lives in that window only,
+    # so the window you installed from is not the window you run from.
+    aws = ["AWS_REGION", "AWS_PROFILE", "AWS_ACCESS_KEY_ID",
+           "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
+    show_aws = args.provider == "bedrock"
+    for name in interesting + (aws if show_aws else []):
         value = os.getenv(name)
         if not value:
+            if show_aws and name in aws:
+                print(f"  {DIM}....  {name}  not set{RESET}")
             continue
-        if name.endswith("KEY"):
-            ok(name, f"set, {len(value)} chars, ends ...{value[-4:]}")
+        origin = "from the shell" if name in from_shell else "from .env"
+        # Never the value itself: a session token is a credential, and this
+        # output is the first thing anyone pastes into a chat for help.
+        if any(word in name for word in ("KEY", "SECRET", "TOKEN")):
+            ok(name, f"set, {len(value)} chars, ends ...{value[-4:]}, {origin}")
         else:
-            ok(name, value)
+            ok(name, f"{value}  ({origin})")
+
+    # Both set is the trap worth naming: the app passes AWS_PROFILE to the
+    # SDK explicitly, and botocore then drops the environment provider
+    # entirely - so the keys you just pasted are not the ones being used.
+    if show_aws and os.getenv("AWS_PROFILE") and os.getenv("AWS_ACCESS_KEY_ID"):
+        warn("AWS_PROFILE and AWS_ACCESS_KEY_ID are both set",
+             os.getenv("AWS_PROFILE", ""),
+             "The profile wins and the pasted keys are ignored. Clear it "
+             "with `Remove-Item Env:\\AWS_PROFILE` (PowerShell) or "
+             "`unset AWS_PROFILE`, and take it out of .env, if you mean to "
+             "use the keys. Editing .env does not change a terminal that "
+             "already has the variable.")
 
     try:
         from app.server import providers
@@ -254,6 +285,13 @@ def check_configuration(args) -> dict:
     else:
         ok(f"selected provider '{args.provider}'",
            f"gen={config.generation_model} judge={config.judge_model}")
+        if config.kind == "bedrock":
+            # Which identity AWS actually resolved to, since a profile, an
+            # instance role and the pasted keys can all be present at once
+            # and only one of them is in use.
+            arn = providers._aws_check()[0]
+            if arn:
+                ok("AWS identity", providers.mask_arn(arn))
         if config.generation_model == config.judge_model:
             warn("one model for both roles", config.judge_model,
                  "The Judge grades its own work. Works, but it is not an "
@@ -310,8 +348,8 @@ def check_models(args, resolved: dict) -> None:
         warn("model checks", "skipped - provider is not configured")
         return
 
-    if config.kind == "anthropic":
-        _check_anthropic(config, args)
+    if config.kind in ("anthropic", "bedrock"):
+        _check_claude(config, args, providers)
         return
 
     # 1. Can we reach it at all?
@@ -383,27 +421,83 @@ def check_models(args, resolved: dict) -> None:
              "vision-capable model.")
 
 
-def _check_anthropic(config, args) -> None:
+def _check_claude(config, args, providers) -> None:
+    """The Messages API, first-party or on Bedrock.
+
+    Both are the same surface and differ only in how the client is built, so
+    the app builds it. That also keeps Bedrock off the OpenAI-compatible
+    path, where its ``base_url`` is an AWS region and the request would be
+    posted to ``us-east-1/chat/completions`` - a failure that says nothing
+    about the thing being checked.
+    """
     try:
-        import anthropic
+        client = providers._build_sdk_client(config)
     except Exception as exc:
-        fail("anthropic SDK", str(exc))
-        return
-    client = anthropic.Anthropic(api_key=config.api_key)
-    started = time.time()
-    try:
-        response = client.messages.create(
-            model=config.generation_model, max_tokens=16,
-            messages=[{"role": "user", "content": "Reply with exactly: ok"}])
-        ok("generation model answers",
-           f"{time.time() - started:.1f}s, {response.content[0].text.strip()[:20]!r}")
-    except Exception as exc:
-        fail("generation model answers", f"{type(exc).__name__}: {exc}",
+        fail("Anthropic SDK client", f"{type(exc).__name__}: {exc}",
              _advice(str(exc)))
+        return
+
+    offered: list[str] = []
+    if config.kind == "bedrock":
+        offered, empty_because = providers.bedrock_models(timeout=args.timeout)
+        if offered:
+            ok("models this account can invoke", f"{len(offered)} offered")
+            for role, name in (("generation", config.generation_model),
+                               ("judge", config.judge_model)):
+                if name not in offered:
+                    # Said, not advised. An id absent from the list can be
+                    # perfectly invokable - on this account the two that
+                    # work are the two that are missing - so this is a fact
+                    # worth knowing if the call below fails, and nothing to
+                    # act on if it succeeds.
+                    warn(f"{role} model is not in the list", name,
+                         "Not necessarily wrong: the list comes from the "
+                         "control plane and the runtime decides separately. "
+                         "The probe below is the real answer.")
+        else:
+            warn("model list", "nothing listed", empty_because)
+
+    roles = [("generation", config.generation_model)]
+    if config.judge_model and config.judge_model != config.generation_model:
+        roles.append(("judge", config.judge_model))
+    for role, model in roles:
+        started = time.time()
+        try:
+            response = client.messages.create(
+                model=model, max_tokens=16,
+                messages=[{"role": "user", "content": "Reply with exactly: ok"}])
+            text = next((block.text for block in response.content
+                         if getattr(block, "text", "")), "")
+            ok(f"{role} model answers",
+               f"{model} - {time.time() - started:.1f}s, {text.strip()[:20]!r}")
+        except Exception as exc:
+            fail(f"{role} model answers", f"{model} - {type(exc).__name__}: {exc}",
+                 _advice(str(exc)))
+            # The list is what the next command needs, so print it here
+            # rather than leaving "27 offered" and no way to see which 27.
+            if offered:
+                print(f"\n  {DIM}Models this account can invoke:{RESET}")
+                for name in offered:
+                    print(f"    {DIM}{name}{RESET}")
+                print(f"\n  {DIM}Name one with --generation-model and "
+                      f"--judge-model.{RESET}")
+            if role == "generation":
+                return
 
 
 def _advice(error: str) -> str:
     lowered = error.lower()
+    if "inference profile" in lowered or "on-demand throughput" in lowered:
+        return ("This Bedrock model cannot be invoked by its bare id. Use the "
+                "cross-region inference profile - the same model with a "
+                "region prefix, us.anthropic.claude-... - which the model box "
+                "and this check both list.")
+    if "accessdenied" in lowered or "access to the model" in lowered:
+        return ("The account reaches Bedrock but not this model. Enable it "
+                "under Bedrock > Model access, in the region AWS_REGION names.")
+    if "validationexception" in lowered:
+        return ("Bedrock rejected the request as malformed; the model id is "
+                "the usual cause. Take one from the list above.")
     if "certificate_verify_failed" in lowered or "certificate verify" in lowered:
         return ("Your network is inspecting TLS and re-signing it with a "
                 "certificate authority Python does not know. Install "

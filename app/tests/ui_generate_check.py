@@ -14,6 +14,7 @@ Needs a running server and a running mock provider:
 from __future__ import annotations
 
 import argparse
+import atexit
 import subprocess
 import sys
 import time
@@ -31,6 +32,19 @@ _CANDIDATE_BROWSERS = [
 failures: list[str] = []
 
 
+def settings(page):
+    """Open the composer's settings menu if it is shut.
+
+    Provider, both model ids, the iteration count and a pasted key moved
+    behind the kebab beside the prompt, so a test that sets one opens it
+    the way a person does.
+    """
+    if page.locator("#moreMenu").is_hidden():
+        page.click("#moreBtn")
+    page.wait_for_selector("#moreMenu:not([hidden])", timeout=5000)
+    page.wait_for_timeout(120)
+
+
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'PASS' if ok else 'FAIL'}  {label}{(' - ' + detail) if detail else ''}")
     if not ok:
@@ -46,6 +60,7 @@ def executable() -> str | None:
 
 def configure_provider(page, base_url: str) -> None:
     """Enter the backend through the UI, as a person would."""
+    settings(page)
     page.select_option("#optProvider", "custom")
     page.wait_for_timeout(400)
     page.fill("#providerBase", base_url)
@@ -58,11 +73,19 @@ def configure_provider(page, base_url: str) -> None:
 
 
 def start_mock(port: int, mode: str) -> subprocess.Popen:
+    """Start a mock provider, and make sure it dies with us.
+
+    Without the atexit, a run that raises anywhere between here and
+    stop_mock leaves the provider listening - and, once init adopts it, not
+    obviously anyone's. The next run then reports "port busy" and reads
+    like a fault in the app rather than the tail of the last attempt.
+    """
     process = subprocess.Popen(
         [sys.executable, "-m", "app.tools.mock_provider",
          "--port", str(port), "--fail", mode],
         cwd=str(Path(__file__).resolve().parents[2]),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    atexit.register(lambda: process.poll() is None and process.kill())
     time.sleep(2.0)
     if process.poll() is not None:
         raise RuntimeError(
@@ -157,14 +180,35 @@ def main() -> int:
         first.click()
         page.wait_for_timeout(2500)
         rejected = page.locator("#valBody").inner_text()
+        # Either explanation is correct, and which one appears depends on
+        # what caught the attempt first. Measurement now catches this one:
+        # the request states a thickness the mock's 40 x 30 x 10 block does
+        # not have, and spec refuses over the Judge's head by design. What
+        # the check is really for is that a rejected attempt says *why* in
+        # terms a reader can act on, rather than sitting there rejected.
+        headline = ("Rejected by the Judge" in rejected
+                    or "Refused on measurement" in rejected)
         check("the rejected attempt explains itself",
-              "Rejected by the Judge" in rejected and "20.0mm" in rejected,
-              rejected.replace("\n", " ")[:80])
+              headline and "mm" in rejected,
+              rejected.replace("\n", " ")[:90])
+        check("and the reason is a measurement, not an opinion",
+              "measured" in rejected.lower(),
+              rejected.replace("\n", " ")[:90])
 
         # ---------------------------------------------------------------
         # The path a person actually takes: pick a listed prompt, run it,
         # then run another. Typing a prompt once is not the same journey.
         print("\nStarting from a benchmark prompt")
+        # Two things a person does here: start a fresh part, and open the
+        # prompts card if it is shut - they live on the right now.
+        if page.locator("#verPill").is_visible():
+            page.click("#newBtn")
+            page.wait_for_timeout(300)
+        if page.evaluate("""() => document
+                .querySelector('.rcard[data-card=\"prompts\"]')
+                .classList.contains('shut')"""):
+            page.click('.rcard[data-card="prompts"] [data-card-toggle]')
+            page.wait_for_timeout(300)
         sample = page.locator("#samples .sample").first
         sample_id = sample.locator("b").inner_text()
         sample.click()
@@ -200,6 +244,9 @@ def main() -> int:
 
         # ---------------------------------------------------------------
         print("\nA third run, straight after")
+        if page.locator("#verPill").is_visible():
+            page.click("#newBtn")
+            page.wait_for_timeout(300)
         page.locator("#samples .sample").nth(1).click()
         page.wait_for_timeout(400)
         page.click("#genBtn")
@@ -243,6 +290,10 @@ def main() -> int:
             page.goto(args.url, wait_until="networkidle")
             page.wait_for_timeout(1000)
             configure_provider(page, mode_url)
+            # One composer: without the +, a second prompt edits the part
+            # already on screen instead of starting another.
+            if page.locator("#verPill").is_visible():
+                page.click("#newBtn")
             page.fill("#prompt", "A 20mm cube.")
             page.click("#genBtn")
 
