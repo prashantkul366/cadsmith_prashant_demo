@@ -907,6 +907,19 @@ The catalogue path needs none of this. A standard part - and the handlebar
 picker - is served with no model call at all, which is why the app still
 starts and still answers with no endpoint configured.
 
+**What an 8B model actually did with it.** Qwen3-VL-8B-Instruct, asked for
+the custom handlebar the catalogue cannot answer - 700 wide, 140 rise, 100
+pullback, Ø22 x 2 wall - ran the whole pipeline: Planner, Coder, kernel,
+vision Judge, Refiner, four iterations, nine calls, 49k in and 11k out. It
+did not converge. Every iteration came out a straight tube, 22 x 22 x 700,
+because the Coder extruded the bore along the same axis as the tube and cut
+nothing; the Judge - the same model, grading its own work - said so
+correctly each time, and the kernel's own measurements agreed with it. So
+the run is honest about failing rather than passing a cylinder off as a
+handlebar, which is the point of measuring the solid rather than reading the
+code. A swept bend is a fair thing for an 8B model to be short of; the ten
+bends the catalogue serves need no model at all.
+
 ## Tests
 
 ```bash
