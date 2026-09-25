@@ -298,8 +298,68 @@ result = (
 
 
 # ---------------------------------------------------------------------------
-# What the kernel can tell you about a bar once it is built
+# Several bends for one request
 # ---------------------------------------------------------------------------
+
+#: How many bends to offer when a request does not name one. Four fits the
+#: filmstrip without scrolling, and four bends chosen across the range say
+#: more about the choice than four near neighbours would.
+OPTIONS = 4
+
+
+def shortlist(rise: float | None = None, width: float | None = None,
+              tube: float | None = None, count: int = OPTIONS) -> list[str]:
+    """Which bends to offer for a request that does not name one.
+
+    "A handlebar" is not one part - it is ten, and which one is meant is a
+    decision about how the bike sits, not a dimension anyone forgot to type.
+    So rather than guess, the catalogue builds several and lets the person
+    look at them.
+
+    What it offers depends on what the request did say:
+
+    *Nothing about the shape* - a spread across the whole range, from the
+    flattest bend to the tallest, so the choice on screen is the choice that
+    exists. Four road bends within 30 mm of each other would look like a
+    catalogue with nothing in it.
+
+    *A rise* - the bends nearest that rise, closest first. Someone who asks
+    for six inches is choosing between the bars that are about six inches,
+    not between a drag bar and an ape hanger.
+
+    *A tube size* - only the bends built on that tube, because a 7/8 in bar
+    and a 1 in bar do not fit the same risers or the same controls. If
+    nothing is built on it the size is applied to the spread instead, which
+    is what an override is for.
+
+    ``width`` is never a filter. Every bend can be made to any sensible
+    width by moving one number, so a width narrows nothing - it is carried
+    through as an override by the caller.
+    """
+    pool = list(BARS.values())
+    if tube is not None:
+        on_tube = [bar for bar in pool if abs(bar.tube_diameter - tube) < 0.6]
+        if on_tube:
+            pool = on_tube
+
+    by_rise = sorted(pool, key=lambda bar: bar.rise)
+    count = max(1, min(count, len(by_rise)))
+
+    if rise is not None:
+        nearest = sorted(by_rise, key=lambda bar: abs(bar.rise - rise))
+        return [bar.style for bar in nearest[:count]]
+
+    # An even spread by rank rather than by rise: the styles bunch up at the
+    # low end - four of the ten are road bends between 50 and 105 - and
+    # spreading by value would offer three of those and one ape.
+    step = (len(by_rise) - 1) / (count - 1) if count > 1 else 0.0
+    picked: list[str] = []
+    for index in range(count):
+        style = by_rise[round(index * step)].style
+        if style not in picked:
+            picked.append(style)
+    return picked
+
 
 #: Below this, a mandrel and a wiper die; below 1.5 the wall folds. The
 #: trade's comfortable minimum is twice the tube diameter, and about three

@@ -1210,32 +1210,15 @@ def select(text: str) -> CatalogPart | None:
     if any(word in lowered for word in _CUSTOM_CONTEXT):
         return None
 
-    if any(word in lowered for word in _BAR_NOUNS):
-        if any(word in lowered for word in _BAR_CONTEXT):
-            return None
-        style = next((name for word, name in _BAR_STYLES if word in lowered),
-                     None)
+    asked = _bar_request(text)
+    if asked is not None:
+        style, overrides = asked
         if style is None:
             # "A handlebar" on its own says nothing about which one, and a
-            # bar is five dimensions rather than a size. The pipeline can
-            # design one; the catalogue will not guess.
+            # bar is five dimensions rather than a size. ``options`` builds
+            # several and lets the person look; ``select`` returns one part
+            # and will not guess which.
             return None
-        overrides: dict[str, float] = {}
-        width = _BAR_WIDTH_MM.search(text)
-        inches = _BAR_WIDTH_IN.search(text)
-        if width:
-            overrides["overall_width"] = float(width.group(1))
-        elif inches:
-            overrides["overall_width"] = round(float(inches.group(1)) * 25.4, 1)
-        rise = _BAR_RISE.search(text)
-        if rise:
-            unit = (rise.group(2) or "mm").lower()
-            value = float(rise.group(1))
-            overrides["rise"] = round(value * 25.4, 1) if unit != "mm" else value
-        for spelling, diameter in _BAR_TUBE.items():
-            if spelling in lowered:
-                overrides["tube_diameter"] = diameter
-                break
         try:
             return handlebar(style, **overrides)
         except KeyError:
@@ -1326,6 +1309,82 @@ def handlebar(style: str = "road_medium", **overrides) -> CatalogPart:
         code=handlebars.code_for(**dimensions),
         parameters=dimensions,
         inspect=lambda solid: handlebars.inspect(solid, dimensions))
+
+
+def _bar_request(text: str):
+    """What a handlebar request says, or ``None`` if it is not one.
+
+    Returns the named style - ``None`` when the request names no style - and
+    whatever dimensions it did state, as overrides. Shared by ``select``,
+    which needs one part, and ``options``, which offers several: reading the
+    same sentence twice in two places is how the two paths come to disagree
+    about what was asked for.
+    """
+    lowered = text.lower()
+    if not any(word in lowered for word in _BAR_NOUNS):
+        return None
+    # A riser, a clamp, a grip and a bar-end weight all attach to a bar and
+    # none of them is one.
+    if any(word in lowered for word in _BAR_CONTEXT):
+        return None
+
+    style = next((name for word, name in _BAR_STYLES if word in lowered), None)
+    overrides: dict[str, float] = {}
+    width = _BAR_WIDTH_MM.search(text)
+    inches = _BAR_WIDTH_IN.search(text)
+    if width:
+        overrides["overall_width"] = float(width.group(1))
+    elif inches:
+        overrides["overall_width"] = round(float(inches.group(1)) * 25.4, 1)
+    rise = _BAR_RISE.search(text)
+    if rise:
+        unit = (rise.group(2) or "mm").lower()
+        value = float(rise.group(1))
+        overrides["rise"] = round(value * 25.4, 1) if unit != "mm" else value
+    for spelling, diameter in _BAR_TUBE.items():
+        if spelling in lowered:
+            overrides["tube_diameter"] = diameter
+            break
+    return style, overrides
+
+
+def options(text: str) -> list[CatalogPart]:
+    """Several parts one request could reasonably mean, best first.
+
+    A standard part has one right answer: an M8 flat washer is a number in a
+    table, and offering four of them would be offering three wrong ones. A
+    handlebar is not like that. Ten bends are all equally a handlebar, and
+    which one is meant is a decision about how the bike sits - so a request
+    that names no bend is not under-specified, it is a question, and the
+    honest reply is to build the candidates and show them.
+
+    That is why this is a handlebar-only path and not a general one. Empty
+    for everything else, and empty for a request that did name its bend,
+    which ``select`` already answers exactly.
+    """
+    asked = _bar_request(text)
+    if asked is None:
+        return []
+    style, overrides = asked
+    if style is not None:
+        return []
+    styles = handlebars.shortlist(
+        rise=overrides.get("rise"),
+        width=overrides.get("overall_width"),
+        tube=overrides.get("tube_diameter"))
+    # A stated rise picked the shortlist; forcing it on every bend as well
+    # would build four bars with one rise between them, which is the
+    # opposite of a choice. Width and tube are carried through, because
+    # those are sizes rather than shapes.
+    carried = {name: value for name, value in overrides.items()
+               if name != "rise"}
+    built: list[CatalogPart] = []
+    for style_name in styles:
+        try:
+            built.append(handlebar(style_name, **carried))
+        except KeyError:
+            continue
+    return built
 
 
 #: Every family this module builds, by name. ``select`` reads a request and

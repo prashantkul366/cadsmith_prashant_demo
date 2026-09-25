@@ -395,6 +395,15 @@ textarea.prompt::placeholder{color:#535E6E}
   font-size:10px;letter-spacing:.04em;color:var(--ink-2);white-space:nowrap}
 .iter.sel .ilabel{color:var(--amber)}
 .iter .ilabel i{width:5px;height:5px;border-radius:50%;flex:none}
+/* An option card carries a silhouette, not a render: line work on the
+   panel's own background, whole rather than cropped, because the shape is
+   the thing being chosen. And it carries a part's name rather than ITER 3,
+   which does not fit in 112px. */
+.iter.option{width:150px}
+.iter img.outline{height:66px;object-fit:contain;background:transparent;
+  padding:2px 0}
+.iter.option .ilabel{overflow:hidden}
+.iter.option .ilabel span{overflow:hidden;text-overflow:ellipsis}
 
 /* ---------- viewport ---------- */
 .col.center{background:var(--void);position:relative}

@@ -280,12 +280,45 @@ class JobManager:
             # solid is already in hand. Anything unexpected falls through to
             # the pipeline rather than failing the run.
             routed = None
+            shortlist = None
             if job.options.use_catalog:
                 try:
                     routed = catalog_run.find(job.prompt)
+                    # Nothing exact, but possibly several that are all
+                    # right: "a handlebar" is four bends rather than one
+                    # under-specified part. Only asked when select found
+                    # nothing, so an exact request is never turned into a
+                    # question.
+                    if routed is None:
+                        shortlist = catalog_run.find_options(job.prompt)
                 except Exception as error:
                     sink.emit(PHASE_JOB, STATUS_INFO,
                               i18n.t("job.catalogskipped", lang, error=error))
+            if routed is None and shortlist:
+                try:
+                    catalog_run.serve_options(
+                        ctx, shortlist, job.directory / "work")
+                    job.source = "catalog"
+                    job.converged = True
+                    job.design_plan = {}
+                    job.llm_calls = 0
+                    job.tokens = agents.get_token_usage()
+                    job.versions = list(ctx.versions)
+                    job.status = STATUS_DONE
+                    job.finished_at = time.time()
+                    self._write_meta(job)
+                    sink.emit(PHASE_JOB, STATUS_OK,
+                              i18n.t("job.catalogoptions", lang,
+                                     n=len(ctx.versions)),
+                              converged=True, tokens=job.tokens,
+                              llm_calls=0, source="catalog")
+                    return
+                except Exception as error:
+                    sink.emit(
+                        PHASE_JOB, STATUS_INFO,
+                        i18n.t("job.catalogunbuildable", lang, error=error))
+                    ctx.source = "pipeline"
+                    ctx.iteration = 0
             if routed is not None:
                 try:
                     catalog_run.serve(ctx, routed, job.directory / "work")

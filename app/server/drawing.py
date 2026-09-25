@@ -1570,6 +1570,77 @@ _QUEUED: set[tuple[str, int]] = set()
 _QUEUED_LOCK = threading.Lock()
 
 
+#: A thumbnail wide enough to tell a drag bar from an ape hanger, and small
+#: enough for four of them to sit in the filmstrip without scrolling.
+THUMB_W, THUMB_H, THUMB_PAD = 240.0, 132.0, 10.0
+
+
+def _front_outline(step_path: Path,
+                   projection: Optional[Path] = None) -> tuple[list, tuple]:
+    """The front elevation's visible line work and the box it fills."""
+    front = _project(step_path, cache=projection)["FRONT"]
+    lines = front["visible"]
+    points = [point for line in lines for point in line]
+    if not points:
+        return [], (0.0, 0.0, 0.0, 0.0)
+    return lines, (min(u for u, _ in points), min(v for _, v in points),
+                   max(u for u, _ in points), max(v for _, v in points))
+
+
+def silhouettes(step_paths: list[Path],
+                projections: Optional[list[Optional[Path]]] = None
+                ) -> list[str]:
+    """The front elevation of each part, as SVGs, all to one scale.
+
+    When the catalogue offers four bends for one request, the person picks
+    between them by looking. Four cards with a title on each are a form to
+    fill in; four silhouettes are a choice - which is how the custom trade
+    has sold handlebars off a chalkboard chart for fifty years.
+
+    One scale across the set, not one per card. An ape hanger is four times
+    the height of a drag bar and the picker has to show that; scaling each
+    one to fill its own card would draw them the same size and hide the
+    difference the person is choosing between.
+
+    It is the same projection the drawing is built from, so the thumbnail
+    and the sheet cannot disagree about the shape, and it costs nothing
+    extra: by the time this is called the projection is already cached.
+    """
+    caches = projections or [None] * len(step_paths)
+    drawn = [_front_outline(path, cache)
+             for path, cache in zip(step_paths, caches)]
+    spans = [(box[2] - box[0], box[3] - box[1]) for lines, box in drawn if lines]
+    if not spans:
+        return ["" for _ in step_paths]
+    widest = max(max(span[0] for span in spans), 1e-6)
+    tallest = max(max(span[1] for span in spans), 1e-6)
+    scale = min((THUMB_W - 2 * THUMB_PAD) / widest,
+                (THUMB_H - 2 * THUMB_PAD) / tallest)
+
+    out = []
+    for lines, (umin, vmin, umax, vmax) in drawn:
+        if not lines:
+            out.append("")
+            continue
+        # Centred on what it draws, not on the paper: a drag bar is four
+        # times wider than it is tall and would otherwise sit at the top.
+        left = (THUMB_W - (umax - umin) * scale) / 2.0
+        top = (THUMB_H - (vmax - vmin) * scale) / 2.0
+        body = []
+        for line in lines:
+            points = " ".join(f"{left + (u - umin) * scale:.1f},"
+                              f"{top + (vmax - v) * scale:.1f}"
+                              for u, v in line)
+            body.append(f'<polyline points="{points}" fill="none" '
+                        f'stroke="currentColor" stroke-width="1.2" '
+                        f'stroke-linecap="round" stroke-linejoin="round"/>')
+        out.append(f'<svg xmlns="http://www.w3.org/2000/svg" '
+                   f'viewBox="0 0 {THUMB_W:g} {THUMB_H:g}" '
+                   f'width="{THUMB_W:g}" height="{THUMB_H:g}" '
+                   f'color="#E8EAED">' + "".join(body) + "</svg>")
+    return out
+
+
 def prebuild(version_dir: Path, prompt: str, job_id: str, version: int) -> None:
     """Start building this version's sheet now, in the background.
 

@@ -169,11 +169,23 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "Served from the catalogue.",
         "ja": "カタログから提供しました。",
     },
+    "job.catalogoptions": {
+        "en": "{n} options served from the catalogue. Pick one.",
+        "ja": "カタログから {n} 案を提供しました。どれか選んでください。",
+    },
 
     # -- the catalogue path -------------------------------------------------
     "catalog.served": {
         "en": "{title} - served from the catalogue, not generated",
         "ja": "{title} — 生成ではなくカタログから提供されました",
+    },
+    "catalog.options": {
+        "en": "This request has more than one right answer, so here are {n} "
+              "of them, built and checked. Pick the one you meant - it is "
+              "finished, not a preview.",
+        "ja": "この依頼には正解が複数あるため、構築と検証を済ませた {n} 案を"
+              "示します。意図に合うものを選んでください。プレビューではなく"
+              "完成した部品です。",
     },
     "catalog.built": {
         "en": "Built in {ms} ms with no model call. Edit it like any other "

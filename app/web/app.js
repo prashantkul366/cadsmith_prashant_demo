@@ -601,6 +601,13 @@ function handleEvent(event) {
       renderPlan(null);
     }
     appendLog(message);
+    // Why the picker is shorter than it looks. A road bend squeezed to 700
+    // mm has no room left between its bends, and the person who typed 700
+    // is owed that sentence rather than a shortlist that quietly went from
+    // four to two.
+    for (const gone of (data && data.declined) || []) {
+      appendLog(t("catalog.declined", { title: gone.title, why: gone.why }));
+    }
     return;
   }
 
@@ -722,7 +729,10 @@ function showVersionPill() {
   // history had two sorts of entry in it when it has one: versions of a
   // part, in the order they were made. The coloured dot still says how each
   // one came about.
-  pill.textContent = version.source === "catalog"
+  pill.textContent = version.option
+    ? t("iter.optionpill", { n: version.option.index + 1,
+                             total: version.option.count })
+    : version.source === "catalog"
     ? t("iter.catalog")
     : t("iter.iteration", { n: version.iteration });
 }
@@ -749,34 +759,55 @@ function stepVersion(by) {
 $("#undoBtn").onclick = () => stepVersion(-1);
 $("#redoBtn").onclick = () => stepVersion(1);
 
+function landing() {
+  // Where a finished run puts you. Iterations are a sequence and the last
+  // one is the answer; options are not a sequence at all - they are several
+  // answers ranked by the shortlist, so the first is the one to open and
+  // the rest wait to be clicked.
+  const first = S.versions.findIndex(v => v.option);
+  return first >= 0 ? first : S.versions.length - 1;
+}
+
 function addVersion(version) {
   const existing = S.versions.findIndex(v => v.iteration === version.iteration);
   if (existing >= 0) S.versions[existing] = version;
   else S.versions.push(version);
   renderIterations();
-  selectVersion(S.versions.length - 1, { quiet: true });
-  showVersionPill();
+  selectVersion(landing(), { quiet: true });
   refreshComposer();
 }
 
 function renderIterations() {
   refreshUndo();
   if (!S.versions.length) { $("#iters").innerHTML = ""; return; }
+  // Options are several right answers to one request, not several tries at
+  // one answer. They carry the part's own name rather than an iteration
+  // number, because "ITER 3" says nothing about which bar it is.
+  const options = S.versions.filter(v => v.option).length;
   const cards = S.versions.map((v, i) => {
     const kind = v.source === "edit" ? "edit"
                : v.source === "catalog" ? "catalog"
                : (v.passed ? "pass" : "fail");
-    const label = v.source === "catalog" ? t("iter.catalog")
+    const label = v.option ? esc(v.option.label)
+      : v.source === "catalog" ? t("iter.catalog")
       : t("iter.iteration", { n: v.iteration });
-    const thumb = v.has_render
+    // A silhouette where there is one: four cards with a title on each are
+    // a form to fill in, four shapes are a choice.
+    const thumb = v.option && v.has_option
+      ? `<img class="outline" src="${API.artifact(S.jobId, v.iteration, "option.svg")}" alt="" />`
+      : v.has_render
       ? `<img src="${API.artifact(S.jobId, v.iteration, "render.png")}" alt="" />`
       : "";
-    return `<div class="iter ${i === S.selected ? "sel" : ""}" data-i="${i}">
+    const title = v.option ? ` title="${esc(v.option.title)}"` : "";
+    return `<div class="iter${v.option ? " option" : ""} ${
+        i === S.selected ? "sel" : ""}" data-i="${i}"${title}>
         ${thumb}
-        <div class="ilabel"><i class="${kind}"></i>${label}</div>
+        <div class="ilabel"><i class="${kind}"></i><span>${label}</span></div>
       </div>`;
   }).join("");
-  const hint = S.versions.length > 1
+  const hint = options > 1
+    ? `<span class="ihint">${esc(t("iter.pick", { n: options }))}</span>`
+    : S.versions.length > 1
     ? `<span class="ihint">${esc(t("iter.compare", { n: S.versions.length }))}</span>` : "";
   $("#iters").innerHTML = cards + hint;
   $$("#iters .iter").forEach(card => {
@@ -789,6 +820,11 @@ async function selectVersion(index, options) {
   if (!version) return;
   S.selected = index;
   renderIterations();
+  // Wherever the selection changes - stepping, clicking a card, finishing a
+  // run - the pill says which version is on screen. It was only updated
+  // when a version arrived, so clicking through four options left it
+  // reading OPTION 1 OF 4 whichever one you were looking at.
+  showVersionPill();
   refreshUndo();
 
   // Started before the mesh rather than after it. The panel does not depend
@@ -826,9 +862,12 @@ async function selectVersion(index, options) {
 
 function renderPlan(plan) {
   // A catalogue part has no plan: its dimensions come from the standard.
+  // Where several were offered, the panel says what the choice is instead.
   if (S.catalog) {
+    const several = !!(S.catalog && S.catalog.option)
+                  || S.versions.some(v => v.option);
     $("#planBody").innerHTML =
-      `<div class="await">${esc(t("plan.catalog"))}</div>`;
+      `<div class="await">${esc(t(several ? "plan.options" : "plan.catalog"))}</div>`;
     thinkPlaceholder("think.catalog");
     return;
   }
@@ -1280,7 +1319,7 @@ function finishRun(data) {
     return;
   }
 
-  selectVersion(S.versions.length - 1);
+  selectVersion(landing());
   const cost = data.tokens
     ? t("run.tokens", { n: (data.tokens.input_tokens
                             + data.tokens.output_tokens).toLocaleString() })
@@ -1425,7 +1464,7 @@ async function openJob(jobId) {
   $("#hist").classList.remove("open");
 
   if (S.versions.length) {
-    await selectVersion(S.versions.length - 1);
+    await selectVersion(landing());
     toast(t(job.converged ? "hist.loaded.converged" : "hist.loaded.unconverged"));
   } else {
     showOverlay("error");

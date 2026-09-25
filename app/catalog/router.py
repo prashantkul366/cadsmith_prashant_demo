@@ -611,6 +611,82 @@ def _select_cached(text: str, have_gears: bool,
     return None
 
 
+@dataclass(frozen=True)
+class Shortlist:
+    """Several parts one request could mean, and the ones that would not build.
+
+    ``declined`` is not an error list. A road bend squeezed to 700 mm has no
+    room left between its bends, and saying so beside the two bars that do
+    fit is more useful than quietly offering two - the person asked for four
+    kinds of bar and is owed an account of the other two.
+    """
+    offered: tuple[Routed, ...] = ()
+    declined: tuple[tuple[str, str], ...] = ()
+
+    def __len__(self) -> int:
+        return len(self.offered)
+
+    def __iter__(self):
+        return iter(self.offered)
+
+
+def options(text: str) -> Shortlist:
+    """Several parts this request could reasonably mean, each already built.
+
+    ``select`` answers a request that has one right answer. This answers one
+    that has several: "a handlebar" names a part that comes in ten bends,
+    and which one is meant is a choice about the bike rather than a number
+    the person left out. Building the candidates and showing them is not
+    guessing - handing back one of the ten would be.
+
+    Nothing reaches here that ``select`` can answer exactly, and nothing
+    leaves here unverified: each candidate is built and checked, and one
+    that will not build is moved to ``declined`` with the reason rather than
+    offered.
+    """
+    found = _options_cached(text, library.HAVE_GEARS, library.HAVE_WAREHOUSE)
+    if found.offered or not japanese.has_japanese(text):
+        return found
+    return _options_cached(japanese.to_english(text),
+                           library.HAVE_GEARS, library.HAVE_WAREHOUSE)
+
+
+@lru_cache(maxsize=32)
+def _options_cached(text: str, have_gears: bool,
+                    have_warehouse: bool) -> Shortlist:
+    """Cached like ``select``, and for the same reason: the request handler
+    asks whether the catalogue can answer before accepting a job, and the
+    worker asks again when it runs it. Four bars built twice is four bars of
+    pure waste."""
+    lowered = text.lower()
+    if any(word in lowered for word in _CUSTOM_CONTEXT):
+        return Shortlist()
+    try:
+        candidates = parts.options(text)
+    except Exception:
+        return Shortlist()  # a bad parse must never take the request down
+    out: list[Routed] = []
+    declined: list[tuple[str, str]] = []
+    for candidate in candidates:
+        report = verify.check(candidate)
+        if not report.ok:
+            # "ValueError: this bar cannot be bent: ..." - the sentence is
+            # the reason and the exception class in front of it is noise on
+            # a screen someone is choosing a handlebar from.
+            declined.append((candidate.title, "; ".join(
+                re.sub(r"^\w*(Error|Exception):\s*", "", problem)
+                for problem in report.problems)))
+            continue
+        out.append(Routed(part=candidate, report=report,
+                          source=_provenance(candidate)))
+    # One option is not a choice, it is a guess with a picker around it. If
+    # fewer than two candidates survived, the request falls through to the
+    # model the way it always did.
+    if len(out) < 2:
+        return Shortlist(declined=tuple(declined))
+    return Shortlist(offered=tuple(out), declined=tuple(declined))
+
+
 def _provenance(part: CatalogPart) -> str:
     """Which backend actually built this, read from what the code imports.
 

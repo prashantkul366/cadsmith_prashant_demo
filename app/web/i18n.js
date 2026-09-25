@@ -337,6 +337,12 @@ const I18N = (function () {
     "iter.iteration":   ["ITER {n}", "反復 {n}"],
     "iter.compare":     ["← {n} attempts · click to compare",
                          "← {n} 件の試行 · クリックで比較"],
+    /* Several right answers for one request, rather than several tries at
+       one answer. The card carries the part's own name, which is not
+       translated because the catalogue's titles are not. */
+    "iter.optionpill":  ["OPTION {n} OF {total}", "案 {n} / {total}"],
+    "iter.pick":        ["← {n} options · all built, pick one",
+                         "← {n} 案 · いずれも構築済み、選んでください"],
 
     /* ── run lifecycle ──────────────────────────────────────────────── */
     "run.needprompt":   ["Describe the part first.", "先に部品を説明してください。"],
@@ -603,6 +609,18 @@ const I18N = (function () {
       "この部品は公開された規格で定められているため、作成すべき設計プランは"
       + "ありません。寸法は規格そのものによります。"],
 
+    /* Several right answers, so the panel says which decision is yours to
+       make rather than repeating that a standard has no plan. */
+    "catalog.declined": ["Not offered — {title}: {why}",
+                         "対象外 — {title}: {why}"],
+    "plan.options": [
+      "This request has more than one right answer. Each option below is a "
+      + "published bend, built and checked — pick the one you meant, then "
+      + "edit it like any other part.",
+      "この依頼には正解が複数あります。下の各案はいずれも公開された曲げ形状を"
+      + "構築・検証したものです。意図に合うものを選び、他の部品と同じように"
+      + "編集してください。"],
+
     "val.catalog.heading": ["Standard part, served from the catalogue",
                             "カタログから提供された標準部品"],
     "val.catalog.body": [
@@ -704,6 +722,9 @@ const I18N = (function () {
     "sample.bar_drag": [
       "A drag bar, 760 mm wide, on 22 mm tube.",
       "22mm パイプの幅 760mm ドラッグバー。"],
+    "sample.bar_options": [
+      "A handlebar.",
+      "ハンドルバー。"],
     "sample.bar_custom": [
       "A motorcycle handlebar of 22 mm outside diameter tube with a 2 mm "
       + "wall: 700 mm wide overall, rising 140 mm from the clamp, with 100 "

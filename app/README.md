@@ -718,11 +718,31 @@ on the sheet is laid out exactly where it was.
 
 Ask for a named bend - "a drag bar", "mini ape hangers", "a commuter
 handlebar", ドラッグバー - and it is served from the catalogue exactly and
-instantly. Ask for "a handlebar" and it is not: a bar is five dimensions
-rather than a size, and guessing which of ten was meant is the silent
-substitution the router exists to prevent. The things that hold a bar - a
-riser, a clamp, a grip, a bar-end weight - are declined for the same reason
-a bearing housing is not a bearing.
+instantly. The things that hold a bar - a riser, a clamp, a grip, a bar-end
+weight - are declined, for the same reason a bearing housing is not a
+bearing.
+
+**"A handlebar" is a question, so the app asks it back.** Ten bends are all
+equally a handlebar and which one is meant is a decision about how the bike
+sits, not a number anyone forgot to type. Handing back one of the ten would
+be the silent substitution the router exists to prevent, and sending it to
+five agents is a slow way of answering a question nobody asked them. So the
+catalogue builds four, spread across the range from the flattest bend to the
+tallest, and puts them in the filmstrip to pick between - each one a
+finished part with its own code, STEP, drawing and sliders, not a preview.
+Say a rise and the four become the four nearest it; say a tube size and only
+the bends built on it are offered; say a width and it is applied to all of
+them. A width a bend has no room for is declined with the reason - `a road
+bend at 700 mm leaves a centreline radius of 29.8 mm on a 22.2 mm tube` -
+rather than quietly widened to one that fits, and if fewer than two survive
+the request falls through to the agents the way it always did.
+
+The cards carry silhouettes rather than titles, projected from the same
+front view the drawing is built from and drawn to one scale across the set,
+because an ape hanger being four times the height of a drag bar is the
+difference being chosen between. This is deliberately a handlebar-only
+path: an M8 washer has one right answer and offering four would be offering
+three wrong ones.
 
 ## English and Japanese
 
@@ -846,6 +866,33 @@ rejects it — so the refinement loop is exercised rather than skipped.
 Better than a real key for reproducing a failure, because the misbehaviour is
 deterministic.
 
+## Running against a self-hosted vLLM
+
+Any OpenAI-compatible endpoint works the same way, including a vLLM server
+serving a vision-language model, which is what the Judge wants anyway - it
+looks at the render. Nothing is different in the code; it is two variables
+and a model name:
+
+```bash
+# .env - git-ignored, so no key ever reaches the repository
+CADSMITH_LLM_BASE_URL=https://<your-tunnel>/v1
+CADSMITH_LLM_API_KEY=<the endpoint's key, if it wants one>
+```
+
+Pick **Custom (OpenAI-compatible)** in the app; the model dropdown is filled
+from the endpoint's own `/v1/models`, so whatever it is serving - a Qwen3-VL
+instruct model, for instance - appears there for both the generation and the
+Judge slots. Check it end to end before a demo with:
+
+```bash
+.venv/bin/python -m app.tools.doctor        # reachability and the model list
+.venv/bin/python -m app.tools.check_stream  # a real call, streamed
+```
+
+The catalogue path needs none of this. A standard part - and the handlebar
+picker - is served with no model call at all, which is why the app still
+starts and still answers with no endpoint configured.
+
 ## Tests
 
 ```bash
@@ -871,6 +918,8 @@ deterministic.
 .venv/bin/python -m app.tests.test_budget           # the spend ceiling
 .venv/bin/python -m app.tests.test_edit_chain       # chained edits, real kernel
 .venv/bin/python -m pytest app/tests/test_encoding.py   # UTF-8 everywhere (Windows)
+.venv/bin/python -m app.tests.test_handlebars       # the case study: ten bends
+                                                    # built, measured and drawn
 .venv/bin/python -m app.tests.test_layout           # panel geometry, real browser
 .venv/bin/python -m app.tests.test_thinking_stream  # streamed reasoning, and the
                                                     # effort the run asked for
@@ -878,6 +927,8 @@ deterministic.
 .venv/bin/python -m app.tests.ui_generate_check     # a real run in a browser,
                                                     # plus provider failures
 .venv/bin/python -m app.tests.ui_catalog_check      # the catalogue in a browser
+.venv/bin/python -m app.tests.ui_options_check      # four bends for one prompt,
+                                                    # picked in a browser
 .venv/bin/python -m app.tests.ui_edit_check         # editing in a browser
 .venv/bin/python -m app.tests.ui_export_check       # STEP, STL and .py downloads
 .venv/bin/python -m app.tests.ui_lang_check         # the language switch

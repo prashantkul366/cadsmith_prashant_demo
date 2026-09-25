@@ -233,6 +233,59 @@ def main() -> int:
         check(f"{view['name']} puts its label below them, not through them",
               not below, str([round(y, 1) for y in below]))
 
+    print("\nOne request with several right answers offers all of them")
+    # No bend named. Four bends rather than a refusal, and rather than one
+    # of the ten picked quietly.
+    spread = handlebars.shortlist()
+    check("a bare request gets a spread, not four near neighbours",
+          len(spread) == handlebars.OPTIONS
+          and len({handlebars.BARS[name].rise for name in spread}) == len(spread),
+          str([f"{name} {handlebars.BARS[name].rise:g}" for name in spread]))
+    rises = [handlebars.BARS[name].rise for name in spread]
+    check("covering the flattest bend and the tallest",
+          min(rises) == min(bar.rise for bar in handlebars.BARS.values())
+          and max(rises) == max(bar.rise for bar in handlebars.BARS.values()),
+          f"{min(rises):g} to {max(rises):g}")
+    near = handlebars.shortlist(rise=152.0)
+    check("a stated rise gets the bends nearest it, closest first",
+          handlebars.BARS[near[0]].rise == 152.0
+          and all(abs(handlebars.BARS[a].rise - 152.0)
+                  <= abs(handlebars.BARS[b].rise - 152.0)
+                  for a, b in zip(near, near[1:])),
+          str([f"{name} {handlebars.BARS[name].rise:g}" for name in near]))
+    inch = handlebars.shortlist(tube=25.4)
+    check("a stated tube gets only the bends built on it",
+          inch and all(handlebars.BARS[name].tube_diameter == 25.4
+                       for name in inch), str(inch))
+
+    offered = router.options("a handlebar")
+    check("the router offers them, each one built and checked",
+          len(offered) == handlebars.OPTIONS
+          and all(routed.report.ok for routed in offered),
+          str([routed.part.title.split(",")[0] for routed in offered]))
+    check("a named bend is answered exactly, not offered as a choice",
+          not router.options("a drag bar")
+          and router.select("a drag bar") is not None)
+    check("and so is every other standard part",
+          not router.options("an M8 flat washer")
+          and not router.options("a 20 tooth spur gear, module 2"))
+    check("a riser is still not a handlebar", not router.options("a handlebar riser"))
+
+    # A width the bend has no room for is refused with the reason, not
+    # quietly widened to one that fits.
+    squeezed = router.options("a 700 mm handlebar")
+    check("a width that will not bend is declined, with the reason",
+          squeezed.declined
+          and all("cannot be bent" in why for _, why in squeezed.declined),
+          str([title.split(",")[0] for title, _ in squeezed.declined]))
+    check("and the ones that do fit come out at the width asked for",
+          all(routed.part.parameters["overall_width"] == 700.0
+              for routed in squeezed),
+          str([routed.part.parameters["overall_width"] for routed in squeezed]))
+    check("one survivor is not a choice, so nothing is offered",
+          not router.options("a 500 mm handlebar"),
+          str(len(router.options("a 500 mm handlebar").declined)) + " declined")
+
     print("\n" + "=" * 60)
     if failures:
         print(f"{len(failures)} CHECK(S) FAILED")

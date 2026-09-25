@@ -55,20 +55,30 @@ ALLOWED_ARTIFACTS = {
     "validation.json",
     "drawing.svg",
     "drawing.dxf",
+    # The front-elevation thumbnail on an option card, when one request had
+    # more than one right answer.
+    "option.svg",
 }
 
 # Curated starting prompts.  The tiered ones are the exact benchmark entries
 # from data/dataset_v2, so a demo can be checked against a reference part.
 EXAMPLE_IDS = ["T1_012", "T2_001", "T2_009", "T3_001", "T3_007"]
 
-# The case study: one part, two paths through the app. The drag bar is a
-# named bend and comes from the catalogue exactly and instantly; the second
-# names dimensions no catalogue bend has, so the five agents design it.
+# The case study: one part, three paths through the app. The drag bar is a
+# named bend and comes from the catalogue exactly and instantly; "a
+# handlebar" names no bend and comes back as four of them to pick between;
+# the last names dimensions no catalogue bend has, so the five agents
+# design it.
 CASE_STUDY_EXAMPLES = [
     {
         "id": "bar_drag",
         "tier": "handlebar",
         "prompt": "A drag bar, 760 mm wide, on 22 mm tube.",
+    },
+    {
+        "id": "bar_options",
+        "tier": "handlebar",
+        "prompt": "A handlebar.",
     },
     {
         "id": "bar_custom",
@@ -336,7 +346,11 @@ async def create_job(request: Request) -> JSONResponse:
         served_by_catalogue = False
         if options.use_catalog:
             try:
-                served_by_catalogue = catalog_run.find(prompt) is not None
+                # Either an exact answer, or several that are all correct -
+                # "a handlebar" is four bends and needs no agent for any of
+                # them, so it must not be refused for want of a key either.
+                served_by_catalogue = (catalog_run.find(prompt) is not None
+                                       or bool(catalog_run.find_options(prompt)))
             except Exception:
                 served_by_catalogue = False
         if not served_by_catalogue:

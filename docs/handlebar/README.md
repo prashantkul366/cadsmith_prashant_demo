@@ -9,6 +9,7 @@ sells a bar by, built in the CAD kernel, measured, drawn, and exported.
 | `commuter-sheet.png` | The A3 drawing of the 648 mm commuter bar, dimensioned the way a bent-tube drawing is: a ladder of widths out to each bend tangent under the overall `648`, the rise `126` and the pullback `110` taken to the centreline, bends called out `R45`, tube `Ø22` outside and `Ø18` in. |
 | `measured-checks.png` | What the kernel reports back about a bar it has just built, including the tightest bend as a multiple of the tube diameter. |
 | `parameters.png` | The nine parameters as sliders. Moving the rise re-bends the bar; the numbers under it are re-measured, not re-stated. |
+| `options.png` | What `a handlebar` returns: four bends built and checked, silhouettes to one scale, waiting to be picked. |
 
 Where the dimensions come from: [`../handlebar-research.md`](../handlebar-research.md).
 How it is built and what is checked: the case-study section of
@@ -18,7 +19,13 @@ Try it in the app:
 
 * **`a drag bar`**, **`mini ape hangers`**, **`a commuter handlebar`**,
   **`ドラッグバー`** — served from the catalogue, exactly, with no model call.
-* **`a handlebar`** — declined on purpose. A bar is five dimensions rather
-  than a size, so this one goes to the five agents.
+* **`a handlebar`** — four bends come back instead of one, spread from the
+  flattest to the tallest, and you pick from the filmstrip. Which bend is
+  meant is a decision about how the bike sits, so the app asks rather than
+  guesses.
+* **`a handlebar with 6 inch rise`** — the same picker, narrowed to the four
+  bends nearest that rise.
+* **`a 700 mm handlebar`** — two of the four are declined with the reason:
+  at 700 mm a road bend has no room left between its bends.
 * **`a handlebar riser`** — not a handlebar, and declined for the same
   reason a bearing housing is not a bearing.
