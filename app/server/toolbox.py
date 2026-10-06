@@ -52,6 +52,13 @@ MAX_RESULT_CHARS = 4000
 #: fixes it or nothing will, and a third is just money.
 MAX_NUDGES = 2
 
+#: How many times the same call may fail the same way before the loop stops.
+#: Measured on an 8B against a solid with no parametric tree: nineteen
+#: set_size calls, every one refused with the same sentence, fifty-nine
+#: seconds and the whole step budget. A model that is going to recover does
+#: it on the second try.
+REPEAT_LIMIT = 3
+
 NOT_A_CALL = (
     "You did not call a tool - you wrote one out as text. Nothing was built. "
     "Use the tool-calling channel: emit a call, not a description of one. If "
@@ -194,6 +201,7 @@ def converse(client: Any, model: str, system: str, task: str,
     transcript = Transcript()
     definitions = toolbox.definitions()
     nudges = 0
+    tried: dict[tuple, int] = {}
 
     for _ in range(max_steps):
         halt = before_call(transcript) if before_call is not None else ""
@@ -261,6 +269,27 @@ def converse(client: Any, model: str, system: str, task: str,
                 step.error = f"{type(broke).__name__}: {broke}"
             step.ms = int((time.time() - started) * 1000)
             transcript.steps.append(step)
+
+            # The same call, refused the same way, over and over. Telling the
+            # model it is repeating itself is the signal it needs; stopping
+            # after a few is what keeps a stuck loop from spending an
+            # afternoon and the whole step budget on one wrong idea.
+            if step.error:
+                mark = (step.name, step.error[:120])
+                tried[mark] = tried.get(mark, 0) + 1
+                if tried[mark] >= REPEAT_LIMIT:
+                    if on_step is not None:
+                        on_step(step)
+                    transcript.stopped = (
+                        f"{step.name} was refused the same way "
+                        f"{tried[mark]} times: {step.error[:200]}")
+                    return transcript
+                if tried[mark] > 1:
+                    step.error += (
+                        f" (You have tried this {tried[mark]} times now and it "
+                        f"has failed the same way each time. Do something "
+                        f"different.)")
+
             if on_step is not None:
                 on_step(step)
             results.append({

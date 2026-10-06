@@ -270,8 +270,30 @@ def main() -> int:
         check("a model that does nothing is refused, not published", False)
     except freecad.FreeCADError as refused:
         check("a model that does nothing is refused, not published",
-              "not made" in str(refused), str(refused)[:70])
+              "nothing in the part changed" in str(refused), str(refused)[:70])
     check("and no version was left behind for it",
+          not (job_dir / "v3" / "model.step").exists())
+
+    # The one that matters, and the one that was wrong. A model can call
+    # tools, be refused by every one of them, announce success, and leave
+    # the part exactly as it found it. Measured on an 8B: nineteen refused
+    # set_size calls and a version published as an edit.
+    Endpoint.seen = []
+    Endpoint.script = [
+        {"tool": "set_size", "arguments": {"name": "Ghost", "Length": 99}},
+        {"tool": "set_size", "arguments": {"name": "Ghost", "Width": 99}},
+        {"content": "Made it 99 mm long."},
+    ]
+    ctx.iteration = 3
+    try:
+        freecad_run.amend(ctx, v1, "make it 99 long", client, "fake", PROMPT,
+                          bridge=bridge)
+        check("calls that all failed are not an edit, whatever was said",
+              False, "it published a version")
+    except freecad.FreeCADError as refused:
+        check("calls that all failed are not an edit, whatever was said",
+              "nothing in the part changed" in str(refused), str(refused)[:70])
+    check("and the refusal carries the last thing that was tried",
           not (job_dir / "v3" / "model.step").exists())
 
     print("\nWorking in a document the engineer already had open")

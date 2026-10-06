@@ -28,6 +28,7 @@ app's own drawing code, and adjusted by this app's own sliders.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -297,7 +298,61 @@ def for_panel(design: dict) -> dict:
     }
 
 
-def check(step: Path, prompt: str, design: Optional[dict] = None) -> dict:
+#: A change that is meant to leave less of the part than it found.
+_REMOVAL = re.compile(
+    r"\b(remove|delete|drop|lose|get\s+rid\s+of|take\s+out|fill\s+in|plug|"
+    r"without|no\s+more|eliminat\w*|omit)\b", re.IGNORECASE)
+
+
+def _wanted(prompt: str, instruction: str = "") -> dict:
+    """What must be true of the solid now.
+
+    After a change, the request that built the part is no longer the whole
+    story: "open the hole out to 25" supersedes the 20 the original asked
+    for, and holding the part to both is holding it to a number nobody wants
+    any more. So the change's own dimensions block, and the original's sizes
+    and bores are carried alongside as advisory - reported, because "you
+    asked for 20 and it is 25 now" is worth seeing, and not blocking,
+    because it is the thing that was just asked for.
+
+    The hole *count* is the exception, and it earned the exception. Asked to
+    make a plate thicker, an 8B rebuilt it from scratch as a plain box and
+    reported success; the part had lost its hole. A change supersedes a
+    dimension; it does not quietly delete a feature. So unless the change
+    says how many holes there should be, the original's count still blocks.
+    """
+    original = stated.requirements(prompt)
+    if not instruction:
+        return original
+    asked = stated.requirements(instruction)
+
+    def many(key: str) -> list:
+        return list(asked.get(key) or []) + list(original.get(key) or [])
+
+    # ...and the exception to the exception. "Remove the hole" is a change
+    # that is *supposed* to leave one fewer, so carrying the old count
+    # forward would refuse the part for doing exactly what was asked.
+    taking_away = bool(_REMOVAL.search(instruction))
+
+    return {
+        "extents": list(asked.get("extents") or []),
+        "bores": list(asked.get("bores") or []),
+        # A feature that was there before should still be there, unless this
+        # change is the one that says otherwise.
+        "hole_count": (asked.get("hole_count")
+                       if asked.get("hole_count") is not None
+                       else (None if taking_away
+                             else original.get("hole_count"))),
+        "advisory": (list(asked.get("advisory") or [])
+                     + list(original.get("extents") or [])
+                     + list(original.get("advisory") or [])
+                     + list(original.get("bores") or [])),
+        "read": many("read"),
+    }
+
+
+def check(step: Path, prompt: str, design: Optional[dict] = None,
+          instruction: str = "") -> dict:
     """Measure the finished solid against what was asked for.
 
     This is the gate, and it is a measurement rather than a verdict. The
@@ -312,7 +367,7 @@ def check(step: Path, prompt: str, design: Optional[dict] = None) -> dict:
     thin-section check and the clash test thrown away.
     """
     report = spec.check(for_panel(design or {}), step,
-                        stated.requirements(prompt))
+                        _wanted(prompt, instruction))
     out = report.to_dict()
     # ``ok`` is "nothing measurable contradicts this". The gate also has to
     # answer for the case where nothing could be measured at all, which is

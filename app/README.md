@@ -1078,6 +1078,48 @@ leaving it to be noticed. There are two kinds of change:
   makes when synchronous technology touches an imported body, and it is why
   the two kinds are distinguished rather than treated as one verb.
 
+### Asking again, and again, on the same part
+
+Prompting once is the easy case. Four prompts in a row against one part is
+where this was wrong, and the failures were all worth having:
+
+**An edit that changed nothing was published as an edit.** A model made
+nineteen refused `set_size` calls, announced success, and the run filed an
+identical version. A version is published now only when the solid actually
+moved - the volume, the face count and the bounding box are compared either
+side of the loop - and the refusal carries the last thing that was tried.
+
+**A model repeated one failing call until the step budget ran out.** Those
+nineteen calls were permutations of the same mistake, fifty-nine seconds of
+them. The same call refused the same way three times now stops the run, and
+the second one tells the model it is repeating itself.
+
+**The refusal said nothing it could act on.** FreeCAD answers
+`'Part.Feature' object has no attribute 'Height'`, which names the fault
+and no remedy. `set_size` checks first and says what the object *is*: a
+plain solid has no parametric dimensions because nothing built it that can
+be re-run, so use `find_features` and the geometry verbs instead. Given
+that, the same model recovered on the next call and the edit worked.
+
+**The gate checked a dimension nobody wanted any more.** After "open the
+hole out to 25", holding the part to the 20 the original asked for refuses
+it for doing what was asked. A change's own dimensions block; the original's
+sizes and bores are carried as advisory, so "you asked for 20, it is 25 now"
+is reported rather than failed.
+
+**But a change does not delete a feature.** Asked to make a plate thicker,
+an 8B rebuilt it from scratch as a plain box, reported success, and the hole
+was gone - and the gate passed it, because the bore had become advisory. The
+hole *count* stays blocking across a change unless the change itself says
+otherwise, and a change phrased as a removal ("remove the hole", "get rid of
+the bore") lifts it again.
+
+A caution the measurements make plain: a part built through `run_python`
+has no feature tree, so it has no sliders and every later edit is a rebuild
+rather than a recompute. The builder is told to prefer primitives and
+patterns for exactly this reason, and `set_size` now says so when it
+happens.
+
 ### Testing the FreeCAD road without a desktop
 
 The MCP addon opens its port inside a running FreeCAD *with a GUI*, which is

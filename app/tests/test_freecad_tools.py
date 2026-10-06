@@ -79,25 +79,24 @@ class Modelling(StandIn):
     def _solid(self):
         """Whatever has been asked for, built by the real kernel."""
         if self.imported is not None:
-            return cq.Workplane(obj=cq.importers.importStep(
+            held = cq.Workplane(obj=cq.importers.importStep(
                 str(self.imported)).val())
+            # Anything added since the solid was handed over is in the
+            # document too, so it is in what the document measures. Without
+            # this the stand-in reports no change when a boss is added to an
+            # imported part, which is a fixture saying "nothing happened"
+            # about something that did.
+            for shape in self.shapes.values():
+                made = self._primitive(shape)
+                if made is not None:
+                    held = held.union(made)
+            return held
         base = None
         tools = []
         for name, shape in self.shapes.items():
-            if shape["type"] == "Part::Box":
-                p = shape["props"]
-                made = cq.Workplane("XY").box(
-                    float(p.get("Length", 10)), float(p.get("Width", 10)),
-                    float(p.get("Height", 10)), centered=(False, False, False))
-            elif shape["type"] == "Part::Cylinder":
-                p = shape["props"]
-                made = (cq.Workplane("XY")
-                        .circle(float(p.get("Radius", 1)))
-                        .extrude(float(p.get("Height", 10))))
-            else:
+            made = self._primitive(shape)
+            if made is None:
                 continue
-            x, y, z = shape["at"]
-            made = made.translate((x, y, z))
             if base is None and shape["type"] == "Part::Box":
                 base = made
             else:
@@ -107,6 +106,22 @@ class Modelling(StandIn):
         for tool in tools:
             base = base.cut(tool)
         return base
+
+    @staticmethod
+    def _primitive(shape):
+        """One box or cylinder, where it was put."""
+        p = shape["props"]
+        if shape["type"] == "Part::Box":
+            made = cq.Workplane("XY").box(
+                float(p.get("Length", 10)), float(p.get("Width", 10)),
+                float(p.get("Height", 10)), centered=(False, False, False))
+        elif shape["type"] == "Part::Cylinder":
+            made = (cq.Workplane("XY").circle(float(p.get("Radius", 1)))
+                    .extrude(float(p.get("Height", 10))))
+        else:
+            return None
+        x, y, z = shape["at"]
+        return made.translate((x, y, z))
 
     def execute_code(self, code, timeout=None):
         self.calls.append(("execute_code", code, timeout))
@@ -285,6 +300,37 @@ def main() -> int:
         except ToolError as refused:
             check(f"{call} refuses {list(args.values())[0]!r}",
                   wanted in str(refused), str(refused)[:70])
+
+    print("\nA solid with no tree says so, and says what to do instead")
+    # The failure this prevents: asked to make a plate thicker, where the
+    # plate was a plain solid, an 8B made nineteen set_size calls and got
+    # FreeCAD's own words back every time - "'Part.Feature' object has no
+    # attribute 'Height'" - which says what went wrong and nothing about
+    # what to do. Fifty-nine seconds and the whole step budget.
+    stand_in.documents_[session.document].append(
+        {"Name": "Imported", "Label": "Imported", "TypeId": "Part::Feature",
+         "Properties": {}})
+    try:
+        box.invoke("set_size", {"name": "Imported", "Height": 15})
+        check("a plain solid explains that it has no dimensions", False)
+    except ToolError as refused:
+        check("a plain solid explains that it has no dimensions",
+              "plain solid" in str(refused)
+              and "resize_hole" in str(refused), str(refused)[:80])
+    try:
+        box.invoke("set_size", {"name": "Plate", "Thickness": 15})
+        check("and a parametric one names the dimensions it does have", False)
+    except ToolError as refused:
+        check("and a parametric one names the dimensions it does have",
+              "Thickness" in str(refused) and "Height" in str(refused),
+              str(refused)[:80])
+    try:
+        box.invoke("set_size", {"name": "Ghost", "Height": 15})
+        check("an object that is not there is refused before FreeCAD sees it",
+              False)
+    except ToolError as refused:
+        check("an object that is not there is refused before FreeCAD sees it",
+              "no object called" in str(refused), str(refused)[:60])
 
     print("\nThe catalogue is reachable from inside a build")
     placed = box.invoke("place_standard_part",

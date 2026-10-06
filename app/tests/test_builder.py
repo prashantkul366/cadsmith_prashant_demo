@@ -148,6 +148,31 @@ def main() -> int:
           str([r["key"] for r in wrong["checks"]
                if r["passed"] is False and r["hard"]]))
 
+    print("\nAfter a change, the gate holds the part to the change")
+    plate = "A plate 80 x 50 x 10 mm with a 20 mm hole through the middle."
+    # A change supersedes a dimension: holding the part to the 20 it no
+    # longer wants would refuse it for doing what was asked.
+    opened = builder._wanted(plate, "open the central hole out to 25 mm")  # noqa: SLF001
+    check("the original's sizes stop blocking once a change is asked for",
+          not opened["extents"] and 80.0 in opened["advisory"],
+          f"hard {opened['extents']}, advisory {sorted(set(opened['advisory']))}")
+    # ...but a change does not quietly delete a feature. An 8B asked to make
+    # this plate thicker rebuilt it as a plain box and reported success; the
+    # hole was gone and the gate passed it.
+    thicker = builder._wanted(plate, "make it 15 mm thick")   # noqa: SLF001
+    check("a feature that was there still has to be there",
+          thicker["hole_count"] == 1, str(thicker["hole_count"]))
+    check("unless the change is the one taking it away",
+          builder._wanted(plate, "remove the hole")["hole_count"] is None  # noqa: SLF001
+          and builder._wanted(plate, "get rid of the bore")["hole_count"] is None,  # noqa: SLF001
+          "removal is recognised")
+    check("and a change that states its own count wins",
+          builder._wanted(plate, "make it four 8 mm holes")["hole_count"] == 4,  # noqa: SLF001
+          str(builder._wanted(plate, "make it four 8 mm holes")["hole_count"]))  # noqa: SLF001
+    check("with no change asked for, nothing moves",
+          builder._wanted(plate) == builder._wanted(plate, ""),  # noqa: SLF001
+          "the original request is checked as it always was")
+
     print("\nThe declared parameters are what the slider panel already draws")
     mapping = builder.parameter_map(session)
     names = {p["name"] for p in mapping}

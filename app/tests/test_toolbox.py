@@ -325,6 +325,24 @@ def main() -> int:
     check("a run whose only call was refused has not finished",
           not run.built_anything, f"stopped: {run.stopped}")
 
+    print("\nA call that keeps failing the same way stops the run")
+    # Measured on an 8B asked to make a plate thicker, where the plate had
+    # no parametric tree: nineteen set_size calls, every one refused with
+    # the same sentence, fifty-nine seconds and the whole step budget spent
+    # on one wrong idea.
+    stuck = [{"tool": "add_box", "arguments": {"kind": "banana"}}
+             for _ in range(10)] + [{"content": "done"}]
+    run, _ = run_against(port, stuck, supported=True)
+    check("it gives up well before the step limit",
+          len(run.steps) == toolbox.REPEAT_LIMIT,
+          f"{len(run.steps)} steps of {toolbox.MAX_STEPS} allowed")
+    check("and says which call, and what it kept answering",
+          "add_box" in run.stopped and "refused the same way" in run.stopped,
+          run.stopped[:90])
+    check("the model was told it was repeating itself before that",
+          any("tried this" in (s.error or "") for s in run.steps),
+          next((s.error[-60:] for s in run.steps if "tried this" in (s.error or "")), ""))
+
     server.shutdown()
     print("\n" + "=" * 60)
     if failures:

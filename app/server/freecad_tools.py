@@ -54,6 +54,11 @@ BOOLEANS = {"cut": "Part::Cut", "union": "Part::MultiFuse",
             "intersect": "Part::MultiCommon"}
 
 
+def properties_of(described: dict) -> dict:
+    """The properties in an object as the addon describes it."""
+    return described.get("Properties") or {}
+
+
 class Session:
     """One document in FreeCAD, and the tools that work on it.
 
@@ -160,11 +165,52 @@ doc.recompute()
 
         The reason for going through FreeCAD at all. One changed number
         re-runs everything built on it, which a STEP file can never do.
+
+        Checked here before it reaches FreeCAD, because FreeCAD's own answer
+        is not one a model can act on. Measured on an 8B asked to make a
+        plate thicker, where the plate was a plain solid with no tree:
+        nineteen calls, every one refused with "'Part.Feature' object has no
+        attribute 'Height'", which says what went wrong and nothing about
+        what to do instead. The run spent fifty-nine seconds on it.
         """
         if not sizes:
             raise ToolError("say which property to change, e.g. Length=75")
+        found = self.bridge.object(self.document, name)
+        if found is None:
+            raise ToolError(f"there is no object called {name!r}. "
+                            "Call list_objects to see what there is.")
+        properties = found.get("Properties") or {}
+        missing = [p for p in sizes if p not in properties]
+        if missing:
+            raise ToolError(self._cannot_resize(name, found, missing))
         self.bridge.edit(self.document, name, **sizes)
         return self._measured(edited=name, set=sizes)
+
+    @staticmethod
+    def _cannot_resize(name: str, found: dict, missing: list) -> str:
+        """Why that property cannot be set, and what to do instead."""
+        kind = found.get("TypeId") or found.get("Type") or "?"
+        # The case worth naming. A solid handed to the document whole - by a
+        # feature edit, an import, or a script that built it outside the
+        # tree - is a Part::Feature, and it has no dimensions to set because
+        # there is no tree behind it to recompute. Saying "no attribute
+        # Height" leaves a model guessing at spellings; saying what the
+        # object *is* sends it to the tools that work on geometry.
+        if kind == "Part::Feature":
+            return (f"{name} is a plain solid ({kind}) - it has no parametric "
+                    f"dimensions to set, because nothing built it that could "
+                    f"be re-run. Change it with the tools that work on "
+                    f"geometry rather than on a tree: find_features, then "
+                    f"resize_hole, remove_feature or add_fillet. To change an "
+                    f"overall size you have to rebuild the shape.")
+        sizeable = sorted(p for p in properties_of(found)
+                          if p in {"Length", "Width", "Height", "Radius",
+                                   "Radius1", "Radius2", "InnerRadius",
+                                   "OuterRadius", "Angle"})
+        return (f"{name} ({kind}) has no property called "
+                f"{', '.join(repr(m) for m in missing)}. "
+                + (f"It can be given: {', '.join(sizeable)}."
+                   if sizeable else "It has no dimensions that can be set."))
 
     def combine(self, operation: str, base: str, tools: list) -> dict:
         """Cut, fuse or intersect. One call, because a boolean left half

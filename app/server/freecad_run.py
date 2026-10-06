@@ -330,6 +330,17 @@ def serve(ctx: RunContext, prompt: str, client: Any, model: str,
     return version
 
 
+def fingerprint(bridge: freecad.Bridge, document: str) -> tuple:
+    """Enough of the solid to tell whether anything actually changed."""
+    try:
+        solids = bridge.measure(document).get("solids", [])
+    except freecad.FreeCADError:
+        return ()
+    return tuple(sorted(
+        (round(s["volume"], 3), s["faces"],
+         tuple(round(v, 3) for v in s["bbox"])) for s in solids))
+
+
 def publish(ctx: RunContext, session: freecad_tools.Session, prompt: str,
             design: dict, bridge: freecad.Bridge, tokens: dict,
             answer: str = "", detail: Optional[dict] = None,
@@ -373,7 +384,8 @@ def publish(ctx: RunContext, session: freecad_tools.Session, prompt: str,
 
     _screenshot(bridge, version_dir)
 
-    verdict = builder.check(files["step"], prompt, design)
+    verdict = builder.check(files["step"], prompt, design,
+                            instruction=instruction)
     (version_dir / "validation.json").write_text(json.dumps({
         "source": source,
         "all_passed": verdict["passed"],
@@ -578,6 +590,7 @@ def amend(ctx: RunContext, base_dir: Path, instruction: str, client: Any,
     ctx.emit(PHASE_FREECAD, STATUS_STARTED,
              i18n.t("freecad.amending", lang, instruction=instruction),
              iteration=ctx.iteration, document=name)
+    was = fingerprint(bridge, name)
     transcript = toolbox.converse(
         client, model, EDIT_SYSTEM,
         _amend_task(prompt, instruction, session), box,
@@ -586,13 +599,19 @@ def amend(ctx: RunContext, base_dir: Path, instruction: str, client: Any,
              "output_tokens": transcript.output_tokens,
              "calls": transcript.calls}
 
-    if not transcript.steps:
-        # Nothing was done. Publishing an identical version would read as a
-        # change that did not take, which is worse than saying so.
+    # Did the solid move. Not "did the model call anything" and not "did the
+    # model say it worked" - both of those were true of a run that made
+    # nineteen refused set_size calls and published an identical version as
+    # an edit. A version that claims a change nobody made is worse than a
+    # refusal, because the refusal can be read and acted on.
+    if fingerprint(bridge, name) == was:
+        refused = [step.error for step in transcript.steps if step.error]
         raise freecad.FreeCADError(
-            "the change was not made: " + (transcript.answer
-                                           or transcript.stopped
-                                           or "nothing was tried"))
+            "nothing in the part changed, so there is no new version. "
+            + (f"The last thing that was tried: {refused[-1][:300]}"
+               if refused else
+               f"The builder did not change anything: "
+               f"{transcript.answer[:200] or transcript.stopped or 'it tried nothing'}"))
 
     version_dir = ctx.version_dir()
     version_dir.mkdir(parents=True, exist_ok=True)
