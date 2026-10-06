@@ -743,6 +743,39 @@ def _as_tool_call(payload: dict) -> list[ToolCall]:
     return [ToolCall(name=str(name), arguments=arguments, id="improvised")]
 
 
+def _call_in_text(text: str, tools: list) -> list[ToolCall]:
+    """A tool call a model wrote into its reply instead of calling.
+
+    Read on *every* reply that carried no structured call, not only when the
+    endpoint is known to have no tool channel. The case this exists for is
+    the one in between, and it is the common one on self-hosted hardware: a
+    vLLM started without --enable-auto-tool-choice accepts a tools array,
+    answers 200, and silently never emits a tool_calls field. The endpoint
+    looks capable, the model is trying, and every reply reads as "finished
+    with nothing built".
+
+    Deliberately narrow, but not so narrow that it swallows a mistake worth
+    answering. A reply counts as a call when it names a tool that was
+    actually offered, or when it carries an explicit "tool" key with an
+    "arguments" object - a shape a Planner's design plan does not have. The
+    second case matters: a model that asks for a tool called "box" when the
+    tool is "add_shape" should be told so by name, with the real list, which
+    is what the toolbox does and what it recovers from. Dropping that reply
+    silently teaches it nothing and it makes the same call again.
+    """
+    if not tools or not text or not text.strip():
+        return []
+    offered = {t.get("name") for t in tools if isinstance(t, dict)}
+    try:
+        payload = json.loads(repair_json(text))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return []
+    meant_a_call = (isinstance(payload, dict) and "tool" in payload
+                    and isinstance(payload.get("arguments"), dict))
+    return [call for call in _as_tool_call(payload)
+            if call.name in offered or meant_a_call]
+
+
 _JSON_EXPECTED = "Output ONLY valid JSON"
 _VISION_ERROR = re.compile(
     r"image|vision|multimodal|content.*not supported|unsupported.*content",
@@ -988,6 +1021,15 @@ class OpenAICompatibleClient:
                 calls = []   # prose, which the loop reads as "finished"
         elif _JSON_EXPECTED in system:
             text = repair_json(text)
+
+        # A call the model wrote out rather than made. Checked whenever a
+        # reply came back with no structured call, because an endpoint that
+        # accepts a tools array is not the same as one that emits tool calls
+        # from it - see _call_in_text.
+        if tools and not calls:
+            calls = _call_in_text(text, tools)
+            if calls:
+                improvise = True
 
         return _Response(content=[_Block(text=text)], usage=usage,
                          tool_calls=calls, improvised=improvise)

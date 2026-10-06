@@ -232,6 +232,17 @@ def serve(ctx: RunContext, prompt: str, client: Any, model: str,
             "output_tokens": transcript.output_tokens,
             "calls": transcript.calls})
 
+    # Nothing was built. Raising here rather than carrying on means the job
+    # falls back to the pipeline with a sentence that says what happened,
+    # instead of failing three steps later on an export with "that document
+    # has no solid" - which is true and tells nobody anything.
+    if not transcript.built_anything:
+        raise freecad.FreeCADError(
+            "the builder did not make anything in FreeCAD ("
+            + (transcript.stopped or "no reason given")
+            + (f"; it said: {transcript.answer[:200]}"
+               if transcript.answer else "") + ")")
+
     code = transcript_text(prompt, design, transcript)
     version_dir = ctx.version_dir()
     (version_dir / "code.py").write_text(code, encoding="utf-8")

@@ -1045,6 +1045,31 @@ leaving it to be noticed. There are two kinds of change:
   makes when synchronous technology touches an imported body, and it is why
   the two kinds are distinguished rather than treated as one verb.
 
+### Testing the FreeCAD road without a desktop
+
+The MCP addon opens its port inside a running FreeCAD *with a GUI*, which is
+the right design for the desktop and the wrong one for a test: nobody runs a
+suite that needs an application window open, so the FreeCAD half went
+untested on real geometry. `app/tools/freecad_server.py` serves the same
+protocol out of a FreeCAD imported as a Python module - no GUI, no Qt, no
+window - so the whole road can be driven headlessly:
+
+```bash
+# a FreeCAD with Python bindings; conda-forge has one
+micromamba create -p ./fc -c conda-forge freecad
+PYTHONPATH=./fc/lib ./fc/bin/python -m app.tools.freecad_server &
+.venv/bin/python -m app.tools.freecad_check --port 9875
+```
+
+It is a fixture, not a deployment: no screenshot, because there is no
+viewport, and no token, because it binds to loopback.
+
+One thing to know if you write anything that imports FreeCAD: **`import
+FreeCAD` clears the running module's globals.** Import argparse and then
+FreeCAD, and argparse is gone, with a NameError pages later naming a module
+you can see imported at the top of the file. Import FreeCAD first and
+nothing is lost.
+
 ## Running against a self-hosted vLLM
 
 Any OpenAI-compatible endpoint works the same way, including a vLLM server
@@ -1139,6 +1164,10 @@ bends the catalogue serves need no model at all.
 .venv/bin/python -m app.tests.test_freecad_run      # a prompt through the
                                                     # FreeCAD route, and a
                                                     # dragged parameter
+.venv/bin/python -m app.tests.test_viewer           # the mesh on screen is
+                                                    # the solid that was
+                                                    # exported, both STL
+                                                    # dialects, real browser
 .venv/bin/python -m app.tests.test_layout           # panel geometry, real browser
 .venv/bin/python -m app.tests.test_thinking_stream  # streamed reasoning, and the
                                                     # effort the run asked for

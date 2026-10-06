@@ -47,6 +47,18 @@ MAX_STEPS = 24
 #: answers with a megabyte of mesh would blow the context on one call.
 MAX_RESULT_CHARS = 4000
 
+#: How many times a model that wrote out a call instead of making one is
+#: told so before the run gives up on it. Two, because the first reminder
+#: fixes it or nothing will, and a third is just money.
+MAX_NUDGES = 2
+
+NOT_A_CALL = (
+    "You did not call a tool - you wrote one out as text. Nothing was built. "
+    "Use the tool-calling channel: emit a call, not a description of one. If "
+    "your reply cannot carry a tool call, answer with JSON on its own and "
+    "nothing else: {\"tool\": \"<name>\", \"arguments\": {...}}"
+)
+
 
 class ToolError(Exception):
     """The tool ran and could not do it.
@@ -103,6 +115,11 @@ class Transcript:
     @property
     def ok(self) -> bool:
         return self.stopped in ("finished", "")
+
+    @property
+    def built_anything(self) -> bool:
+        """Whether any tool actually ran and did not refuse."""
+        return any(step.ok for step in self.steps)
 
     def summary(self) -> dict:
         return {"steps": [s.summary() for s in self.steps],
@@ -176,6 +193,7 @@ def converse(client: Any, model: str, system: str, task: str,
     messages: list[dict] = [{"role": "user", "content": task}]
     transcript = Transcript()
     definitions = toolbox.definitions()
+    nudges = 0
 
     for _ in range(max_steps):
         halt = before_call(transcript) if before_call is not None else ""
@@ -194,11 +212,32 @@ def converse(client: Any, model: str, system: str, task: str,
         said = "".join(block.text for block in reply.content)
         calls = list(getattr(reply, "tool_calls", []) or [])
         if not calls:
-            # Nothing left to do. A model that answers in prose has
-            # finished, whether or not it says so.
-            transcript.answer = said.strip()
-            transcript.stopped = "finished"
-            return transcript
+            # A model that has built something and then answers in prose has
+            # finished, whether or not it says so. A step that was *refused*
+            # does not count: a run whose only call was rejected by name has
+            # not finished, it has stalled, and ending there publishes an
+            # empty document.
+            if transcript.built_anything:
+                transcript.answer = said.strip()
+                transcript.stopped = "finished"
+                return transcript
+
+            # Nothing has been built, so this is not an answer - it is a
+            # model that wrote out the calls it meant to make instead of
+            # making them. Measured on an 8B against a vLLM that accepts a
+            # tools array and then ignores it: the reply was the literal
+            # text `place_standard_part("Pipe Flange", ...)`. Reading that
+            # as "finished" ends the run with an empty document and a
+            # cheerful summary of a part that does not exist.
+            nudges += 1
+            if nudges > MAX_NUDGES:
+                transcript.answer = said.strip()
+                transcript.stopped = ("answered without calling anything, "
+                                      f"after {MAX_NUDGES} reminder(s)")
+                return transcript
+            messages.append({"role": "assistant", "content": said or "(nothing)"})
+            messages.append({"role": "user", "content": NOT_A_CALL})
+            continue
 
         # The model's own turn goes back verbatim, tool requests and all.
         # Anthropic rejects a tool_use with no tool_result after it, and

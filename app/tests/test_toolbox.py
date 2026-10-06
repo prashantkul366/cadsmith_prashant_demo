@@ -286,6 +286,45 @@ def main() -> int:
     check("and the tokens are counted for the budget",
           report["tokens"]["output"] > 0, str(report["tokens"]))
 
+    print("\nAn endpoint that takes tools and then ignores them")
+    # The state that is worse than having no tool channel at all: a vLLM
+    # started without --enable-auto-tool-choice accepts a tools array,
+    # answers 200, and never emits a tool_calls field. Measured against a
+    # real one: the model wrote the call out as text, the loop read "no
+    # calls" as "finished", and the run ended with an empty document and a
+    # cheerful summary of a part that does not exist.
+    run, _ = run_against(port, [
+        {"content": 'add_box("Plate", length=80, width=50, height=10)'},
+        {"content": json.dumps({"tool": "add_box", "arguments": {
+            "name": "Plate", "length": 80, "width": 50, "height": 10}})},
+        {"content": "Built the plate."},
+    ], supported=True)
+    check("a call written out as text is not mistaken for an answer",
+          run.steps and run.steps[0].name == "add_box",
+          f"{len(run.steps)} step(s), stopped: {run.stopped}")
+    check("and the model was told so rather than left to it",
+          run.calls >= 3, f"{run.calls} model calls")
+
+    run, _ = run_against(port, [
+        {"content": "I would build a plate."},
+        {"content": "A plate, 80 by 50 by 10."},
+        {"content": "Shall I build it?"},
+    ], supported=True)
+    check("a model that will not call anything stops, and does not pass",
+          not run.ok and not run.built_anything,
+          f"stopped: {run.stopped}")
+    check("and it is told at most twice before that",
+          run.calls == toolbox.MAX_NUDGES + 1, f"{run.calls} model calls")
+
+    # A refused call is not a build. Ending on one would publish an empty
+    # document with a summary of the part that was not made.
+    run, _ = run_against(port, [
+        {"tool": "add_box", "arguments": {"kind": "banana"}},
+        {"content": "All done!"},
+    ], supported=True)
+    check("a run whose only call was refused has not finished",
+          not run.built_anything, f"stopped: {run.stopped}")
+
     server.shutdown()
     print("\n" + "=" * 60)
     if failures:

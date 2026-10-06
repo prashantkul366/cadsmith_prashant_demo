@@ -40,7 +40,7 @@ const Viewer = (() => {
   grid.material.transparent = true; grid.material.opacity = 0.55;
   scene.add(grid);
 
-  let model = null, radius = 100, extents = null;
+  let model = null, radius = 100, extents = null, triangles = 0;
 
   /* ── STL parsing ──────────────────────────────────────────────────────
      CadQuery writes binary STL (80-byte header, uint32 triangle count, then
@@ -82,14 +82,28 @@ const Viewer = (() => {
     return { positions, normals };
   }
 
+  /* A float as a CAD writes one, negative exponent included. The pattern
+     this replaced was [\d.eE+]+, which cannot cross the minus in e-14 - so
+     every line like "vertex 75.0 -1.83e-14 15.0" failed to match at all and
+     its vertex was dropped. The remaining vertices then shifted up into
+     each other's triangles, which draws as long thin sails across the part.
+     CadQuery writes binary STL, so nothing exercised this until parts
+     started arriving from FreeCAD, which writes ASCII. */
+  const NUM = "[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?";
+  const VERTEX = new RegExp("vertex\\s+(" + NUM + ")\\s+(" + NUM + ")\\s+("
+                            + NUM + ")", "gi");
+
   function parseAscii(buffer) {
     const text = new TextDecoder().decode(new Uint8Array(buffer));
     const positions = [], normals = [];
     const facets = text.split(/facet\s+normal/i).slice(1);
     for (const facet of facets) {
       const n = facet.trim().split(/\s+/).slice(0, 3).map(Number);
-      const verts = [...facet.matchAll(
-        /vertex\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)/gi)];
+      const verts = [...facet.matchAll(VERTEX)];
+      // A facet is three vertices. Anything else means the file is damaged
+      // or this parser has misread it; either way, making a triangle out of
+      // what is left would draw a shape nobody built.
+      if (verts.length < 3) continue;
       for (const v of verts.slice(0, 3)) {
         positions.push(+v[1], +v[2], +v[3]);
         normals.push(n[0] || 0, n[1] || 0, n[2] || 1);
@@ -104,6 +118,11 @@ const Viewer = (() => {
   function buildGeometry(buffer) {
     const { positions, normals } =
       isAscii(buffer) ? parseAscii(buffer) : parseBinary(buffer);
+    // Reported so a test can compare it against the facets in the file.
+    // A parser that drops vertices still produces a mesh of about the right
+    // size - the dropped ones leave spikes *inside* the part - so the count
+    // is what tells a good read from a bad one, not the bounding box.
+    triangles = positions.length / 9;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
@@ -429,6 +448,7 @@ const Viewer = (() => {
     get building() { return building; },
     set building(v) { building = !!v; },
     get extents() { return extents; },
+    get triangles() { return triangles; },
     toggleWire() { wire = !wire; applyModes(); return wire; },
     snapshot(white) {
       const background = scene.background;

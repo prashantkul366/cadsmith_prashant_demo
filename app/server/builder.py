@@ -167,17 +167,49 @@ def collect(session: freecad_tools.Session, version_dir: Path) -> dict:
     out["step"] = step
 
     try:
-        stl = version_dir / "model.stl"
-        stl.write_bytes(session.bridge.fetch(session.document, "stl"))
-        out["stl"] = stl
-    except freecad.FreeCADError:
-        pass        # the viewer degrades to the drawing; the part is intact
+        out["stl"] = mesh(step, version_dir / "model.stl")
+    except Exception:
+        # Falling back to FreeCAD's own mesher rather than leaving the
+        # viewer with nothing.
+        try:
+            stl = version_dir / "model.stl"
+            stl.write_bytes(session.bridge.fetch(session.document, "stl"))
+            out["stl"] = stl
+        except freecad.FreeCADError:
+            pass    # the viewer degrades to the drawing; the part is intact
 
     try:
         out["document"] = save_document(session, version_dir / "part.FCStd")
     except freecad.FreeCADError:
         pass
     return out
+
+
+def mesh(step: Path, path: Path) -> Path:
+    """The mesh the viewer loads, made here from the solid that was measured.
+
+    Asked of this app's own kernel rather than of FreeCAD, for two reasons
+    that are both about the same thing - the viewer showing the part that
+    was checked.
+
+    *It is the measured solid.* ``spec.measure_step`` reads the STEP; so
+    does this. A mesh fetched separately from FreeCAD is a second export of
+    a document that may have moved on, and a viewer disagreeing with the
+    measurements is the worst kind of wrong, because it looks right.
+
+    *It is binary and an eighth the size.* FreeCAD writes ASCII STL: a
+    150 mm flange came to 2.4 MB against 100 KB here, every byte of it down
+    the wire to a browser.
+    """
+    import cadquery as cq
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    solid = cq.importers.importStep(str(step))
+    # 0.1 mm chordal, 0.2 rad angular: a 50 mm bore comes out round to the
+    # eye without the triangle count a CAD's default deviation produces.
+    cq.exporters.export(solid, str(path), exportType="STL",
+                        tolerance=0.1, angularTolerance=0.2)
+    return path
 
 
 def save_document(session: freecad_tools.Session, path: Path) -> Path:
