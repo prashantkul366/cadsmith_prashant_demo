@@ -1041,6 +1041,8 @@ bends the catalogue serves need no model at all.
                                                     # stand-in for the addon
 .venv/bin/python -m app.tests.test_toolbox          # building step by step, with
                                                     # and without tool calling
+.venv/bin/python -m app.tests.test_freecad_tools    # the three tool layers a
+                                                    # model builds through
 .venv/bin/python -m app.tests.test_layout           # panel geometry, real browser
 .venv/bin/python -m app.tests.test_thinking_stream  # streamed reasoning, and the
                                                     # effort the run asked for
