@@ -171,14 +171,17 @@ class Bridge:
 
     # -- is anybody there ---------------------------------------------------
 
-    def alive(self) -> bool:
+    def alive(self, timeout: Optional[float] = None) -> bool:
         """Whether FreeCAD is up with its RPC server running.
 
         Never raises. The health panel asks this on every page load and a
         FreeCAD that is simply not open is an ordinary state, not a fault.
+        A caller that is holding a request open can ask for a shorter wait
+        than the default: nothing on this side is worth five seconds of a
+        page load to find out.
         """
         try:
-            return bool(self._call("ping", timeout=PING_TIMEOUT))
+            return bool(self._call("ping", timeout=timeout or PING_TIMEOUT))
         except FreeCADError:
             return False
 

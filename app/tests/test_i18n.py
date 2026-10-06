@@ -44,7 +44,8 @@ WEB = ROOT / "app" / "web"
 
 #: Keys whose Japanese is legitimately not Japanese: punctuation, and the
 #: name of a product written the same way in both languages.
-IDENTICAL_OK = {"code.empty", "diag.cadquery"}
+# Product names, which a Japanese interface writes the same way.
+IDENTICAL_OK = {"code.empty", "diag.cadquery", "diag.freecad"}
 
 CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿]")
 

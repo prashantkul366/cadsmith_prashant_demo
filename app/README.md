@@ -966,6 +966,12 @@ that is not running is not an error - the run says so on the log line and
 falls back to the pipeline, which is exactly what this app did before there
 was a FreeCAD road at all.
 
+**Check the health panel first.** It carries a `freecad` row saying either
+`connected at 127.0.0.1:9875` or `not running at ...`, and it reads not-ok
+when FreeCAD is wanted and absent - because a run that was meant to be built
+in FreeCAD and was quietly generated instead is the one failure you cannot
+see by looking at the part.
+
 What happens in between is different in three ways that matter.
 
 **The part is built, not written.** `builder.py` plans it, then a model works
