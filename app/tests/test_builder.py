@@ -122,13 +122,19 @@ def main() -> int:
     rows = {row["key"]: row for row in verdict["checks"]}
     check("the part passes, because it is the part that was asked for",
           verdict["passed"], str(verdict["problems"]))
-    check("the solid is closed", rows["watertight"]["passed"])
+    check("the solid is closed", rows["solid_valid"]["passed"])
+    # Keyed the way the pipeline's own gate keys them, which is why the
+    # Validation panel needs nothing adding to draw these.
     check("the stated sizes were found in the solid",
-          any(k.startswith(("size_", "stated_")) for k in rows),
-          ", ".join(k for k in rows if k.startswith(("size_", "stated_"))))
+          any(k.startswith("stated_") for k in rows),
+          ", ".join(sorted(k for k in rows if k.startswith("stated_"))))
     check("and the hole was measured off the geometry, not the request",
-          "bore_6" in rows and rows["bore_6"]["passed"],
-          rows.get("bore_6", {}).get("actual"))
+          "stated_bore_6" in rows and rows["stated_bore_6"]["passed"],
+          rows.get("stated_bore_6", {}).get("actual"))
+    check("the shop-floor checks come with it, as advisories",
+          rows.get("drill_sizes", {}).get("hard") is False
+          and rows.get("thin_section", {}).get("hard") is False,
+          ", ".join(k for k, r in rows.items() if r["hard"] is False))
 
     # The point of the gate. A builder that finishes happily having made the
     # wrong thing is caught by the kernel, not asked for its opinion.
@@ -138,8 +144,9 @@ def main() -> int:
           not wrong["passed"], str(wrong["problems"])[:90])
     check("and the refusal names what is wrong, measured both ways",
           any("12" in row["expected"] for row in wrong["checks"]
-              if row["passed"] is False),
-          str([r["key"] for r in wrong["checks"] if r["passed"] is False]))
+              if row["passed"] is False and row["hard"]),
+          str([r["key"] for r in wrong["checks"]
+               if r["passed"] is False and r["hard"]]))
 
     print("\nThe declared parameters are what the slider panel already draws")
     mapping = builder.parameter_map(session)

@@ -38,6 +38,7 @@ PHASE_GROUND = "ground"      # Standard dimensions retrieved for the Planner
 PHASE_CATALOG = "catalog"    # A standard part served instead of generated
 PHASE_SPEC = "spec"          # Kernel-measured checks against the design plan
 PHASE_THINKING = "thinking"  # Streamed model reasoning / output, as it arrives
+PHASE_FREECAD = "freecad"    # One tool call against a live FreeCAD document
 
 STATUS_STARTED = "started"
 STATUS_OK = "ok"

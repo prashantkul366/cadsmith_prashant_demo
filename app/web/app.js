@@ -933,6 +933,7 @@ function renderKernelFacts(version) {
   $("#mtitle").textContent =
     version.source === "catalog" ? t("facts.standard")
     : version.source === "edit" ? t("facts.updated")
+    : version.source === "freecad" ? t("facts.freecad")
     : t(version.passed ? "facts.validated" : "facts.unvalidated");
   const tiles = [
     [t("facts.bbox"), `${fmt(bbox.xlen)}×${fmt(bbox.ylen)}×${fmt(bbox.zlen)}`],
@@ -1027,6 +1028,14 @@ function renderValidation(version) {
     const judgeModel = (S.judgeModel || "").toUpperCase() || t("val.src.judge");
     attribution = judgeModel + " · " + t(version.has_render
       ? "val.src.render" : "val.src.metrics");
+  } else if (version.source === "freecad") {
+    // No script was written and no Judge ran, so neither of the other two
+    // branches is true of this part. Saying "rebuilt and checked by the
+    // kernel" would be describing a parameter patch; saying the Judge
+    // accepted it would credit a check that never happened.
+    heading = t(passed ? "val.freecad" : "val.freecad.failed");
+    body = t("val.freecad.body");
+    attribution = t("val.src.freecad");
   } else if (version.source === "catalog") {
     // No agent produced this, so there is nothing for a Judge to have
     // accepted. Say where it came from instead of implying a verdict.
@@ -1257,6 +1266,7 @@ async function generate() {
     max_iterations: +$("#optIters").value,
     use_vision: $("#optVision").classList.contains("on"),
     use_catalog: $("#optCatalog").classList.contains("on"),
+    use_freecad: $("#optFreecad").classList.contains("on"),
     ground_dimensions: $("#optGround").classList.contains("on"),
     effort: $("#optEffort").value,
     provider: $("#optProvider").value,
@@ -1482,7 +1492,7 @@ $("#prompt").addEventListener("keydown", e => {
 });
 
 $("#optIters").oninput = e => { $("#optItersOut").value = e.target.value; };
-for (const id of ["#optVision", "#optCatalog", "#optGround"]) {
+for (const id of ["#optVision", "#optCatalog", "#optGround", "#optFreecad"]) {
   $(id).onclick = () => {
     const on = $(id).classList.toggle("on");
     $(id).setAttribute("aria-checked", String(on));

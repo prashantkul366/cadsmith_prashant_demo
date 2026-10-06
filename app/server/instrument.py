@@ -161,6 +161,34 @@ def get_context() -> Optional[RunContext]:
     return _current.get()
 
 
+def client_for(ctx: RunContext):
+    """A model client whose reasoning streams into this run's event log.
+
+    Every agent in the pipeline reaches the network through this, and so
+    does anything else driven from a run - the FreeCAD builder among them -
+    which is why it is a function rather than a closure inside the hook:
+    there is one place that decides what a run's model calls look like.
+    """
+    def _on_delta(kind: str, text: str) -> None:
+        # kind is "thinking:<role>" or "text:<role>" - see ClaudeClient.
+        stream, _, role = kind.partition(":")
+        ctx.emit(
+            PHASE_THINKING,
+            STATUS_INFO,
+            text,
+            stream=stream,
+            role=role or "generation",
+            agent=ctx.agent or "",
+            iteration=ctx.iteration,
+        )
+
+    return build_client(
+        ctx.llm,
+        on_note=lambda message: ctx.emit(PHASE_LOG, STATUS_INFO, message),
+        on_delta=_on_delta,
+    )
+
+
 def _emit(phase: str, status: str, message: str = "", **data: Any) -> None:
     ctx = _current.get()
     if ctx is not None:
@@ -414,24 +442,7 @@ def install_agent_hooks() -> None:
         ctx = _current.get()
         if ctx is None or ctx.llm is None:
             return _orig_get_client()
-        def _on_delta(kind: str, text: str) -> None:
-            # kind is "thinking:<role>" or "text:<role>" - see ClaudeClient.
-            stream, _, role = kind.partition(":")
-            ctx.emit(
-                PHASE_THINKING,
-                STATUS_INFO,
-                text,
-                stream=stream,
-                role=role or "generation",
-                agent=ctx.agent or "",
-                iteration=ctx.iteration,
-            )
-
-        return build_client(
-            ctx.llm,
-            on_note=lambda message: ctx.emit(PHASE_LOG, STATUS_INFO, message),
-            on_delta=_on_delta,
-        )
+        return client_for(ctx)
 
     _get_client._cadsmith_wrapped = True  # type: ignore[attr-defined]
     agents._get_client = _get_client

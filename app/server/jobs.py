@@ -27,7 +27,9 @@ from typing import Any, Optional
 
 from . import budget as budget_mod
 from . import catalog_run
+from . import freecad_run
 from . import i18n
+from . import instrument
 from .edits import Change, apply_changes, describe, plan_edit
 from .events import (
     EventSink,
@@ -75,6 +77,13 @@ PART_NAME = "part"
 #: constraint.
 KEEP_RUNS = int(os.getenv("CADSMITH_KEEP_RUNS", "200"))
 
+#: Whether a run looks for FreeCAD before falling back to generating a
+#: script. On, because a FreeCAD that is not running costs a refused
+#: connection to find out and the run carries on exactly as it used to;
+#: set CADSMITH_USE_FREECAD=0 to stop it looking.
+FREECAD_DEFAULT = (os.getenv("CADSMITH_USE_FREECAD", "1").strip().lower()
+                   not in ("0", "false", "no", "off", ""))
+
 
 @dataclass
 class JobOptions:
@@ -103,6 +112,11 @@ class JobOptions:
     #: Give the Planner the published dimensions for any standard part the
     #: request names. Off reproduces the pipeline as published.
     ground_dimensions: bool = True
+    #: Build the part in a running FreeCAD rather than by generating a
+    #: CadQuery script. On by default and harmless when FreeCAD is not
+    #: there: the run falls back to the pipeline and says so. Off never
+    #: looks for FreeCAD at all.
+    use_freecad: bool = FREECAD_DEFAULT
     #: How hard the agents are asked to think. A simple part answered at low
     #: effort arrives in a fraction of the time; a hard one is worth the wait.
     #: Empty leaves the choice to the backend, which reasons at its own
@@ -124,6 +138,7 @@ class JobOptions:
                                     or budget_mod.DEFAULT_BUDGET)),
             use_catalog=bool(raw.get("use_catalog", True)),
             ground_dimensions=bool(raw.get("ground_dimensions", True)),
+            use_freecad=bool(raw.get("use_freecad", FREECAD_DEFAULT)),
             effort=normalise_effort(raw.get("effort")),
         )
 
@@ -345,6 +360,51 @@ class JobManager:
                         i18n.t("job.catalogunbuildable", lang, error=error))
                     ctx.source = "pipeline"
 
+            # Build it in FreeCAD, if there is one to build in. A live
+            # feature tree is a better answer than a generated script - the
+            # part arrives feature by feature, each step measured, and what
+            # the person ends up with is a document an engineer can open.
+            # A FreeCAD that is not running, or will not finish the part, is
+            # not a failed run: it falls through to the pipeline, which is
+            # what this app did before there was a FreeCAD road at all.
+            if job.options.use_freecad:
+                bridge = freecad_run.bridge_from_env()
+                if not freecad_run.available(bridge):
+                    sink.emit(PHASE_JOB, STATUS_INFO,
+                              i18n.t("freecad.offline", lang))
+                else:
+                    try:
+                        freecad_run.serve(
+                            ctx, job.prompt,
+                            instrument.client_for(ctx),
+                            ctx.llm.generation_model, bridge=bridge)
+                        job.source = "freecad"
+                        job.converged = bool(ctx.versions[-1]["passed"])
+                        job.design_plan = ctx.design_plan or {}
+                        job.tokens = ctx.versions[-1].get("tokens") or {}
+                        job.llm_calls = int(job.tokens.get("calls", 0))
+                        job.versions = list(ctx.versions)
+                        job.status = STATUS_DONE
+                        job.finished_at = time.time()
+                        self._write_meta(job)
+                        sink.emit(PHASE_JOB, STATUS_OK,
+                                  i18n.t("job.converged" if job.converged
+                                         else "job.notconverged", lang),
+                                  converged=job.converged, tokens=job.tokens,
+                                  spend=budget_mod.summary(job.tokens,
+                                                           ctx.budget),
+                                  llm_calls=job.llm_calls, source="freecad")
+                        return
+                    except budget_mod.BudgetExceeded:
+                        raise
+                    except Exception as error:
+                        sink.emit(
+                            PHASE_JOB, STATUS_INFO,
+                            i18n.t("freecad.unbuildable", lang, error=error))
+                        ctx.source = "pipeline"
+                        ctx.method = ""
+                        ctx.iteration = 0
+
             pipeline = InstrumentedPipeline(
                 output_dir=str(job.directory / "work"),
                 max_error_retries=job.options.max_error_retries,
@@ -433,6 +493,99 @@ class JobManager:
                       instruction=summary, base_version=base_version)
         job.status = STATUS_QUEUED
         self._pool.submit(self._run_edit, job, summary, base_version, changes)
+
+    # -- dragging a number on a part FreeCAD built ---------------------------
+
+    def freecad_parameters(self, job: Job,
+                           version: Optional[int]) -> Optional[dict]:
+        """The slider map a FreeCAD-built version saved, if it is one.
+
+        Read from disk rather than from the job record, for the same reason
+        the HTTP layer reads the code from disk: a version is announced on
+        the event stream before the run that made it has finished, and the
+        panel asks for its parameters immediately.
+        """
+        if version is None:
+            return None
+        path = self.artifact_path(job.id, version, "parameters.json")
+        if path is None:
+            return None
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return record if record.get("parameters") else None
+
+    def submit_freecad_parameters(self, job: Job, values: dict,
+                                  base_version: Optional[int] = None) -> None:
+        """Queue a property change on the FreeCAD document of a version."""
+        sink = self.sink(job.id)
+        if sink is not None:
+            sink.emit(PHASE_JOB, STATUS_QUEUED,
+                      i18n.t("edit.queued", job.options.lang),
+                      instruction=", ".join(f"{k} = {v:g}"
+                                            for k, v in values.items()),
+                      base_version=base_version)
+        job.status = STATUS_QUEUED
+        self._pool.submit(self._run_freecad_parameters, job, values,
+                          base_version)
+
+    def _run_freecad_parameters(self, job: Job, values: dict,
+                                base_version: Optional[int] = None) -> None:
+        """Set the values on that version's own document and publish it.
+
+        No model call, no script, and no re-execution from the top: the
+        version's saved document is reopened, the properties are set, and
+        FreeCAD recomputes what depends on them. The gate still runs, because
+        a number a person chose can make the part wrong just as easily as a
+        number a model chose.
+        """
+        lang = job.options.lang
+        sink = self.sink(job.id)
+        ctx = self.context(job.id)
+        if sink is None:
+            return
+        if ctx is None:
+            job.status = STATUS_DONE
+            sink.emit(PHASE_JOB, STATUS_FAILED,
+                      i18n.t("edit.nocontext", lang), edit=True)
+            return
+
+        ctx.lang = lang
+        set_context(ctx)
+        job.status = STATUS_RUNNING
+        started = time.time()
+        try:
+            if base_version is None:
+                previous = job.versions[-1]
+            else:
+                previous = next(
+                    (v for v in job.versions
+                     if v.get("iteration") == base_version),
+                    job.versions[-1])
+            ctx.iteration = max(v["iteration"] for v in job.versions) + 1
+            ctx.source, ctx.method = "edit", "freecad parameters"
+            freecad_run.reapply(
+                ctx, job.directory / f"v{previous['iteration']}",
+                values, job.prompt, job.design_plan)
+            job.versions = list(ctx.versions)
+            job.status = STATUS_DONE
+            sink.emit(PHASE_JOB, STATUS_OK, i18n.t("edit.applied", lang),
+                      edit=True, method=ctx.method,
+                      total_ms=(time.time() - started) * 1000,
+                      iterations=len(job.versions))
+        except Exception as exc:
+            job.status = STATUS_DONE
+            sink.emit(PHASE_JOB, STATUS_FAILED,
+                      i18n.t("edit.failed", lang,
+                             error=f"{type(exc).__name__}: {exc}"),
+                      traceback=traceback.format_exc()[-4000:], edit=True)
+        finally:
+            job.finished_at = time.time()
+            ctx.source, ctx.method = "pipeline", ""
+            ctx.instruction, ctx.changes = "", []
+            set_context(None)
+            self._write_meta(job)
 
     def _run_edit(self, job: Job, instruction: str,
                   base_version: Optional[int] = None,

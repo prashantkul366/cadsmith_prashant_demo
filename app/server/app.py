@@ -58,6 +58,10 @@ ALLOWED_ARTIFACTS = {
     # The front-elevation thumbnail on an option card, when one request had
     # more than one right answer.
     "option.svg",
+    # The live FreeCAD document, for a part built in FreeCAD. The one export
+    # that is not a snapshot: it opens with its feature tree intact, which is
+    # what an engineer needs to carry on from here.
+    "part.FCStd",
 }
 
 # Curated starting prompts.  The tiered ones are the exact benchmark entries
@@ -410,23 +414,28 @@ async def edit_job(job_id: str, request: Request) -> JSONResponse:
     return JSONResponse({"job": job.summary()}, status_code=202)
 
 
-def _version_code(job, version: Optional[int], lang: str) -> tuple[int, str]:
-    """The code of the version being worked on, and which one that is.
+def _version_number(job, version: Optional[int], lang: str) -> int:
+    """Which version is being worked on.
 
     Defaults to the newest rather than the one on screen, because a caller
     that does not say means "the current part"; the panel always says.
     """
     if version is None:
-        chosen = job.versions[-1].get("iteration")
-    else:
-        try:
-            chosen = int(version)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400,
-                                detail=i18n.t("http.badversion", lang))
-        if not any(v.get("iteration") == chosen for v in job.versions):
-            raise HTTPException(status_code=404,
-                                detail=i18n.t("http.noversion", lang))
+        return job.versions[-1].get("iteration")
+    try:
+        chosen = int(version)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.badversion", lang))
+    if not any(v.get("iteration") == chosen for v in job.versions):
+        raise HTTPException(status_code=404,
+                            detail=i18n.t("http.noversion", lang))
+    return chosen
+
+
+def _version_code(job, version: Optional[int], lang: str) -> tuple[int, str]:
+    """The code of the version being worked on, and which one that is."""
+    chosen = _version_number(job, version, lang)
     path = manager.artifact_path(job.id, chosen, "code.py")
     if path is None:
         raise HTTPException(status_code=404,
@@ -462,6 +471,23 @@ def job_parameters(job_id: str, request: Request,
             raise HTTPException(status_code=400,
                                 detail=i18n.t("http.badversion", lang))
 
+    # A part built in FreeCAD has no script to read. Its parameters were
+    # declared while it was being built, with the object and property behind
+    # each one, so the saved map is the answer rather than a parse of a
+    # transcript that only looks like code.
+    declared = manager.freecad_parameters(job, chosen)
+    if declared is not None:
+        return JSONResponse({
+            "version": chosen, "source": "freecad",
+            "parameters": [
+                {key: value for key, value in entry.items()
+                 # The three fields that say where the number lives are the
+                 # server's business; sending them would invite a client to
+                 # name an object and a property of its own choosing.
+                 if key not in ("object", "property", "scale")}
+                for entry in declared["parameters"]],
+        })
+
     path = (manager.artifact_path(job.id, chosen, "code.py")
             if chosen is not None else None)
     if path is None:
@@ -470,6 +496,48 @@ def job_parameters(job_id: str, request: Request,
         "version": chosen,
         "parameters": describe_parameters(path.read_text(encoding="utf-8")),
     })
+
+
+def _freecad_values(declared: dict, wanted: dict, lang: str) -> dict:
+    """The values a caller asked for, checked against what the part declares.
+
+    Exactly the checks the script path makes, for the same reason: a bad
+    value should be a refusal the caller can read rather than a run that
+    fails later on the event stream. The names are checked against the
+    version's own map, so a caller cannot reach a property the builder never
+    offered.
+    """
+    by_name = {entry["name"]: entry for entry in declared["parameters"]}
+    values: dict[str, float] = {}
+    for name, raw in wanted.items():
+        entry = by_name.get(str(name))
+        if entry is None:
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.noparameter", lang, name=name))
+        try:
+            number = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.badvalue", lang, name=name, value=raw))
+        # NaN compares false against everything, so it would slip past a
+        # range check and reach the kernel as a dimension.
+        if number != number or number in (float("inf"), float("-inf")):
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.badvalue", lang, name=name, value=raw))
+        if number <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=i18n.t("http.notpositive", lang, name=name))
+        if abs(number - float(entry.get("value") or 0.0)) > 1e-9:
+            values[str(name)] = number
+
+    if not values:
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.nochange", lang))
+    return values
 
 
 @app.post("/api/jobs/{job_id}/parameters")
@@ -492,16 +560,30 @@ async def set_job_parameters(job_id: str, request: Request) -> JSONResponse:
         raise HTTPException(status_code=409,
                             detail=i18n.t("http.stillworking", lang))
 
-    status = _health()
-    if not status["checks"]["cadquery"]["ok"]:
-        raise HTTPException(status_code=503,
-                            detail=i18n.t("http.norebuild", lang))
-
     body = await _json_body(request)
     wanted = body.get("changes")
     if not isinstance(wanted, dict) or not wanted:
         raise HTTPException(status_code=400,
                             detail=i18n.t("http.needchanges", lang))
+
+    # A part built in FreeCAD takes a different road entirely: its document
+    # is reopened and one property is set, so there is no script to rebuild
+    # and no CadQuery to need.
+    base_version = _version_number(job, body.get("version"), lang)
+    declared = manager.freecad_parameters(job, base_version)
+    if declared is not None:
+        values = _freecad_values(declared, wanted, lang)
+        job.options.lang = lang
+        manager.submit_freecad_parameters(job, values,
+                                          base_version=base_version)
+        return JSONResponse({"job": job.summary(), "changes": [
+            {"name": name, "new": value} for name, value in values.items()]},
+            status_code=202)
+
+    status = _health()
+    if not status["checks"]["cadquery"]["ok"]:
+        raise HTTPException(status_code=503,
+                            detail=i18n.t("http.norebuild", lang))
 
     base_version, code = _version_code(job, body.get("version"), lang)
     available = parameters(code)
@@ -746,7 +828,8 @@ def get_artifact(job_id: str, version: int, artifact: str, request: Request):
         path,
         media_type=MEDIA_TYPES.get(path.suffix, "application/octet-stream"),
         filename=filename if artifact in ("model.stl", "model.step",
-                                          "code.py", "drawing.dxf") else None,
+                                          "code.py", "drawing.dxf",
+                                          "part.FCStd") else None,
     )
 
 

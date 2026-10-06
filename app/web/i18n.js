@@ -226,6 +226,14 @@ const I18N = (function () {
 
     /* ── kernel facts ───────────────────────────────────────────────── */
     "facts.updated":    ["Model updated", "モデルを更新しました"],
+    "opt.freecad":      ["Build in FreeCAD", "FreeCAD で構築"],
+    "opt.freecad.tip":  [
+      "Build the part in a running FreeCAD instead of generating a script. "
+      + "Needs FreeCAD open with the MCP addon's RPC server started; "
+      + "without it the run falls back to the pipeline.",
+      "スクリプトを生成する代わりに、起動中の FreeCAD で部品を構築します。"
+      + "FreeCAD を開き、MCP アドオンの RPC サーバーを起動しておく必要が"
+      + "あります。起動していない場合はパイプラインで実行されます。"],
     "facts.validated":  ["Validated", "検証済み"],
     "facts.unvalidated": ["Attempt not yet validated", "この試行は未検証です"],
     "facts.bbox":       ["bbox mm", "外形 mm"],
@@ -316,6 +324,23 @@ const I18N = (function () {
     "val.rebuilt.body.failed": ["The rebuilt solid failed the kernel's checks.",
                                 "再構築したソリッドはカーネルの検査に"
                                 + "合格しませんでした。"],
+    "val.freecad":       ["Built in FreeCAD, measured here",
+                          "FreeCAD で構築し、こちらで実測しました"],
+    "val.freecad.failed": ["The part FreeCAD built does not match the request",
+                           "FreeCAD が構築した部品は依頼内容と一致していません"],
+    "val.freecad.body": [
+      "A model built this by calling tools against a live FreeCAD document, "
+      + "one feature at a time. No script was generated and no vision Judge "
+      + "ran: the gate is the measurement below, taken here on the solid "
+      + "FreeCAD handed back, against the dimensions the request itself "
+      + "stated.",
+      "モデルが FreeCAD の実ドキュメントに対してツールを呼び出し、形状を"
+      + "1 つずつ構築しました。スクリプトの生成も画像による検証も行って"
+      + "いません。判定基準は下の実測値です。FreeCAD から受け取った"
+      + "ソリッドをこちらで測定し、リクエストに明記された寸法と比較して"
+      + "います。"],
+    "val.src.freecad":  ["FREECAD + OCCT KERNEL · NO JUDGE",
+                         "FreeCAD + OCCT カーネル · 判定モデルなし"],
     "val.src.judge":    ["JUDGE MODEL", "検証モデル"],
     "val.src.render":   ["KERNEL METRICS + THREE-VIEW RENDER",
                          "カーネル実測 + 三面レンダリング"],
@@ -599,6 +624,7 @@ const I18N = (function () {
     "iter.catalog":     ["STANDARD", "標準"],
     "label.catalog":    ["CATALOGUE · {backend}", "カタログ · {backend}"],
     "facts.standard":   ["Standard part", "標準部品"],
+    "facts.freecad":    ["Built in FreeCAD", "FreeCAD で構築"],
     "usage.free":       ["No model call — served from the catalogue",
                          "モデル呼び出しなし — カタログから提供"],
     "run.catalogdone":  ["{title} — from the catalogue{seconds}, no model call",

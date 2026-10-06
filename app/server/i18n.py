@@ -194,6 +194,82 @@ MESSAGES: dict[str, dict[str, str]] = {
               "なソースなので、他の部品と同じように編集できます。",
     },
 
+    # -- building in FreeCAD ------------------------------------------------
+    "freecad.planning": {
+        "en": "Working out what the part is, and what has to be true of it "
+              "when it is finished.",
+        "ja": "どのような部品か、そして完成時に満たすべき条件を整理しています。",
+    },
+    "freecad.planned": {
+        "en": "{n} component(s) planned. Building them in FreeCAD.",
+        "ja": "構成要素 {n} 件を計画しました。FreeCAD で構築します。",
+    },
+    "freecad.building": {
+        "en": "Building in FreeCAD, one feature at a time. Every step comes "
+              "back measured, so a wrong number costs one step rather than "
+              "the whole part.",
+        "ja": "FreeCAD で 1 つずつ形状を作成します。各手順は実測値を返すため、"
+              "数値の誤りは部品全体ではなく 1 手順の損失で済みます。",
+    },
+    "freecad.step": {
+        "en": "{tool} - {ms} ms",
+        "ja": "{tool} — {ms} ミリ秒",
+    },
+    "freecad.refused": {
+        "en": "{tool} could not do that: {error}",
+        "ja": "{tool} は実行できませんでした: {error}",
+    },
+    "freecad.built": {
+        "en": "Built in {n} step(s).",
+        "ja": "{n} 手順で構築しました。",
+    },
+    "freecad.exporting": {
+        "en": "Bringing the solid back out of FreeCAD.",
+        "ja": "FreeCAD からソリッドを取り出しています。",
+    },
+    "freecad.exported": {
+        "en": "{volume} mm3 of metal, measured here rather than taken on "
+              "FreeCAD's word for it.",
+        "ja": "材料体積 {volume} mm3。FreeCAD の報告ではなく、こちらで実測した"
+              "値です。",
+    },
+    "freecad.passed": {
+        "en": "Every measurable thing the request stated is in the solid.",
+        "ja": "リクエストに明記された測定可能な条件は、すべてソリッドが"
+              "満たしています。",
+    },
+    "freecad.failed": {
+        "en": "The part does not match what was asked for: {problems}",
+        "ja": "部品が依頼内容と一致していません: {problems}",
+    },
+    "freecad.done": {
+        "en": "{steps} step(s) in {ms} ms. The FreeCAD document is saved with "
+              "the part - open it and carry on with a live feature tree.",
+        "ja": "{steps} 手順、{ms} ミリ秒で完了しました。FreeCAD ドキュメントも"
+              "保存済みです。開けば生きたフィーチャーツリーのまま作業を"
+              "続けられます。",
+    },
+    "freecad.dragged": {
+        "en": "{changes} - set on the FreeCAD document, which recomputed "
+              "what depends on it. No script was rewritten.",
+        "ja": "{changes} を FreeCAD ドキュメントに設定し、依存する部分を"
+              "再計算しました。スクリプトの書き換えはありません。",
+    },
+    "freecad.offline": {
+        "en": "FreeCAD is not reachable, so this run used the generating "
+              "pipeline instead. Open FreeCAD, start the MCP addon's RPC "
+              "server, and try again to build in it.",
+        "ja": "FreeCAD に接続できないため、この実行では生成パイプラインを"
+              "使用しました。FreeCAD を開いて MCP アドオンの RPC サーバーを"
+              "起動すると、FreeCAD で構築できます。",
+    },
+    "freecad.unbuildable": {
+        "en": "FreeCAD could not finish this part ({error}), so the "
+              "generating pipeline took it on.",
+        "ja": "FreeCAD ではこの部品を完成できなかったため（{error}）、生成"
+              "パイプラインが処理を引き継ぎました。",
+    },
+
     # -- edits --------------------------------------------------------------
     "edit.nocontext": {
         "en": "That run cannot be edited in this session.",

@@ -954,6 +954,68 @@ script printed. Bytes rather than a shared path, because FreeCAD may be on
 another machine and a path that resolves at only one end is a bug waiting
 for the first remote install.
 
+### Typing a prompt and watching the part appear
+
+With FreeCAD open and its RPC server started, an ordinary run goes through
+it. Nothing else about using the app changes: you type a prompt, the part
+shows up in the viewer, the drawing and the exports are where they always
+were. The switch is **Build in FreeCAD** in the composer's options, on by
+default; `CADSMITH_USE_FREECAD=0` turns it off for good, and
+`CADSMITH_FREECAD_HOST` / `_PORT` / `_TOKEN` say where FreeCAD is. A FreeCAD
+that is not running is not an error - the run says so on the log line and
+falls back to the pipeline, which is exactly what this app did before there
+was a FreeCAD road at all.
+
+What happens in between is different in three ways that matter.
+
+**The part is built, not written.** `builder.py` plans it, then a model works
+through `freecad_tools.py` one call at a time: add the plate, cut the hole,
+fillet that edge. Every call comes back with what FreeCAD measured, so a
+wrong number is corrected at the next step instead of at the end of a
+regenerated script. The steps appear on the event stream as they finish.
+
+**The gate is still a measurement.** `builder.check` *is* `spec.check` - the
+same rows, the same keys, the same tolerances the generated path is held to,
+against the dimensions `stated.py` read out of the request before any model
+saw it. There is no Judge on this road, and the Validation panel says so
+rather than implying one passed it.
+
+**The deliverable is a document.** Each version saves `part.FCStd` beside its
+STEP and STL, so what you hand an engineer opens in FreeCAD with its feature
+tree intact. That is the one export that is not a snapshot. It is saved by
+FreeCAD, to a path on FreeCAD's own machine; run FreeCAD elsewhere and the
+geometry still comes back as bytes, but the live document stays there and
+the version record says it was not collected rather than naming a file that
+is not there.
+
+### Dragging a parameter, without rewriting anything
+
+While building, the model calls `declare_parameter` for the handful of
+numbers worth a control - the overall sizes, the hole diameters - naming the
+FreeCAD object and property behind each. It does that *as it builds*, not as
+a summary afterwards: a model that has just made the base plate knows which
+of its numbers a person would reach for, and asking at the end invites a
+tidy-sounding answer that does not match what was built. A `scale` carries
+the difference between what FreeCAD stores and what a person means, so a
+`Radius` of 3 appears as a 6 mm diameter and the two never drift apart.
+
+The list is written to `parameters.json` in the version directory, which is
+what `GET /api/jobs/{id}/parameters` serves - so the slider panel draws it
+with no second code path. The three fields that say *where* the number lives
+stay on the server; a client names a parameter, never an object and a
+property of its own choosing.
+
+Letting go of a slider reopens **that version's own document**, sets the
+property, and lets FreeCAD recompute what depends on it. Not the newest
+document - the one on screen, found by file, so stepping back in the
+filmstrip and dragging there changes the part you are looking at. The result
+is published as a new version with the gate re-run on it, because a number a
+person chose can make a part wrong just as easily as a number a model chose.
+
+Next to the CadQuery path, which rewrites the script and re-executes it from
+the top for one changed number, this is the difference the live tree was
+worth having for.
+
 ## Running against a self-hosted vLLM
 
 Any OpenAI-compatible endpoint works the same way, including a vLLM server
@@ -1045,6 +1107,9 @@ bends the catalogue serves need no model at all.
                                                     # model builds through
 .venv/bin/python -m app.tests.test_builder          # plan, build, and the gate
                                                     # that measures the result
+.venv/bin/python -m app.tests.test_freecad_run      # a prompt through the
+                                                    # FreeCAD route, and a
+                                                    # dragged parameter
 .venv/bin/python -m app.tests.test_layout           # panel geometry, real browser
 .venv/bin/python -m app.tests.test_thinking_stream  # streamed reasoning, and the
                                                     # effort the run asked for

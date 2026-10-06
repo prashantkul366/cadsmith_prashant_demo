@@ -248,7 +248,11 @@ def main() -> int:  # noqa: C901 - a checklist, not a branchy function
     # the setup line silently falls back to English inside Japanese.
     providers_py = io.open(ROOT / "app" / "server" / "providers.py",
                            encoding="utf-8").read()
-    ids = set(re.findall(r'\bid="(\w+)"', providers_py))
+    # Anchored on the declaration itself rather than on any id= anywhere in
+    # the file: a bare id="..." also matches things that are not providers -
+    # a ToolCall carries one - and the test then asks for a translation of
+    # something that is never shown to anybody.
+    ids = set(re.findall(r'\n\s+id="(\w+)",\n', providers_py))
     gaps = sorted(i for i in ids if f"prov.hint.{i}" not in dictionary)
     check("every provider's setup hint has a label", ids and not gaps,
           ", ".join(gaps) or f"{len(ids)} providers")

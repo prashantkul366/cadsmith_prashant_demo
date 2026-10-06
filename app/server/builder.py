@@ -79,13 +79,18 @@ towards +X, +Y, +Z. A Part::Cylinder grows along +Z from its placement.
 """
 
 
-def plan(prompt: str, client: Any, model: str) -> dict:
+def plan(prompt: str, client: Any, model: str,
+         on_usage: Optional[Any] = None) -> dict:
     """What to build, before anything is built.
 
     Falls back to a plan with no components rather than failing the run: a
     builder with the request and no plan still builds, and losing the whole
     part because the planning call came back malformed would be the wrong
     trade.
+
+    ``on_usage`` is handed what this call cost. The build loop counts its
+    own tokens; without this the planning call would be spent off the books,
+    which is the one kind of spend a ceiling cannot hold.
     """
     from app.server import providers
 
@@ -93,6 +98,10 @@ def plan(prompt: str, client: Any, model: str) -> dict:
     reply = client.messages.create(
         model=model, max_tokens=1200, system=PLANNER_SYSTEM,
         messages=[{"role": "user", "content": prompt + ("\n" + note if note else "")}])
+    if on_usage is not None:
+        on_usage({"input_tokens": getattr(reply.usage, "input_tokens", 0),
+                  "output_tokens": getattr(reply.usage, "output_tokens", 0),
+                  "calls": 1})
     text = "".join(block.text for block in reply.content)
     try:
         return json.loads(providers.repair_json(text))
@@ -126,15 +135,15 @@ def _task(prompt: str, design: dict) -> str:
 
 def build(bridge: freecad.Bridge, prompt: str, client: Any, model: str,
           design: Optional[dict] = None, document: str = "",
-          on_step: Optional[Any] = None,
-          max_steps: int = MAX_STEPS) -> tuple[freecad_tools.Session,
-                                               toolbox.Transcript]:
+          on_step: Optional[Any] = None, max_steps: int = MAX_STEPS,
+          before_call: Optional[Any] = None) -> tuple[freecad_tools.Session,
+                                                      toolbox.Transcript]:
     """Build the part in FreeCAD, one measured step at a time."""
     session = freecad_tools.Session(bridge, document)
     box = freecad_tools.toolbox_for(session)
     transcript = toolbox.converse(
         client, model, BUILDER_SYSTEM, _task(prompt, design or {}), box,
-        max_steps=max_steps, on_step=on_step)
+        max_steps=max_steps, on_step=on_step, before_call=before_call)
     return session, transcript
 
 
@@ -178,31 +187,78 @@ def save_document(session: freecad_tools.Session, path: Path) -> Path:
     filmstrip has to reopen *that* version's tree. Without this, stepping
     back shows an older solid while every edit silently lands on the newest
     document - which looks like it works and is not.
+
+    This is the one call that passes a path to FreeCAD rather than carrying
+    bytes, because an ``.FCStd`` is only useful if FreeCAD can open it again
+    later - and it is FreeCAD that has to open it. So FreeCAD writes it, and
+    this checks from here whether the file arrived. It did when FreeCAD is on
+    this machine, which is how the addon is normally run; it did not when
+    FreeCAD is somewhere else, and then the part is still complete - the
+    geometry travelled as bytes - but there is no document to reopen, and
+    saying so is better than recording a filename that is not there.
     """
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     session.bridge.run(f"""
 import FreeCAD
 doc = FreeCAD.getDocument({session.document!r})
 doc.saveAs({str(path)!r})
 """)
+    if not path.exists():
+        raise freecad.FreeCADError(
+            f"FreeCAD saved the document, but not anywhere this server can "
+            f"see ({path}). FreeCAD is running on another machine, so the "
+            f"live document stays there; the geometry came back regardless.")
     return path
 
 
 def reopen(bridge: freecad.Bridge, path: Path) -> str:
     """Open a saved version again, and report the name FreeCAD gave it.
 
-    FreeCAD de-duplicates document names, so the name this returns is the
-    one every later call must use - not the one on the file.
+    Idempotent, which matters more than it looks. FreeCAD de-duplicates
+    document names, so opening the same file twice leaves two documents with
+    the same tree and a name that no longer says which is which - and the
+    second parameter drag would land in whichever one came back. A file that
+    is already open is found and reused.
+
+    The name this returns is the one every later call must use, not the one
+    on the file.
     """
-    printed = bridge.run(f"""
-import FreeCAD
-doc = FreeCAD.openDocument({str(path)!r})
-print(doc.Name)
+    name = bridge.value(f"""
+import FreeCAD, os
+wanted = os.path.normcase(os.path.abspath({str(path)!r}))
+found = ""
+for doc in FreeCAD.listDocuments().values():
+    here = getattr(doc, "FileName", "") or ""
+    if here and os.path.normcase(os.path.abspath(here)) == wanted:
+        found = doc.Name
+        break
+if not found:
+    found = FreeCAD.openDocument(wanted).Name
+{freecad.marked("found")}
 """)
-    name = printed.strip().splitlines()
     if not name:
         raise freecad.FreeCADError(f"FreeCAD would not open {path}")
-    return name[-1].strip()
+    return name
+
+
+def for_panel(design: dict) -> dict:
+    """The plan in the shape the rest of the app already speaks.
+
+    ``spec.compare`` and the Design Plan panel both read the pipeline
+    Planner's layout, so the FreeCAD Planner's answer is translated into it
+    rather than given a second code path on either side. ``must_be_true``
+    comes along untouched: nothing measures it, and it is the sentence a
+    person can read to see what the run was holding itself to.
+    """
+    return {
+        "description": design.get("description") or "",
+        "components": list(design.get("components") or []),
+        "dimensions": {"key_dimensions": dict(design.get("key_dimensions") or {})},
+        "constraints": {},
+        "build_order": list(design.get("build_order") or []),
+        "must_be_true": list(design.get("must_be_true") or []),
+    }
 
 
 def check(step: Path, prompt: str, design: Optional[dict] = None) -> dict:
@@ -212,53 +268,22 @@ def check(step: Path, prompt: str, design: Optional[dict] = None) -> dict:
     numbers come off the exported solid; the expectations come from the
     request itself, read by ``stated.py`` before any model saw it. A part
     that does not match says so, whatever the builder thought of its work.
+
+    It is ``spec.check`` - the same gate the pipeline runs, keys and all, so
+    the Validation panel draws these rows exactly as it draws a generated
+    part's. Writing a second one here would have meant a second set of
+    tolerances to keep in step with the first, and the drill sizes, the
+    thin-section check and the clash test thrown away.
     """
-    geometry = spec.measure_step(step)
-    wanted = stated.requirements(prompt)
-    box = geometry.get("bbox") or {}
-    sizes = sorted(round(box.get(k, 0.0), 2)
-                   for k in ("xlen", "ylen", "zlen"))
-    holes = sorted(geometry.get("holes") or [])
-
-    rows: list[dict] = []
-
-    def row(key: str, label: str, expected: str, actual: str,
-            passed: Optional[bool], hard: bool = True) -> None:
-        rows.append({"key": key, "label": label, "expected": expected,
-                     "actual": actual, "passed": passed, "hard": hard})
-
-    row("watertight", "a closed, watertight solid", "valid",
-        "valid" if geometry.get("is_valid") else "not valid",
-        bool(geometry.get("is_valid")))
-
-    # Every length the request stated should appear somewhere in the solid.
-    # Not which axis - a request rarely says - but present at all, which is
-    # what catches a part built to the wrong number.
-    for value in sorted({round(float(v), 2) for v in wanted.get("extents") or []}):
-        near = any(abs(value - size) < 0.5 for size in sizes)
-        row(f"size_{value:g}", f"{value:g} mm appears in the part",
-            f"{value:g} mm", " x ".join(f"{s:g}" for s in sizes), near)
-
-    for value in sorted({round(float(v), 2) for v in wanted.get("advisory") or []}):
-        near = any(abs(value - size) < 0.5 for size in sizes)
-        row(f"stated_{value:g}", f"{value:g} mm was asked for",
-            f"{value:g} mm", " x ".join(f"{s:g}" for s in sizes),
-            near, hard=False)
-
-    count = wanted.get("hole_count")
-    if count is not None:
-        row("hole_count", "holes drilled", f"{count}", f"{len(holes)}",
-            len(holes) == count)
-
-    for bore in sorted({round(float(v), 2) for v in wanted.get("bores") or []}):
-        made = sum(1 for d in holes if abs(d - bore) < 0.1)
-        row(f"bore_{bore:g}", f"a Ø{bore:g} hole",
-            f"Ø{bore:g}", f"{made} at that size" if made else "none",
-            made > 0)
-
-    blocking = [r for r in rows if r["passed"] is False and r["hard"]]
-    return {"geometry": geometry, "checks": rows, "passed": not blocking,
-            "problems": [r["label"] for r in blocking]}
+    report = spec.check(for_panel(design or {}), step,
+                        stated.requirements(prompt))
+    out = report.to_dict()
+    # ``ok`` is "nothing measurable contradicts this". The gate also has to
+    # answer for the case where nothing could be measured at all, which is
+    # not a pass.
+    out["passed"] = bool(report.ok and not report.error and report.checked)
+    out["problems"] = [c.label for c in report.failures]
+    return out
 
 
 # ---------------------------------------------------------------------------

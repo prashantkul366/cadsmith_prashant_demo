@@ -159,18 +159,29 @@ class Toolbox:
 def converse(client: Any, model: str, system: str, task: str,
              toolbox: Toolbox, max_steps: int = MAX_STEPS,
              on_step: Optional[Callable[[Step], None]] = None,
-             max_tokens: int = 1500) -> Transcript:
+             max_tokens: int = 1500,
+             before_call: Optional[Callable[["Transcript"], str]] = None) -> Transcript:
     """Let the model work until it says it is done, or runs out of steps.
 
     The loop itself is deliberately dull. Everything that makes it work is
     either side of it: tools whose results carry measurements, and a
     toolbox that refuses what was never offered.
+
+    ``before_call`` is asked, before every model call, whether to carry on;
+    it returns a reason to stop or nothing to continue. That is where a
+    token ceiling goes. It stops the loop rather than raising, because the
+    part built so far is worth having - a run halted at its ceiling should
+    hand back eight finished features, not nothing.
     """
     messages: list[dict] = [{"role": "user", "content": task}]
     transcript = Transcript()
     definitions = toolbox.definitions()
 
     for _ in range(max_steps):
+        halt = before_call(transcript) if before_call is not None else ""
+        if halt:
+            transcript.stopped = halt
+            return transcript
         reply = client.messages.create(
             model=model, max_tokens=max_tokens, system=system,
             messages=messages, tools=definitions)

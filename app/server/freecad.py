@@ -93,6 +93,17 @@ def _tips(doc):
 """
 
 
+def marked(expression: str) -> str:
+    """A print statement whose output the bridge can find in the noise.
+
+    FreeCAD's console writes its own lines into the same stream a script
+    prints to, so a value is wrapped rather than read off the last line -
+    which is what the console happens to have said, not necessarily what the
+    script printed.
+    """
+    return f"print({_MARK_OPEN!r} + str({expression}) + {_MARK_CLOSE!r})"
+
+
 class FreeCADError(RuntimeError):
     """FreeCAD refused, or could not be reached.
 
@@ -245,6 +256,16 @@ class Bridge:
         message = answer.get("message", "")
         _, _, printed = message.partition("Output: ")
         return printed
+
+    def value(self, code: str, timeout: Optional[float] = None) -> str:
+        """Run a script that prints one ``marked`` value, and return it."""
+        printed = self.run(code, timeout=timeout)
+        found = _PAYLOAD.search(printed)
+        if not found:
+            raise FreeCADError(
+                "FreeCAD ran that but printed nothing this server could read."
+                " It printed: " + (printed.strip()[:200] or "nothing"))
+        return found.group(1).strip()
 
     def screenshot(self, view: str = "Isometric") -> bytes:
         """What FreeCAD is showing, as PNG bytes."""

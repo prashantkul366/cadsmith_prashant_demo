@@ -53,6 +53,8 @@ class Modelling(StandIn):
         super().__init__(b"")
         self.shapes: dict[str, dict] = {}
         self.result: str = ""
+        #: Where a document has been saved, so reopening finds it again.
+        self.saved: dict[str, str] = {}
 
     def create_object(self, doc_name, obj_data):
         answer = super().create_object(doc_name, obj_data)
@@ -101,6 +103,24 @@ class Modelling(StandIn):
 
     def execute_code(self, code, timeout=None):
         self.calls.append(("execute_code", code, timeout))
+        # Saving. The stand-in is FreeCAD on this machine, which is how the
+        # addon is normally run, so the file does land where it was asked to.
+        if "doc.saveAs(" in code:
+            where = Path(code.split("doc.saveAs(")[1].split(")")[0].strip("'\""))
+            where.parent.mkdir(parents=True, exist_ok=True)
+            where.write_bytes(b"stand-in FreeCAD document")
+            self.saved[str(where.resolve()).lower()] = self.documents_ and \
+                list(self.documents_)[0] or ""
+            return self._printed("")
+        # Reopening one. The documents here are a single dictionary of
+        # objects, so the name that comes back is the one already open -
+        # which is what FreeCAD does too when the file is open already.
+        if "FreeCAD.listDocuments()" in code:
+            wanted = code.split("os.path.abspath(")[1].split(")")[0].strip("'\"")
+            name = self.saved.get(str(Path(wanted).resolve()).lower(), "")
+            if not name:
+                return self._printed("")
+            return self._printed(name, marked=True)
         # Placements, so the exported solid lands where it was put.
         if "obj.Placement = FreeCAD.Placement(" in code and "Vector(" in code:
             name = code.split("getObject(")[1].split(")")[0].strip("'\"")
