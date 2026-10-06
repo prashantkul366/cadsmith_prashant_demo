@@ -917,6 +917,43 @@ is left out on purpose: that is where OCCT is weaker than the kernels NX
 and SolidWorks sit on, so the vocabulary is built around removal and
 replacement instead.
 
+## Building in FreeCAD instead
+
+FreeCAD is a full parametric CAD with a real feature tree, a Sketcher and
+thirty years of primitives. What it has never had is a way for another
+program to use it; the [FreeCAD MCP
+addon](https://github.com/neka-nat/freecad-mcp) supplies one, by opening an
+XML-RPC port inside the running application. `app/server/freecad.py` is this
+app on the other end of that port.
+
+```bash
+# in FreeCAD: pick the "MCP Addon" workbench, click "Start RPC Server"
+.venv/bin/python -m app.tools.freecad_check
+```
+
+That builds a plate with four holes and a pocket **in FreeCAD**, brings the
+solid back, and measures and draws it **here**.
+
+It is deliberately not an MCP client. The MCP server in that project is
+itself a thin bridge onto this same XML-RPC surface, written so a generic
+client like a chat application can reach it; this app is a specific client,
+so it speaks the protocol directly and skips a process and a protocol that
+would earn nothing. The vocabulary is kept in the shape MCP uses, so putting
+MCP back in front later costs a transport class.
+
+**What FreeCAD gives that CadQuery does not** is a live document: add a
+`Part::Box`, change its `Length`, and the tree recomputes. That is the
+feature tree a STEP file cannot carry and `direct.py` has to reconstruct
+from topology. The cost is that FreeCAD has to be running, with the addon
+started, somewhere this server can reach.
+
+**Getting the geometry back is the part the addon does not do.** There is no
+export method on its RPC surface - but there is `execute_code`, so the
+export runs inside FreeCAD and the file comes back base64 through what the
+script printed. Bytes rather than a shared path, because FreeCAD may be on
+another machine and a path that resolves at only one end is a bug waiting
+for the first remote install.
+
 ## Running against a self-hosted vLLM
 
 Any OpenAI-compatible endpoint works the same way, including a vLLM server
