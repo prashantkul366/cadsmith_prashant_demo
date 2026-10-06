@@ -244,14 +244,31 @@ def serve(ctx: RunContext, prompt: str, client: Any, model: str,
         for key, value in spent.items():
             usage[key] = usage.get(key, 0) + int(value)
 
+    # The Planner is a round trip - several seconds and a thousand output
+    # tokens - before any geometry exists, and the builder does not need
+    # what it produces when the request says its own dimensions: it has the
+    # request, what stated.py read out of it, and tools that measure. The
+    # gate never read the plan at all. So it is skipped when there is
+    # nothing for it to work out, and kept when the request is too vague to
+    # read anything from.
     ctx.agent = "planner"
-    ctx.emit(PHASE_PLAN, STATUS_STARTED, i18n.t("freecad.planning", lang))
-    design = builder.plan(prompt, client, model, on_usage=charge)
-    panel = builder.for_panel(design)
-    ctx.design_plan = panel
-    ctx.emit(PHASE_PLAN, STATUS_OK, i18n.t("freecad.planned", lang,
-                                           n=len(design.get("components") or [])),
-             design_plan=panel, tokens=dict(usage))
+    if builder.readable(prompt):
+        design = builder.from_the_request(prompt)
+        panel = builder.for_panel(design)
+        ctx.design_plan = panel
+        ctx.emit(PHASE_PLAN, STATUS_OK,
+                 i18n.t("freecad.readtherequest", lang,
+                        n=len(design.get("must_be_true") or [])),
+                 design_plan=panel, tokens=dict(usage), from_the_request=True)
+    else:
+        ctx.emit(PHASE_PLAN, STATUS_STARTED, i18n.t("freecad.planning", lang))
+        design = builder.plan(prompt, client, model, on_usage=charge)
+        panel = builder.for_panel(design)
+        ctx.design_plan = panel
+        ctx.emit(PHASE_PLAN, STATUS_OK,
+                 i18n.t("freecad.planned", lang,
+                        n=len(design.get("components") or [])),
+                 design_plan=panel, tokens=dict(usage))
 
     ctx.agent = "builder"
     ctx.emit(PHASE_CODE, STATUS_STARTED,

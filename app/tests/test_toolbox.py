@@ -69,11 +69,16 @@ class Endpoint(BaseHTTPRequestHandler):
             self._stream(turn)
             return
         message = {"role": "assistant", "content": turn.get("content")}
-        if turn.get("tool"):
+        # One call, or several in the one reply - which is what a model does
+        # when the things it wants do not depend on each other.
+        wanted = (turn["tools"] if turn.get("tools")
+                  else ([(turn["tool"], turn.get("arguments") or {})]
+                        if turn.get("tool") else []))
+        if wanted:
             message["tool_calls"] = [{
-                "id": f"call_{len(Endpoint.seen)}", "type": "function",
-                "function": {"name": turn["tool"],
-                             "arguments": json.dumps(turn.get("arguments") or {})}}]
+                "id": f"call_{len(Endpoint.seen)}_{i}", "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args)}}
+                for i, (name, args) in enumerate(wanted)]
         self._send(200, {"choices": [{"message": message}],
                          "usage": {"prompt_tokens": 100,
                                    "completion_tokens": 40}})
@@ -324,6 +329,26 @@ def main() -> int:
     ], supported=True)
     check("a run whose only call was refused has not finished",
           not run.built_anything, f"stopped: {run.stopped}")
+
+    print("\nSeveral calls in one reply cost one round trip")
+    # A round trip is seconds; a tool call is milliseconds. Three shapes
+    # that do not depend on each other should cost one wait, not three, and
+    # the loop has to execute them all from the one reply for that to be
+    # true of anything but the prompt.
+    run, _ = run_against(port, [
+        {"tools": [("add_box", {"name": "A", "length": 10, "width": 10,
+                                "height": 10}),
+                   ("add_box", {"name": "B", "length": 20, "width": 10,
+                                "height": 10}),
+                   ("add_box", {"name": "C", "length": 30, "width": 10,
+                                "height": 10})]},
+        {"content": "Built all three."},
+    ], supported=True)
+    check("every call in one reply is run",
+          len(run.steps) == 3 and all(s.ok for s in run.steps),
+          ", ".join(f"{s.name}({s.arguments.get('name')})" for s in run.steps))
+    check("and they cost one round trip between them",
+          run.calls == 2, f"{run.calls} round trips for 3 calls")
 
     print("\nA call that keeps failing the same way stops the run")
     # Measured on an 8B asked to make a plate thicker, where the plate had

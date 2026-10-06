@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -28,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from . import catalog_run, i18n, providers, tls
 from .drawing import ensure_dxf, ensure_sheet
 from .edits import Change, describe_parameters, parameters
+from . import builder as builder_mod
 from . import freecad_run
 from .jobs import (FREECAD_DEFAULT, JobManager, JobOptions, STATUS_DONE,
                    STATUS_ERROR)
@@ -956,6 +958,10 @@ def _startup() -> None:
     # thing that should be visible in the log at a moment someone is reading
     # it, not a surprise midway through a job.
     pruned = manager.prune()
+    # OCCT's mesher costs a second and a half to wake up, once per process.
+    # Paying it here means the first part somebody makes does not, and the
+    # first part is the one being watched.
+    threading.Thread(target=builder_mod.warm_up, daemon=True).start()
     status = _health()
     print(f"CADSmith app ready - {restored} past run(s) restored"
           + (f", {pruned} old run(s) removed" if pruned else ""))

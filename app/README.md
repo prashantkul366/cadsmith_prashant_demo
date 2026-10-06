@@ -1078,6 +1078,50 @@ leaving it to be noticed. There are two kinds of change:
   makes when synchronous technology touches an imported body, and it is why
   the two kinds are distinguished rather than treated as one verb.
 
+### Where the time actually goes
+
+Driving FreeCAD from Claude Code feels instant, and this did not, so it was
+measured rather than argued about. With the model answering instantly, one
+flange - plate, bore, six patterned bolt holes, boolean, export, mesh,
+measure, gate - costs:
+
+| | |
+|---|---|
+| six FreeCAD tool calls | 91 ms |
+| fetch the STEP, mesh it, save the .FCStd, screenshot | 39 ms |
+| geometry.json, the slider map, **the gate** | 55 ms |
+| **everything this app does** | **~185 ms** |
+
+So a 48-second run is not 48 seconds of work. It is six model round trips at
+about eight seconds each, and 0.2 seconds of everything else. The lever is
+the number of round trips, and there are three.
+
+**The Planner was a whole round trip before any geometry existed.** It is
+skipped when the request states its own dimensions - which is when there is
+nothing for it to work out. `stated.py` has already read them, the gate has
+always measured against the request rather than the plan, and the Design
+Plan panel then shows what was asked for instead of a model's paraphrase of
+it. A request too vague to read anything from still gets the Planner.
+
+**Calls that do not depend on each other should cost one wait, not three.**
+The loop runs every call in a reply, so a model that asks for the plate, the
+bore and the first bolt hole together pays one round trip for the three, and
+the builder is told to work that way. Whether it does is the model's to
+decide: Claude emits several at once, an 8B emits one at a time and there is
+nothing this end can do about that.
+
+**OCCT's mesher costs a second and a half to wake up**, once per process,
+against twenty milliseconds for every mesh after it. The server pays it at
+startup now, so the first part someone makes does not.
+
+What is left is the honest difference. Claude Code driving the addon usually
+writes one `execute_code` script and runs it: one round trip, no
+measurement, and whatever the script built is what you get. This asks for
+small steps so each one comes back measured, which is what caught a builder
+announcing a 20 mm hole it had not made, a plate that lost its hole when it
+was made thicker, and a bolt circle that came out 2.5 mm deep. Those cost
+round trips. The ones above were the round trips that bought nothing.
+
 ### Asking again, and again, on the same part
 
 Prompting once is the easy case. Four prompts in a row against one part is

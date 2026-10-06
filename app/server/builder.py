@@ -79,6 +79,12 @@ How to work:
   7. When the part is finished and its measurements match the plan, stop
      and say in one sentence what you built.
 
+Make every call you can in one go. Each reply is a round trip of several
+seconds, and the calls that do not depend on each other - the plate, the
+bore, the first bolt hole - cost one round trip together or three apart.
+Only wait for an answer when you actually need it: a boolean needs the
+shapes to exist, a pattern needs the shape it repeats.
+
 FreeCAD's origin is at (0, 0, 0) and a Part::Box grows from its placement
 towards +X, +Y, +Z. A Part::Cylinder grows along +Z from its placement.
 """
@@ -190,6 +196,29 @@ def collect(session: freecad_tools.Session, version_dir: Path) -> dict:
     return out
 
 
+def warm_up() -> None:
+    """Tessellate something tiny so the first real part does not pay for it.
+
+    OCCT's mesher initialises on its first call and that costs about one and
+    a half seconds - measured, once per process, against twenty milliseconds
+    for every mesh after it. Left alone it lands on whoever makes the first
+    part of the session, which is the one somebody is watching.
+
+    Swallows everything: this is a head start, not a requirement.
+    """
+    try:
+        import cadquery as cq
+        import tempfile
+
+        box = cq.Workplane("XY").box(1, 1, 1)
+        cq.exporters.export(box, str(Path(tempfile.gettempdir())
+                                     / "cadsmith_warmup.stl"),
+                            exportType="STL", tolerance=0.1,
+                            angularTolerance=0.2)
+    except Exception:
+        pass
+
+
 def mesh(step: Path, path: Path) -> Path:
     """The mesh the viewer loads, made here from the solid that was measured.
 
@@ -277,6 +306,48 @@ if not found:
     if not name:
         raise freecad.FreeCADError(f"FreeCAD would not open {path}")
     return name
+
+
+def from_the_request(prompt: str) -> dict:
+    """A design plan made of what was asked for, with no model call.
+
+    The Planner costs a round trip - several seconds, and a thousand output
+    tokens - before any geometry exists, and the builder loop does not need
+    what it produces: it has the request, the dimensions ``stated.py`` read
+    out of it, and tools that answer with measurements. The gate never read
+    the plan either; it has always measured against the request.
+
+    So for a request that states its own dimensions this stands in for it,
+    and what the Design Plan panel shows is what was asked rather than a
+    model's paraphrase of it. The Planner is still there for a request too
+    vague to read anything out of.
+    """
+    wanted = stated.requirements(prompt)
+    sizes: dict[str, float] = {}
+    for value in sorted(set(wanted.get("extents") or []), reverse=True):
+        sizes[f"{value:g} mm overall"] = value
+    for value in sorted(set(wanted.get("bores") or [])):
+        sizes[f"Ø{value:g} hole"] = value
+    for value in sorted(set(wanted.get("advisory") or [])):
+        sizes.setdefault(f"{value:g} mm stated", value)
+
+    must: list[str] = []
+    if wanted.get("hole_count"):
+        must.append(f"{wanted['hole_count']} hole(s), as the request asks for")
+    for value in sorted(set(wanted.get("bores") or [])):
+        must.append(f"a Ø{value:g} hole")
+    for value in sorted(set(wanted.get("extents") or [])):
+        must.append(f"{value:g} mm appears in the overall size")
+    return {"description": prompt, "components": [], "build_order": [],
+            "key_dimensions": sizes, "must_be_true": must,
+            "from_the_request": True}
+
+
+def readable(prompt: str) -> bool:
+    """Whether the request states enough to build from without a Planner."""
+    wanted = stated.requirements(prompt)
+    return bool(wanted.get("extents") or wanted.get("bores")
+                or wanted.get("advisory"))
 
 
 def for_panel(design: dict) -> dict:

@@ -204,6 +204,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "{n} component(s) planned. Building them in FreeCAD.",
         "ja": "構成要素 {n} 件を計画しました。FreeCAD で構築します。",
     },
+    "freecad.readtherequest": {
+        "en": "The request states its own dimensions, so there was nothing "
+              "for a Planner to work out: {n} thing(s) to hold the finished "
+              "part to, read straight from what you asked for. Building.",
+        "ja": "リクエストに寸法が明記されているため、プランナーが検討する"
+              "必要はありませんでした。依頼内容から直接読み取った {n} 件の"
+              "条件で完成品を検証します。構築します。",
+    },
     "freecad.building": {
         "en": "Building in FreeCAD, one feature at a time. Every step comes "
               "back measured, so a wrong number costs one step rather than "
