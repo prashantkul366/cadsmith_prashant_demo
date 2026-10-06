@@ -644,9 +644,103 @@ class _Block:
 
 
 @dataclass
+class ToolCall:
+    """One tool the model asked for, however the backend spelled it.
+
+    ``id`` is the backend's own handle, which has to travel back with the
+    result so a model that issued two calls can tell the answers apart.
+    """
+    name: str
+    arguments: dict
+    id: str = ""
+
+
+@dataclass
 class _Response:
     content: list[_Block]
     usage: _Usage = field(default_factory=_Usage)
+    #: What the model asked to run. Empty when it answered in prose, which
+    #: is how the loop knows it has finished rather than paused.
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    #: Set when the reply came back as JSON naming a tool rather than as a
+    #: native tool call, so a caller can say which road a run took.
+    improvised: bool = False
+
+
+#: A model that cannot call tools natively is asked for this instead, and
+#: the reply is read as one call. Small local models are the reason: a
+#: 7-8B served by a vLLM without ``--enable-auto-tool-choice`` has no
+#: tool_calls channel at all, and refusing to work with one would rule out
+#: running this on your own hardware.
+TOOL_JSON_RULES = """
+You can act only by calling one of the tools listed below.
+
+Reply with strict JSON and nothing else - no prose, no code fences:
+  {"tool": "<name>", "arguments": { ... }}
+When the task is finished and no tool is needed:
+  {"done": true, "answer": "<one short sentence>"}
+
+Never invent a tool name or an argument name. Use the exact spellings
+given. Numbers are numbers, not strings.
+"""
+
+
+def _openai_tools(tools: Optional[list]) -> Optional[list]:
+    """Tool definitions in chat/completions form."""
+    if not tools:
+        return None
+    return [{"type": "function",
+             "function": {"name": t["name"],
+                          "description": t.get("description", ""),
+                          "parameters": t.get("parameters")
+                          or {"type": "object", "properties": {}}}}
+            for t in tools]
+
+
+def _describe_tools(tools: Optional[list]) -> str:
+    """The same definitions as prose, for a model with no tool channel."""
+    lines = ["", "Tools:"]
+    for tool in tools or []:
+        schema = tool.get("parameters") or {}
+        fields = []
+        for name, spec in (schema.get("properties") or {}).items():
+            kind = spec.get("type", "any")
+            need = "" if name in (schema.get("required") or []) else " (optional)"
+            fields.append(f"{name}: {kind}{need}")
+        lines.append(f"  {tool['name']}({', '.join(fields)})")
+        if tool.get("description"):
+            lines.append(f"      {tool['description'].strip().splitlines()[0]}")
+    return "\n".join(lines)
+
+
+def _usage_of(payload: dict) -> _Usage:
+    raw = payload.get("usage") or {}
+    return _Usage(input_tokens=int(raw.get("prompt_tokens", 0) or 0),
+                  output_tokens=int(raw.get("completion_tokens", 0) or 0))
+
+
+class _ToolsUnsupported(RuntimeError):
+    """The endpoint has no tool channel; put the tools in the prompt."""
+
+
+#: An endpoint without a tool parser says so in several dialects.
+_NO_TOOLS = re.compile(
+    r"tool.?call|tool.?choice|function.?call|auto.?tool|not support.*tool"
+    r"|tool.*not support|unknown.*field.*tools|unexpected.*tools",
+    re.IGNORECASE)
+
+
+def _as_tool_call(payload: dict) -> list[ToolCall]:
+    """Read the improvised JSON shape into the same ToolCall the rest uses."""
+    if not isinstance(payload, dict) or payload.get("done"):
+        return []
+    name = payload.get("tool") or payload.get("name")
+    if not name:
+        return []
+    arguments = payload.get("arguments")
+    if not isinstance(arguments, dict):
+        arguments = {} if arguments is None else {"value": arguments}
+    return [ToolCall(name=str(name), arguments=arguments, id="improvised")]
 
 
 _JSON_EXPECTED = "Output ONLY valid JSON"
@@ -672,6 +766,31 @@ def _to_openai_messages(system: str, messages: list) -> list[dict]:
             out.append({"role": message.get("role", "user"), "content": content})
             continue
 
+        # A tool exchange is spelled differently either side. Anthropic puts
+        # the request in the assistant's content and the answer in the
+        # user's; chat/completions hangs the request off the assistant
+        # message and gives the answer a role of its own.
+        requests = [b for b in content or [] if b.get("type") == "tool_use"]
+        answers = [b for b in content or [] if b.get("type") == "tool_result"]
+        if requests:
+            said = "".join(b.get("text", "") for b in content or []
+                           if b.get("type") == "text")
+            out.append({
+                "role": "assistant",
+                "content": said or None,
+                "tool_calls": [
+                    {"id": b.get("id", ""), "type": "function",
+                     "function": {"name": b.get("name", ""),
+                                  "arguments": json.dumps(b.get("input") or {})}}
+                    for b in requests]})
+            continue
+        if answers:
+            for block in answers:
+                out.append({"role": "tool",
+                            "tool_call_id": block.get("tool_use_id", ""),
+                            "content": _as_text(block.get("content"))})
+            continue
+
         parts: list[dict] = []
         for block in content or []:
             kind = block.get("type")
@@ -686,6 +805,48 @@ def _to_openai_messages(system: str, messages: list) -> list[dict]:
                     "image_url": {"url": f"data:{media};base64,{data}"},
                 })
         out.append({"role": message.get("role", "user"), "content": parts})
+    return out
+
+
+def _as_text(content: Any) -> str:
+    """Whatever a tool returned, as something a chat message can carry."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(b.get("text", "") if isinstance(b, dict) else str(b)
+                       for b in content)
+    return "" if content is None else str(content)
+
+
+def flatten_tools(messages: list) -> list:
+    """Rewrite a tool exchange as plain talk.
+
+    For a model with no tool channel at all: it was asked for JSON and
+    answered in JSON, so its own turn is text already, and the result of
+    running it is handed back as text too. Keeping the blocks would send
+    tool_use ids to a server that has never heard of them.
+    """
+    out = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            out.append(message)
+            continue
+        said: list[str] = []
+        for block in content:
+            kind = block.get("type")
+            if kind == "text":
+                said.append(block.get("text", ""))
+            elif kind == "tool_use":
+                said.append(json.dumps({"tool": block.get("name"),
+                                        "arguments": block.get("input") or {}}))
+            elif kind == "tool_result":
+                said.append("Result: " + _as_text(block.get("content")))
+            else:
+                said.append("")
+        joined = "\n".join(part for part in said if part)
+        if joined:
+            out.append({"role": message.get("role", "user"), "content": joined})
     return out
 
 
@@ -766,6 +927,10 @@ class OpenAICompatibleClient:
         #: a server that only answers in one piece is asked that way from
         #: then on rather than paying for a failed stream every call.
         self._stream_ok = True
+        #: Cleared the first time it refuses a tool definition. A vLLM
+        #: started without --enable-auto-tool-choice has no tool parser, so
+        #: the tools go in the prompt and the reply comes back as JSON.
+        self._tools_ok = True
 
     # -- surface ------------------------------------------------------------
 
@@ -775,29 +940,57 @@ class OpenAICompatibleClient:
 
     def create(self, *, model: str = "", max_tokens: int = 4096,
                system: str = "", messages: Optional[list] = None,
-               **_: Any) -> _Response:
+               tools: Optional[list] = None, **_: Any) -> _Response:
         role = self._role_for(system)
         target = (self.config.judge_model if role == "judge"
                   else self.config.generation_model)
 
-        payload_messages = _to_openai_messages(system, messages or [])
+        # An endpoint with no tool channel is given the rules in the system
+        # prompt instead and answers in JSON. Decided per connection, and
+        # remembered, so one rejected request is the whole cost of finding
+        # out.
+        improvise = bool(tools) and not self._tools_ok
+        conversation = list(messages or [])
+        if improvise:
+            system = (system + "\n" + TOOL_JSON_RULES
+                      + _describe_tools(tools)).strip()
+            conversation = flatten_tools(conversation)
+
+        payload_messages = _to_openai_messages(system, conversation)
         if role == "judge" and not self.config.judge_vision:
             payload_messages, _ = _strip_images(payload_messages)
 
+        wire = None if improvise else _openai_tools(tools)
         try:
-            text, usage = self._post(target, payload_messages, max_tokens, role)
+            text, usage, calls = self._post(
+                target, payload_messages, max_tokens, role, wire)
+        except _ToolsUnsupported as why:
+            # The model is fine; the server simply has no tool parser
+            # loaded. Say so once and carry on through the JSON road.
+            self._tools_ok = False
+            self._note(f"{self.config.base_url} does not take tool "
+                       f"definitions ({why}); asking for JSON instead.")
+            return self.create(model=model, max_tokens=max_tokens,
+                               system=system, messages=messages, tools=tools)
         except _VisionUnsupported:
             payload_messages, stripped = _strip_images(payload_messages)
             if stripped:
                 self._note(
                     f"{target} rejected the rendered image; the Judge is "
                     f"running on kernel metrics alone.")
-            text, usage = self._post(target, payload_messages, max_tokens, role)
+            text, usage, calls = self._post(
+                target, payload_messages, max_tokens, role, wire)
 
-        if _JSON_EXPECTED in system:
+        if improvise:
+            try:
+                calls = _as_tool_call(json.loads(repair_json(text)))
+            except (json.JSONDecodeError, TypeError):
+                calls = []   # prose, which the loop reads as "finished"
+        elif _JSON_EXPECTED in system:
             text = repair_json(text)
 
-        return _Response(content=[_Block(text=text)], usage=usage)
+        return _Response(content=[_Block(text=text)], usage=usage,
+                         tool_calls=calls, improvised=improvise)
 
     # -- internals ----------------------------------------------------------
 
@@ -842,10 +1035,16 @@ class OpenAICompatibleClient:
             f"model '{model}': {detail}")
 
     def _post(self, model: str, messages: list[dict], max_tokens: int,
-              role: str = "generation") -> tuple[str, _Usage]:
-        if self._stream_ok:
+              role: str = "generation", tools: Optional[list] = None
+              ) -> tuple[str, _Usage, list[ToolCall]]:
+        # Tool calls are short by nature - a name and a few numbers - so
+        # there is nothing to stream, and accumulating tool_calls out of
+        # SSE deltas is a pile of index-keyed bookkeeping for no gain.
+        if tools is None and self._stream_ok:
             try:
-                return self._post_streaming(model, messages, max_tokens, role)
+                text, usage = self._post_streaming(
+                    model, messages, max_tokens, role)
+                return text, usage, []
             except _VisionUnsupported:
                 raise
             except _StreamUnsupported as exc:
@@ -853,7 +1052,7 @@ class OpenAICompatibleClient:
                 self._note(
                     f"{self.config.base_url} would not stream ({exc}); "
                     f"asking for the whole reply at once instead.")
-        return self._post_whole(model, messages, max_tokens)
+        return self._post_whole(model, messages, max_tokens, tools)
 
     def _post_streaming(self, model: str, messages: list[dict],
                         max_tokens: int, role: str) -> tuple[str, _Usage]:
@@ -943,13 +1142,17 @@ class OpenAICompatibleClient:
             raise _StreamUnsupported("the stream carried no content")
         return text, usage
 
-    def _post_whole(self, model: str, messages: list[dict],
-                    max_tokens: int) -> tuple[str, _Usage]:
+    def _post_whole(self, model: str, messages: list[dict], max_tokens: int,
+                    tools: Optional[list] = None
+                    ) -> tuple[str, _Usage, list[ToolCall]]:
+        body = self._body(model, messages, max_tokens)
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
         try:
             response = httpx.post(
                 f"{self.config.base_url}/chat/completions",
-                headers=self._headers(),
-                json=self._body(model, messages, max_tokens),
+                headers=self._headers(), json=body,
                 timeout=REQUEST_TIMEOUT)
         except httpx.HTTPError as exc:
             raise RuntimeError(
@@ -957,7 +1160,14 @@ class OpenAICompatibleClient:
                 f"{self.config.base_url}: {exc}") from exc
 
         if response.status_code >= 400:
-            self._fail(response.status_code, response.text[:600], model)
+            detail = response.text[:600]
+            # A server with no tool parser rejects the request itself, not
+            # the model. Told apart here so the caller can re-ask without
+            # tools rather than reporting the run as failed.
+            if tools and response.status_code in (400, 404, 422) \
+                    and _NO_TOOLS.search(detail):
+                raise _ToolsUnsupported(f"{response.status_code}")
+            self._fail(response.status_code, detail, model)
 
         payload = response.json()
         choices = payload.get("choices") or []
@@ -968,6 +1178,22 @@ class OpenAICompatibleClient:
 
         message = choices[0].get("message") or {}
         text = message.get("content") or ""
+
+        calls: list[ToolCall] = []
+        for raw in message.get("tool_calls") or []:
+            function = raw.get("function") or {}
+            try:
+                arguments = json.loads(function.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                arguments = {}
+            if function.get("name"):
+                calls.append(ToolCall(name=function["name"],
+                                      arguments=arguments or {},
+                                      id=raw.get("id", "")))
+        if calls:
+            # A model that called a tool has said all it is going to say.
+            return text, _usage_of(payload), calls
+
         if not text.strip() and message.get("reasoning"):
             # Some models put the answer in a "reasoning" field and leave
             # content empty. Say so, rather than letting the agent fail later
@@ -976,12 +1202,7 @@ class OpenAICompatibleClient:
                 f"{self.config.provider} model '{model}' replied with "
                 f"reasoning only and no content. The pipeline reads the "
                 f"content field, so this model cannot be used for that role.")
-        raw_usage = payload.get("usage") or {}
-        usage = _Usage(
-            input_tokens=int(raw_usage.get("prompt_tokens", 0) or 0),
-            output_tokens=int(raw_usage.get("completion_tokens", 0) or 0),
-        )
-        return text, usage
+        return text, _usage_of(payload), []
 
     def _note(self, message: str) -> None:
         if self._on_note:
@@ -1094,7 +1315,7 @@ class ClaudeClient:
 
     def create(self, *, model: str = "", max_tokens: int = 4096,
                system: str = "", messages: Optional[list] = None,
-               **_: Any) -> _Response:
+               tools: Optional[list] = None, **_: Any) -> _Response:
         role = OpenAICompatibleClient._role_for(system)
         target = (self.config.judge_model if role == "judge"
                   else self.config.generation_model)
@@ -1107,7 +1328,7 @@ class ClaudeClient:
             budget = max(budget, self.MIN_TOKENS_WITH_THINKING)
 
         try:
-            return self._stream(target, system, payload, budget, role)
+            return self._stream(target, system, payload, budget, role, tools)
         except Exception as exc:
             if (self._effort_ok and self.config.effort
                     and _EFFORT_UNSUPPORTED.search(str(exc))):
@@ -1117,7 +1338,7 @@ class ClaudeClient:
                 self._effort_ok = False
                 self._note(f"{target} does not take a reasoning effort; "
                            f"continuing at its own default.")
-                return self._stream(target, system, payload, budget, role)
+                return self._stream(target, system, payload, budget, role, tools)
             if self._thinking_ok and _THINKING_UNSUPPORTED.search(str(exc)):
                 # Older models on Bedrock (Claude 3, some 4.x) reject the
                 # parameter outright. Fall back rather than fail the run.
@@ -1130,7 +1351,8 @@ class ClaudeClient:
     # -- internals ----------------------------------------------------------
 
     def _stream(self, target: str, system: str, messages: list,
-                max_tokens: int, role: str) -> _Response:
+                max_tokens: int, role: str,
+                tools: Optional[list] = None) -> _Response:
         kwargs: dict[str, Any] = {
             "model": target,
             "max_tokens": max_tokens,
@@ -1138,6 +1360,14 @@ class ClaudeClient:
         }
         if system:
             kwargs["system"] = system
+        if tools:
+            # The Anthropic shape is the one this app already speaks, so the
+            # definitions go straight across.
+            kwargs["tools"] = [
+                {"name": t["name"], "description": t.get("description", ""),
+                 "input_schema": t.get("parameters")
+                 or {"type": "object", "properties": {}}}
+                for t in tools]
         if self._thinking_ok:
             # display="summarized" is what makes the reasoning readable: the
             # default ("omitted") still returns a thinking block, but with an
@@ -1174,6 +1404,9 @@ class ClaudeClient:
 
         text = "".join(
             b.text for b in final.content if getattr(b, "type", "") == "text")
+        calls = [ToolCall(name=b.name, arguments=dict(b.input or {}),
+                          id=getattr(b, "id", ""))
+                 for b in final.content if getattr(b, "type", "") == "tool_use"]
         if getattr(final, "stop_reason", None) == "max_tokens":
             if self._thinking_ok and not text.strip():
                 self._note(
@@ -1191,7 +1424,8 @@ class ClaudeClient:
             input_tokens=getattr(final.usage, "input_tokens", 0) or 0,
             output_tokens=getattr(final.usage, "output_tokens", 0) or 0,
         )
-        return _Response(content=[_Block(text=text)], usage=usage)
+        return _Response(content=[_Block(text=text)], usage=usage,
+                         tool_calls=calls)
 
     def _note(self, message: str) -> None:
         if self._on_note:
