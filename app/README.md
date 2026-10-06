@@ -1078,6 +1078,35 @@ leaving it to be noticed. There are two kinds of change:
   makes when synchronous technology touches an imported body, and it is why
   the two kinds are distinguished rather than treated as one verb.
 
+### What the part weighs
+
+FreeCAD ships 145 material cards carrying density, yield strength, ultimate
+tensile strength and Young's modulus - 6061-T6 at 2.70 g/cm3 and 276 MPa,
+7075-T6 at 503, Ti-6Al-4V at 910. Reading those out of FreeCAD beats a table
+written here, which would be a guess at numbers somebody else maintains.
+
+Say what the part is made of and the run answers what it weighs:
+`set_material` is a tool the builder calls when the request names one, and
+the Model panel carries the mass beside the volume. The number is a density
+multiplied by a *measured* volume, so it belongs with the measurements
+rather than with anything the model said about the part.
+
+It is also something the gate can hold a part to. "A bracket in 6061, under
+500 g" is a requirement, and a 609 g bracket fails it by measurement:
+
+```
+mass in Aluminum-6061-T6      609 g   wanted under 500 g
+```
+
+A weight nobody set a limit on is reported and not judged - "under 2 kg" is
+a limit, "a 2 kg flywheel" is a description of a part - and a request that
+names no material gets no mass at all, because a part reported as aluminium
+because nobody said otherwise is a number presented as a fact.
+
+Without FreeCAD a built-in table of seven common materials answers instead,
+so the generated path and a machine with no FreeCAD running still weigh
+their parts.
+
 ### Where the time actually goes
 
 Driving FreeCAD from Claude Code feels instant, and this did not, so it was
@@ -1283,6 +1312,8 @@ bends the catalogue serves need no model at all.
 .venv/bin/python -m app.tests.test_freecad_run      # a prompt through the
                                                     # FreeCAD route, and a
                                                     # dragged parameter
+.venv/bin/python -m app.tests.test_materials        # what it is made of, and
+                                                    # therefore what it weighs
 .venv/bin/python -m app.tests.test_viewer           # the mesh on screen is
                                                     # the solid that was
                                                     # exported, both STL

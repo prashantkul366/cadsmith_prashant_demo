@@ -78,6 +78,10 @@ class Session:
         #: would want to drag, and asking it again at the end invites a
         #: tidy-sounding answer that does not match what it built.
         self.declared: list[dict] = []
+        #: What the part is made of, once something has said. Nothing by
+        #: default: a part reported as aluminium because nobody said
+        #: otherwise is a number presented as a fact.
+        self.material: Optional[dict] = None
 
     # -- what every tool returns --------------------------------------------
 
@@ -378,6 +382,32 @@ doc.recompute()
         self.built.extend(made)
         return made
 
+    def set_material(self, name: str) -> dict:
+        """Say what the part is made of, and what that makes it weigh.
+
+        Read out of FreeCAD's own material library - 145 cards with density,
+        yield and tensile strength - rather than a table written here, which
+        would be a guess at numbers somebody else maintains properly.
+        """
+        from app.server import materials
+
+        card = materials.find(name, self.bridge)
+        if card is None:
+            known = ", ".join(c["name"] for c in
+                              materials.library(self.bridge)[:8])
+            raise ToolError(
+                f"{name!r} is not a material this FreeCAD knows. It has "
+                f"{len(materials.library(self.bridge))} of them, among them: "
+                f"{known}. Name an alloy or a family - '6061', 'mild steel', "
+                f"'ABS'.")
+        self.material = card
+        measured = self._measured(material=card["name"])
+        for solid in measured.get("part_now") or []:
+            weighed = materials.weigh(solid.get("volume_mm3"), card)
+            if weighed:
+                solid["mass_g"] = weighed["mass_g"]
+        return measured
+
     def run_python(self, code: str) -> dict:
         """Anything FreeCAD can do that the tools above cannot.
 
@@ -651,6 +681,16 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
                  "where": {**text, "enum": ["all", "top", "bottom"]}},
                  "required": ["radius"]},
              run=session.add_fillet),
+        Tool(name="set_material",
+             description=(
+                 "Say what the part is made of, when the request names a "
+                 "material. Gives its weight, and the yield strength a "
+                 "later check can hold it to. Takes an alloy or a family: "
+                 "'6061', 'Aluminum-7075-T6', 'mild steel', 'titanium', "
+                 "'ABS'."),
+             parameters={"type": "object", "properties": {"name": text},
+                         "required": ["name"]},
+             run=session.set_material),
         Tool(name="declare_parameter",
              description=(
                  "Name a number a person should be able to adjust with a "

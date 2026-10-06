@@ -401,8 +401,18 @@ def publish(ctx: RunContext, session: freecad_tools.Session, prompt: str,
 
     _screenshot(bridge, version_dir)
 
+    # What it is made of: whatever the builder set, or what the request
+    # names if it named one and nothing set it.
+    from app.server import materials
+
+    card = getattr(session, "material", None) or materials.find(
+        instruction or prompt, bridge)
     verdict = builder.check(files["step"], prompt, design,
-                            instruction=instruction)
+                            instruction=instruction, material=card)
+    if verdict.get("mass"):
+        geometry["mass"] = verdict["mass"]
+        (version_dir / "geometry.json").write_text(
+            json.dumps(geometry, indent=2), encoding="utf-8")
     (version_dir / "validation.json").write_text(json.dumps({
         "source": source,
         "all_passed": verdict["passed"],

@@ -971,6 +971,13 @@ function renderKernelFacts(version) {
   const tiles = [
     [t("facts.bbox"), `${fmt(bbox.xlen)}×${fmt(bbox.ylen)}×${fmt(bbox.zlen)}`],
     [t("facts.volume"), fmt(Math.round(geometry.volume || 0))],
+    // Only when something said what it is made of. A weight shown for a
+    // material nobody chose is a number presented as a fact.
+    ...(geometry.mass ? [[
+      t("facts.mass", { material: geometry.mass.material }),
+      geometry.mass.mass_kg >= 1
+        ? `${fmt(geometry.mass.mass_kg)} kg`
+        : `${fmt(Math.round(geometry.mass.mass_g))} g`]] : []),
     [t("facts.faces"), geometry.num_faces],
     [t("facts.edges"), geometry.num_edges],
     // A part that is not watertight is not a part, so this tile carries the

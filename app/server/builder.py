@@ -73,10 +73,12 @@ How to work:
      the tokens and the arithmetic is FreeCAD's.
   5. Every tool tells you what it measured. Read it. If a size is wrong,
      fix it with set_size before carrying on.
-  6. Call declare_parameter for the handful of numbers a person should be
+  6. If the request says what the part is made of, call set_material. It
+     gives the weight, and a weight the request set a limit on is checked.
+  7. Call declare_parameter for the handful of numbers a person should be
      able to adjust afterwards - overall sizes, hole diameters, wall
      thicknesses. Use scale=2 to show a diameter over a Radius property.
-  7. When the part is finished and its measurements match the plan, stop
+  8. When the part is finished and its measurements match the plan, stop
      and say in one sentence what you built.
 
 Make every call you can in one go. Each reply is a round trip of several
@@ -423,7 +425,7 @@ def _wanted(prompt: str, instruction: str = "") -> dict:
 
 
 def check(step: Path, prompt: str, design: Optional[dict] = None,
-          instruction: str = "") -> dict:
+          instruction: str = "", material: Optional[dict] = None) -> dict:
     """Measure the finished solid against what was asked for.
 
     This is the gate, and it is a measurement rather than a verdict. The
@@ -443,9 +445,43 @@ def check(step: Path, prompt: str, design: Optional[dict] = None,
     # ``ok`` is "nothing measurable contradicts this". The gate also has to
     # answer for the case where nothing could be measured at all, which is
     # not a pass.
-    out["passed"] = bool(report.ok and not report.error and report.checked)
-    out["problems"] = [c.label for c in report.failures]
+    # What it weighs, when something has said what it is made of. A mass is
+    # a density multiplied by a measured volume, so it belongs with the
+    # measurements rather than with anything the model said - and a request
+    # that set a ceiling has given the gate something to hold it to.
+    weighed = _weight_row(out, prompt, instruction, material)
+    if weighed:
+        out["checks"].append(weighed)
+
+    blocking = [row for row in out["checks"]
+                if row["passed"] is False and row["hard"]]
+    out["passed"] = bool(report.checked and not report.error and not blocking)
+    out["problems"] = [row["label"] for row in blocking]
     return out
+
+
+def _weight_row(out: dict, prompt: str, instruction: str,
+                material: Optional[dict]) -> Optional[dict]:
+    """The mass of the measured solid, against any ceiling that was set."""
+    from app.server import materials
+
+    if not material:
+        return None
+    volume = (out.get("measured") or {}).get("volume")
+    weighed = materials.weigh(volume, material)
+    if not weighed:
+        return None
+    out["mass"] = weighed
+    ceiling = materials.limit(instruction) or materials.limit(prompt)
+    if ceiling is None:
+        # Reported, not judged. Nobody said what it had to come in under.
+        return {"key": "mass", "label": f"mass in {weighed['material']}",
+                "expected": "no limit set", "hard": False, "passed": True,
+                "actual": f"{weighed['mass_g']:,.0f} g"}
+    return {"key": "mass", "label": f"mass in {weighed['material']}",
+            "expected": f"under {ceiling * 1000:,.0f} g",
+            "actual": f"{weighed['mass_g']:,.0f} g",
+            "passed": weighed["mass_kg"] <= ceiling, "hard": True}
 
 
 # ---------------------------------------------------------------------------

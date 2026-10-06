@@ -648,6 +648,8 @@ const I18N = (function () {
     "label.catalog":    ["CATALOGUE · {backend}", "カタログ · {backend}"],
     "facts.standard":   ["Standard part", "標準部品"],
     "facts.freecad":    ["Built in FreeCAD", "FreeCAD で構築"],
+    "facts.mass":       ["mass · {material}", "質量 · {material}"],
+    "spec.mass":        ["mass in the stated material", "指定材料での質量"],
     "usage.free":       ["No model call — served from the catalogue",
                          "モデル呼び出しなし — カタログから提供"],
     "run.catalogdone":  ["{title} — from the catalogue{seconds}, no model call",
