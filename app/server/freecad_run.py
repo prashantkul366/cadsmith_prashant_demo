@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.server import (builder, drawing, freecad, freecad_tools,
-                        i18n)
+                        i18n, toolbox)
 from app.server.events import (
     PHASE_CODE, PHASE_EXECUTE, PHASE_FREECAD, PHASE_PLAN, PHASE_SPEC,
     PHASE_VERSION, STATUS_FAILED, STATUS_INFO, STATUS_OK, STATUS_STARTED,
@@ -369,6 +369,164 @@ def declared_from(record: dict) -> list[dict]:
              "scale": float(entry.get("scale") or 1.0)}
             for entry in (record.get("parameters") or [])
             if entry.get("object") and entry.get("property")]
+
+
+EDIT_SYSTEM = """You change a mechanical part that is already built in FreeCAD.
+
+How to work:
+  1. The document is open and the part is in it. Call find_features first to
+     see what it has, named the way a drawing names them - "4x M8.5 through
+     hole", "R6 fillet" - rather than by FreeCAD object name.
+  2. If the change is a number the part already has - a length, a radius,
+     a thickness - use set_size. That changes the parametric tree and
+     everything built on it recomputes, which is the cheapest and safest
+     change there is.
+  3. Only when there is no such number, reach for the feature verbs:
+     resize_hole, remove_feature, add_fillet. They recognise features off
+     the solid's own topology and are the only thing that works on
+     geometry with no tree behind it - but they replace the tree with a
+     single plain solid, so the parametric history and any sliders over it
+     are gone afterwards. Worth it for "lose the corner fillets"; not worth
+     it for "make the plate 95 long".
+  4. Build new geometry with add_shape and combine only when the change
+     needs geometry that does not exist yet.
+  5. Change what was asked for and nothing else. The rest of the part is
+     somebody's work.
+  6. Every result tells you what it measured. Read it, and check it against
+     what was asked before carrying on.
+  7. When it is done, say in one sentence what you changed.
+"""
+
+
+def amend(ctx: RunContext, base_dir: Path, instruction: str, client: Any,
+          model: str, prompt: str, design: Optional[dict] = None,
+          bridge: Optional[freecad.Bridge] = None,
+          max_steps: int = builder.MAX_STEPS) -> dict:
+    """Change a part built in FreeCAD, by working on the document again.
+
+    The counterpart to ``reapply`` for anything a slider cannot express:
+    "open the mounting holes to 11 mm", "lose the corner fillets". A
+    CadQuery part has its whole script regenerated for this; here the
+    version's own document is reopened and the change is made to the tree
+    that is already there, which is both cheaper and the only way the rest
+    of the part is guaranteed to survive it.
+    """
+    bridge = bridge or bridge_from_env()
+    lang = ctx.lang
+    record: dict = {}
+    parameters_file = base_dir / "parameters.json"
+    if parameters_file.exists():
+        try:
+            record = json.loads(parameters_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            record = {}
+
+    document_file = base_dir / (record.get("document_file") or "part.FCStd")
+    if not document_file.exists():
+        raise freecad.FreeCADError(
+            "that version's FreeCAD document was not saved, so there is "
+            "nothing to reopen and change")
+
+    name = builder.reopen(bridge, document_file)
+    session = freecad_tools.Session(bridge, name)
+    session.declared = declared_from(record)
+    box = freecad_tools.toolbox_for(session)
+
+    usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+
+    def step_done(step: Any) -> None:
+        ctx.emit(PHASE_FREECAD, STATUS_FAILED if step.error else STATUS_OK,
+                 (i18n.t("freecad.refused", lang, tool=step.name,
+                         error=step.error) if step.error
+                  else i18n.t("freecad.step", lang, tool=step.name,
+                              ms=step.ms)),
+                 iteration=ctx.iteration, step=step.summary())
+
+    def still_going(transcript: Any) -> str:
+        if ctx.budget is None:
+            return ""
+        running = {"input_tokens": transcript.input_tokens,
+                   "output_tokens": transcript.output_tokens,
+                   "calls": transcript.calls}
+        try:
+            ctx.budget.check(running)
+        except Exception as stopped:
+            return str(stopped)
+        return ""
+
+    ctx.agent = "refiner"
+    ctx.emit(PHASE_FREECAD, STATUS_STARTED,
+             i18n.t("freecad.amending", lang, instruction=instruction),
+             iteration=ctx.iteration, document=name)
+    transcript = toolbox.converse(
+        client, model, EDIT_SYSTEM,
+        _amend_task(prompt, instruction, session), box,
+        max_steps=max_steps, on_step=step_done, before_call=still_going)
+    usage = {"input_tokens": transcript.input_tokens,
+             "output_tokens": transcript.output_tokens,
+             "calls": transcript.calls}
+
+    if not transcript.steps:
+        # Nothing was done. Publishing an identical version would read as a
+        # change that did not take, which is worse than saying so.
+        raise freecad.FreeCADError(
+            "the change was not made: " + (transcript.answer
+                                           or transcript.stopped
+                                           or "nothing was tried"))
+
+    version_dir = ctx.version_dir()
+    version_dir.mkdir(parents=True, exist_ok=True)
+    (version_dir / "code.py").write_text(
+        transcript_text(f"{prompt}\n\nThen: {instruction}", design or {},
+                        transcript), encoding="utf-8")
+
+    version = publish(
+        ctx, session, prompt, design or {}, bridge, tokens=usage,
+        answer=transcript.answer, source="edit", method="freecad tools",
+        instruction=instruction,
+        detail={"document": name, "from_version": base_dir.name,
+                "steps": len(transcript.steps), "calls": transcript.calls,
+                "improvised": transcript.improvised,
+                "stopped": transcript.stopped,
+                "answer": transcript.answer})
+
+    # A feature edit recognises features off the topology and hands back a
+    # plain solid, which is the only thing that works on geometry with no
+    # tree - and it takes the tree with it. The sliders go when it does, so
+    # that is said rather than left for somebody to discover by looking for
+    # a panel that was there a moment ago.
+    lost = sorted({entry["name"] for entry in declared_from(record)}
+                  - set(version["freecad"]["parameters"]))
+    if lost:
+        ctx.emit(PHASE_FREECAD, STATUS_INFO,
+                 i18n.t("freecad.treegone", lang, names=", ".join(lost)),
+                 iteration=ctx.iteration, lost=lost)
+    return version
+
+
+def _amend_task(prompt: str, instruction: str,
+                session: freecad_tools.Session) -> str:
+    """The change to make, and what the part is before it.
+
+    The measurements go in because the model is about to work on a part it
+    did not build: without them its first call is a guess at what is there.
+    """
+    lines = [f"This part was built for: {prompt}", ""]
+    try:
+        solids = session.bridge.measure(session.document).get("solids", [])
+    except freecad.FreeCADError:
+        solids = []
+    for solid in solids:
+        lines.append(
+            f"The part now: {solid['label']}, "
+            + " x ".join(f"{v:.1f}" for v in solid["bbox"])
+            + f" mm, {solid['volume']:,.0f} mm3, {solid['faces']} faces")
+    if session.declared:
+        lines.append("Numbers already named as adjustable: " + ", ".join(
+            f"{d['label']} ({d['object']}.{d['property']})"
+            for d in session.declared))
+    lines += ["", f"Change to make: {instruction}"]
+    return "\n".join(lines)
 
 
 def reapply(ctx: RunContext, base_dir: Path, values: dict, prompt: str,

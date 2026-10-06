@@ -516,6 +516,17 @@ class JobManager:
             return None
         return record if record.get("parameters") else None
 
+    @staticmethod
+    def built_in_freecad(version: Optional[dict]) -> bool:
+        """Whether this version's part lives in a FreeCAD document.
+
+        Read off the version record rather than guessed from the files: a
+        FreeCAD version's ``code.py`` is a transcript, and handing it to the
+        Refiner would produce a CadQuery script that looks like an answer
+        and shares nothing with the part on screen.
+        """
+        return bool(version) and "freecad" in (version or {})
+
     def submit_freecad_parameters(self, job: Job, values: dict,
                                   base_version: Optional[int] = None) -> None:
         """Queue a property change on the FreeCAD document of a version."""
@@ -635,8 +646,50 @@ class JobManager:
                      if v.get("iteration") == base_version),
                     job.versions[-1])
             source_dir = job.directory / f"v{previous['iteration']}"
-            code = (source_dir / "code.py").read_text(encoding="utf-8")
             next_index = max(v["iteration"] for v in job.versions) + 1
+
+            # A part built in FreeCAD is changed in FreeCAD. Its code.py is
+            # a record of how it was built, not a script, so there is
+            # nothing here for plan_edit to patch or for the Refiner to
+            # rewrite - and the tools that work on a live tree keep the rest
+            # of the part, which a regenerated script does not.
+            if self.built_in_freecad(previous):
+                if changes is not None:
+                    self._run_freecad_parameters(
+                        job, {c.name: c.new for c in changes},
+                        base_version=previous["iteration"])
+                    return
+                if _llm_problems(job):
+                    job.status = STATUS_DONE
+                    sink.emit(
+                        PHASE_JOB, STATUS_FAILED,
+                        i18n.t("edit.needsrefiner", lang,
+                               reason="this part is a FreeCAD document",
+                               problem=_llm_problems(job)[0]),
+                        edit=True)
+                    return
+                ctx.iteration = next_index
+                ctx.source, ctx.method = "edit", "freecad tools"
+                ctx.instruction = instruction
+                sink.emit(PHASE_EDIT, STATUS_INFO,
+                          i18n.t("freecad.amending", lang,
+                                 instruction=instruction),
+                          method=ctx.method, instruction=instruction,
+                          base_version=previous["iteration"])
+                freecad_run.amend(ctx, source_dir, instruction,
+                                  instrument.client_for(ctx),
+                                  ctx.llm.generation_model, job.prompt,
+                                  job.design_plan)
+                job.versions = list(ctx.versions)
+                job.tokens = job.versions[-1].get("tokens") or {}
+                job.status = STATUS_DONE
+                sink.emit(PHASE_JOB, STATUS_OK, i18n.t("edit.applied", lang),
+                          edit=True, method=ctx.method,
+                          total_ms=(time.time() - started) * 1000,
+                          tokens=job.tokens, iterations=len(job.versions))
+                return
+
+            code = (source_dir / "code.py").read_text(encoding="utf-8")
 
             plan = plan_edit(code, instruction) if changes is None else None
             if changes is not None or plan.possible:

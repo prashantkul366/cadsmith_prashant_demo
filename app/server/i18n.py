@@ -255,6 +255,23 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ja": "{changes} を FreeCAD ドキュメントに設定し、依存する部分を"
               "再計算しました。スクリプトの書き換えはありません。",
     },
+    "freecad.amending": {
+        "en": "Changing the part in FreeCAD: {instruction}. The document is "
+              "reopened and the tree is worked on, so the rest of the part "
+              "is not regenerated.",
+        "ja": "FreeCAD で部品を変更します: {instruction}。ドキュメントを開き"
+              "直してツリーを操作するため、部品の他の部分は再生成されません。",
+    },
+    "freecad.treegone": {
+        "en": "That change was made on the solid rather than on the feature "
+              "tree, which is the only way it could be made - so the tree "
+              "is now one plain shape and these are no longer adjustable: "
+              "{names}. The part itself is unaffected.",
+        "ja": "この変更はフィーチャーツリーではなくソリッドに対して行われ"
+              "ました（この方法以外では実現できないため）。そのためツリーは"
+              "単一の形状になり、次の値は調整できなくなりました: {names}。"
+              "部品そのものには影響ありません。",
+    },
     "freecad.offline": {
         "en": "FreeCAD is not reachable, so this run used the generating "
               "pipeline instead. Open FreeCAD, start the MCP addon's RPC "
@@ -362,6 +379,14 @@ MESSAGES: dict[str, dict[str, str]] = {
     "http.nochange": {
         "en": "Every value given is the one the script already has.",
         "ja": "指定された値はすべて現在の値と同じです。",
+    },
+    "http.nofreecadparams": {
+        "en": "This part was built in FreeCAD and named no adjustable "
+              "numbers, so there is nothing here to set. Ask for the change "
+              "in words instead - it will be made on the document itself.",
+        "ja": "この部品は FreeCAD で構築され、調整可能な数値が指定されて"
+              "いないため、ここで設定できるものはありません。言葉で変更を"
+              "指示してください。ドキュメント自体に対して変更が行われます。",
     },
     "http.norebuild": {
         "en": "CadQuery is not available, so nothing can be rebuilt.",

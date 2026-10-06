@@ -571,6 +571,14 @@ async def set_job_parameters(job_id: str, request: Request) -> JSONResponse:
     # and no CadQuery to need.
     base_version = _version_number(job, body.get("version"), lang)
     declared = manager.freecad_parameters(job, base_version)
+    if declared is None and manager.built_in_freecad(next(
+            (v for v in job.versions
+             if v.get("iteration") == base_version), None)):
+        # Its code.py is a transcript, so falling through to the script path
+        # would refuse this for the wrong reason - "no such parameter" rather
+        # than "this part has none".
+        raise HTTPException(status_code=400,
+                            detail=i18n.t("http.nofreecadparams", lang))
     if declared is not None:
         values = _freecad_values(declared, wanted, lang)
         job.options.lang = lang

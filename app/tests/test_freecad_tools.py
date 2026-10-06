@@ -55,6 +55,10 @@ class Modelling(StandIn):
         self.result: str = ""
         #: Where a document has been saved, so reopening finds it again.
         self.saved: dict[str, str] = {}
+        #: Set when a solid has been handed to the document whole, as
+        #: ``_edit_feature`` does. The document then holds that and nothing
+        #: else, which is the trade a direct edit makes in FreeCAD too.
+        self.imported: Path | None = None
 
     def create_object(self, doc_name, obj_data):
         answer = super().create_object(doc_name, obj_data)
@@ -74,6 +78,9 @@ class Modelling(StandIn):
 
     def _solid(self):
         """Whatever has been asked for, built by the real kernel."""
+        if self.imported is not None:
+            return cq.Workplane(obj=cq.importers.importStep(
+                str(self.imported)).val())
         base = None
         tools = []
         for name, shape in self.shapes.items():
@@ -146,6 +153,21 @@ class Modelling(StandIn):
         if 'doc.addObject("Part::Cut"' in code or "MultiFuse" in code:
             self.result = "Result"
             return self._printed("Result")
+        # A solid handed over whole, which is what a direct feature edit
+        # does: every object goes, and one plain shape takes their place.
+        if "shape.read(" in code:
+            self.imported = Path(
+                code.split("shape.read(")[1].split(")")[0].strip("'\""))
+            self.shapes.clear()
+            # The script removes every object before adding its one plain
+            # shape, so anything that asks the document for an object by
+            # name has to stop finding it - which is how a caller learns
+            # the tree is gone.
+            for name in self.documents_:
+                self.documents_[name] = [
+                    {"Name": "Edited", "Type": "Part::Feature",
+                     "Properties": {}}]
+            return self._printed("Edited")
         if 'addObject("Part::Feature"' in code:
             return self._printed("StandardPart")
         return self._printed("")

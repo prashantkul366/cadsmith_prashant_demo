@@ -1016,6 +1016,29 @@ Next to the CadQuery path, which rewrites the script and re-executes it from
 the top for one changed number, this is the difference the live tree was
 worth having for.
 
+### Asking for a change in words
+
+A part built in FreeCAD is changed in FreeCAD. Typing "open the mounting
+holes out to 11 mm" against one reopens its document and works on the tree
+that is there, rather than regenerating a script - so the rest of the part
+survives the change by construction instead of by the model remembering to
+reproduce it. The same tools are available as during the build, plus the
+feature verbs that `direct.py` provides.
+
+One thing is worth knowing, and the app says it on the log line rather than
+leaving it to be noticed. There are two kinds of change:
+
+* **A number the part already has** - a length, a radius, a thickness - is
+  `set_size` on the parametric object. The tree recomputes, the sliders
+  survive, and this is what the builder is told to prefer.
+* **A feature that has to be recognised** - "lose the corner fillets",
+  "remove the big bore" - goes through `direct.py`, which reads features off
+  the solid's own topology. It is the only thing that works on geometry with
+  no tree behind it, and it hands back a plain solid: the feature history,
+  and any sliders over it, are gone afterwards. That is the same trade NX
+  makes when synchronous technology touches an imported body, and it is why
+  the two kinds are distinguished rather than treated as one verb.
+
 ## Running against a self-hosted vLLM
 
 Any OpenAI-compatible endpoint works the same way, including a vLLM server

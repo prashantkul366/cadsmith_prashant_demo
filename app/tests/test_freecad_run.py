@@ -215,6 +215,65 @@ def main() -> int:
           and changed["changes"][0]["new"] == 95.0,
           f"{changed['source']}: {changed['changes']}")
 
+    print("\nAsking for a change in words works on the same document")
+    Endpoint.seen = []
+    Endpoint.script = [
+        {"tool": "find_features", "arguments": {}},
+        {"tool": "resize_hole", "arguments": {
+            "feature_id": "hole_6", "diameter": 11}},
+        {"content": "Opened the hole out to 11 mm."},
+    ]
+    ctx.iteration = 2
+    amended = freecad_run.amend(ctx, v1, "open the hole out to 11 mm",
+                                client, "fake", PROMPT, design=PLAN,
+                                bridge=bridge)
+    check("it reopened the version it was asked to change, not the newest",
+          amended["freecad"]["from_version"] == "v1",
+          amended["freecad"]["from_version"])
+    check("the feature it worked on was found off the solid, not guessed",
+          any(e.data.get("step", {}).get("tool") == "find_features"
+              for e in sink.all() if e.phase == "freecad"))
+    check("the hole it changed is the size that was asked for",
+          any(abs(d - 11.0) < 0.1 for d in
+              freecad_run.builder.spec.measure_step(
+                  job_dir / "v2" / "model.step")["holes"]),
+          str(freecad_run.builder.spec.measure_step(
+              job_dir / "v2" / "model.step")["holes"]))
+    check("the rest of the part survived the change",
+          abs(amended["geometry"]["bounding_box"]["xlen"] - 95) < 0.01,
+          f"{amended['geometry']['bounding_box']['xlen']:.2f} mm")
+    check("it is filed as an edit, with the words that asked for it",
+          amended["source"] == "edit"
+          and amended["instruction"] == "open the hole out to 11 mm",
+          f"{amended['source']}: {amended['instruction']}")
+    # The trade a direct feature edit makes, and the one thing about this
+    # road a person has to be told rather than left to discover. Recognising
+    # a hole off the topology is the only way to change geometry that has no
+    # tree behind it, and it hands back a plain solid - so the tree, and the
+    # sliders over it, are gone.
+    check("the sliders are gone, because the tree they named is",
+          amended["freecad"]["parameters"] == [],
+          str(amended["freecad"]["parameters"]))
+    check("and that was said rather than left to be noticed",
+          any(e.phase == "freecad" and e.data.get("lost")
+              for e in sink.all()),
+          str([e.data.get("lost") for e in sink.all()
+               if e.data.get("lost")]))
+
+    print("\nA change that was not made is not published as one")
+    Endpoint.seen = []
+    Endpoint.script = [{"content": "I would rather not."}]
+    ctx.iteration = 3
+    try:
+        freecad_run.amend(ctx, v1, "paint it red", client, "fake", PROMPT,
+                          bridge=bridge)
+        check("a model that does nothing is refused, not published", False)
+    except freecad.FreeCADError as refused:
+        check("a model that does nothing is refused, not published",
+              "not made" in str(refused), str(refused)[:70])
+    check("and no version was left behind for it",
+          not (job_dir / "v3" / "model.step").exists())
+
     print("\nWhat cannot be done is refused, not half done")
     try:
         freecad_run.reapply(ctx, v0, {"made_up": 5}, PROMPT, bridge=bridge)
