@@ -1,0 +1,328 @@
+"""Plan a part, build it in FreeCAD, and measure what came out.
+
+The pipeline this app was built on asks for a whole CadQuery script, judges
+the result, and on a failure asks for the whole script again. This keeps the
+half of that which earns its keep and replaces the half that does not.
+
+**The Planner stays, and gains a job.** It still decomposes the request into
+components and key dimensions. What it now also does is say what must be
+true at the end, so there is something to check the finished solid against
+that is not the model's own opinion of its work.
+
+**The Coder, the Executor and the Refiner collapse into one loop.** Each
+tool call is small, its result carries measurements, and a wrong step costs
+one step instead of a regenerated script. That is the whole of why driving a
+CAD through tool calls is immediate.
+
+**The Judge is demoted, which is a promotion for the kernel.** Convergence
+used to be a vision model's verdict. Here the gate is ``spec.measure_step``
+against the dimensions ``stated.py`` read out of the request - measured, not
+judged. Vision is still worth having for what measurement cannot express,
+but it no longer decides.
+
+The part never appears in FreeCAD's window as far as the person is
+concerned: it is exported and shown in this app's own viewer, drawn by this
+app's own drawing code, and adjusted by this app's own sliders.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Optional
+
+from app.server import freecad, freecad_tools, spec, stated, toolbox
+
+#: How many tool calls one part may take. A bracket is six; a part needing
+#: more than this is one the loop is not going to finish.
+MAX_STEPS = 24
+
+PLANNER_SYSTEM = """You plan a mechanical part before it is built in FreeCAD.
+
+Reply with strict JSON only:
+{
+  "description": "<one sentence>",
+  "components": ["base plate", "vertical wall", ...],
+  "build_order": ["<short step>", ...],
+  "key_dimensions": {"<name>": <number in mm>, ...},
+  "must_be_true": ["<a checkable statement about the finished solid>", ...]
+}
+
+Rules:
+  - Use the dimensions the request states, exactly. Never round or adjust
+    them, and never invent one it did not give.
+  - build_order is for a builder with primitives (box, cylinder, cone,
+    sphere, tube), booleans, and arbitrary FreeCAD Python. Keep it short.
+  - must_be_true is for checking afterwards: overall sizes, hole counts and
+    diameters, wall thicknesses. Things a kernel can measure, not opinions.
+"""
+
+BUILDER_SYSTEM = """You build mechanical parts in FreeCAD by calling tools.
+
+How to work:
+  1. Follow the plan you are given. Use the stated dimensions exactly.
+  2. Before building a standard part - a washer, bearing, screw, gear, a
+     named handlebar - try place_standard_part. It is already verified.
+  3. Build solids, then cut the holes and pockets with combine(cut).
+     Cutting tools must be long enough to pass clean through, and placed
+     so they do.
+  4. Every tool tells you what it measured. Read it. If a size is wrong,
+     fix it with set_size before carrying on.
+  5. Call declare_parameter for the handful of numbers a person should be
+     able to adjust afterwards - overall sizes, hole diameters, wall
+     thicknesses. Use scale=2 to show a diameter over a Radius property.
+  6. When the part is finished and its measurements match the plan, stop
+     and say in one sentence what you built.
+
+FreeCAD's origin is at (0, 0, 0) and a Part::Box grows from its placement
+towards +X, +Y, +Z. A Part::Cylinder grows along +Z from its placement.
+"""
+
+
+def plan(prompt: str, client: Any, model: str) -> dict:
+    """What to build, before anything is built.
+
+    Falls back to a plan with no components rather than failing the run: a
+    builder with the request and no plan still builds, and losing the whole
+    part because the planning call came back malformed would be the wrong
+    trade.
+    """
+    from app.server import providers
+
+    note = stated.note(prompt)
+    reply = client.messages.create(
+        model=model, max_tokens=1200, system=PLANNER_SYSTEM,
+        messages=[{"role": "user", "content": prompt + ("\n" + note if note else "")}])
+    text = "".join(block.text for block in reply.content)
+    try:
+        return json.loads(providers.repair_json(text))
+    except (json.JSONDecodeError, TypeError):
+        return {"description": prompt, "components": [], "build_order": [],
+                "key_dimensions": {}, "must_be_true": []}
+
+
+def _task(prompt: str, design: dict) -> str:
+    """The plan and the request, as one instruction for the builder."""
+    lines = [f"Build this part: {prompt}", ""]
+    if design.get("components"):
+        lines.append("Components: " + ", ".join(design["components"]))
+    if design.get("key_dimensions"):
+        lines.append("Key dimensions (mm): " + ", ".join(
+            f"{name} = {value:g}" for name, value in
+            design["key_dimensions"].items()
+            if isinstance(value, (int, float))))
+    if design.get("build_order"):
+        lines.append("Suggested order:")
+        lines += [f"  {n}. {step}" for n, step in
+                  enumerate(design["build_order"], start=1)]
+    if design.get("must_be_true"):
+        lines.append("The finished solid must satisfy:")
+        lines += [f"  - {claim}" for claim in design["must_be_true"]]
+    note = stated.note(prompt)
+    if note:
+        lines += ["", note]
+    return "\n".join(lines)
+
+
+def build(bridge: freecad.Bridge, prompt: str, client: Any, model: str,
+          design: Optional[dict] = None, document: str = "",
+          on_step: Optional[Any] = None,
+          max_steps: int = MAX_STEPS) -> tuple[freecad_tools.Session,
+                                               toolbox.Transcript]:
+    """Build the part in FreeCAD, one measured step at a time."""
+    session = freecad_tools.Session(bridge, document)
+    box = freecad_tools.toolbox_for(session)
+    transcript = toolbox.converse(
+        client, model, BUILDER_SYSTEM, _task(prompt, design or {}), box,
+        max_steps=max_steps, on_step=on_step)
+    return session, transcript
+
+
+# ---------------------------------------------------------------------------
+# What came out, measured rather than judged
+# ---------------------------------------------------------------------------
+
+def collect(session: freecad_tools.Session, version_dir: Path) -> dict:
+    """Export what FreeCAD built into the version's own directory.
+
+    Three files and they are all the app already needs: the STEP everything
+    downstream measures and draws, the STL the viewer loads, and the FreeCAD
+    document itself - which is the deliverable a STEP can never be, because
+    an engineer can open it and carry on with a live tree.
+    """
+    version_dir.mkdir(parents=True, exist_ok=True)
+    out: dict = {}
+
+    step = version_dir / "model.step"
+    step.write_bytes(session.bridge.fetch(session.document, "step"))
+    out["step"] = step
+
+    try:
+        stl = version_dir / "model.stl"
+        stl.write_bytes(session.bridge.fetch(session.document, "stl"))
+        out["stl"] = stl
+    except freecad.FreeCADError:
+        pass        # the viewer degrades to the drawing; the part is intact
+
+    try:
+        out["document"] = save_document(session, version_dir / "part.FCStd")
+    except freecad.FreeCADError:
+        pass
+    return out
+
+
+def save_document(session: freecad_tools.Session, path: Path) -> Path:
+    """Snapshot the live FreeCAD document beside the version's geometry.
+
+    Saved per version rather than once per job, because going back in the
+    filmstrip has to reopen *that* version's tree. Without this, stepping
+    back shows an older solid while every edit silently lands on the newest
+    document - which looks like it works and is not.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    session.bridge.run(f"""
+import FreeCAD
+doc = FreeCAD.getDocument({session.document!r})
+doc.saveAs({str(path)!r})
+""")
+    return path
+
+
+def reopen(bridge: freecad.Bridge, path: Path) -> str:
+    """Open a saved version again, and report the name FreeCAD gave it.
+
+    FreeCAD de-duplicates document names, so the name this returns is the
+    one every later call must use - not the one on the file.
+    """
+    printed = bridge.run(f"""
+import FreeCAD
+doc = FreeCAD.openDocument({str(path)!r})
+print(doc.Name)
+""")
+    name = printed.strip().splitlines()
+    if not name:
+        raise freecad.FreeCADError(f"FreeCAD would not open {path}")
+    return name[-1].strip()
+
+
+def check(step: Path, prompt: str, design: Optional[dict] = None) -> dict:
+    """Measure the finished solid against what was asked for.
+
+    This is the gate, and it is a measurement rather than a verdict. The
+    numbers come off the exported solid; the expectations come from the
+    request itself, read by ``stated.py`` before any model saw it. A part
+    that does not match says so, whatever the builder thought of its work.
+    """
+    geometry = spec.measure_step(step)
+    wanted = stated.requirements(prompt)
+    box = geometry.get("bbox") or {}
+    sizes = sorted(round(box.get(k, 0.0), 2)
+                   for k in ("xlen", "ylen", "zlen"))
+    holes = sorted(geometry.get("holes") or [])
+
+    rows: list[dict] = []
+
+    def row(key: str, label: str, expected: str, actual: str,
+            passed: Optional[bool], hard: bool = True) -> None:
+        rows.append({"key": key, "label": label, "expected": expected,
+                     "actual": actual, "passed": passed, "hard": hard})
+
+    row("watertight", "a closed, watertight solid", "valid",
+        "valid" if geometry.get("is_valid") else "not valid",
+        bool(geometry.get("is_valid")))
+
+    # Every length the request stated should appear somewhere in the solid.
+    # Not which axis - a request rarely says - but present at all, which is
+    # what catches a part built to the wrong number.
+    for value in sorted({round(float(v), 2) for v in wanted.get("extents") or []}):
+        near = any(abs(value - size) < 0.5 for size in sizes)
+        row(f"size_{value:g}", f"{value:g} mm appears in the part",
+            f"{value:g} mm", " x ".join(f"{s:g}" for s in sizes), near)
+
+    for value in sorted({round(float(v), 2) for v in wanted.get("advisory") or []}):
+        near = any(abs(value - size) < 0.5 for size in sizes)
+        row(f"stated_{value:g}", f"{value:g} mm was asked for",
+            f"{value:g} mm", " x ".join(f"{s:g}" for s in sizes),
+            near, hard=False)
+
+    count = wanted.get("hole_count")
+    if count is not None:
+        row("hole_count", "holes drilled", f"{count}", f"{len(holes)}",
+            len(holes) == count)
+
+    for bore in sorted({round(float(v), 2) for v in wanted.get("bores") or []}):
+        made = sum(1 for d in holes if abs(d - bore) < 0.1)
+        row(f"bore_{bore:g}", f"a Ø{bore:g} hole",
+            f"Ø{bore:g}", f"{made} at that size" if made else "none",
+            made > 0)
+
+    blocking = [r for r in rows if r["passed"] is False and r["hard"]]
+    return {"geometry": geometry, "checks": rows, "passed": not blocking,
+            "problems": [r["label"] for r in blocking]}
+
+
+# ---------------------------------------------------------------------------
+# The numbers a person can drag
+# ---------------------------------------------------------------------------
+
+def parameter_map(session: freecad_tools.Session) -> list[dict]:
+    """The declared parameters, in the shape the slider panel already draws.
+
+    Same fields ``edits.describe_parameters`` produces for a CadQuery
+    script, so the panel needs no second code path - plus the three it
+    ignores, which say where the number actually lives.
+    """
+    from app.server import edits
+
+    out: list[dict] = []
+    for declared in session.declared:
+        found = session.bridge.object(session.document, declared["object"])
+        raw = ((found or {}).get("Properties") or {}).get(declared["property"])
+        if raw is None:
+            continue
+        try:
+            value = float(raw) * float(declared.get("scale") or 1.0)
+        except (TypeError, ValueError):
+            continue
+        kind = edits._kind(declared["name"])                 # noqa: SLF001
+        low, high, step = edits._range_for(kind, value)      # noqa: SLF001
+        out.append({
+            "name": declared["name"],
+            "label": declared["label"],
+            "value": value,
+            "kind": kind,
+            "unit": {"angle": "°", "count": "", "length": "mm"}[kind],
+            "integer": float(value).is_integer() and kind == "count",
+            "min": min(low, value), "max": max(high, value), "step": step,
+            # Ignored by the panel, used when a value comes back.
+            "object": declared["object"],
+            "property": declared["property"],
+            "scale": float(declared.get("scale") or 1.0),
+        })
+    return out
+
+
+def apply_parameters(bridge: freecad.Bridge, document: str,
+                     mapping: list[dict], values: dict) -> list[str]:
+    """Set the declared parameters and let FreeCAD recompute.
+
+    This is what a slider should always have done. A CadQuery part has its
+    script rewritten and re-executed whole; here one property is set and the
+    tree recomputes only what depends on it.
+    """
+    by_name = {entry["name"]: entry for entry in mapping}
+    changed: list[str] = []
+    for name, value in values.items():
+        entry = by_name.get(name)
+        if entry is None:
+            continue
+        scale = float(entry.get("scale") or 1.0)
+        bridge.edit(document, entry["object"],
+                    **{entry["property"]: float(value) / scale})
+        changed.append(f"{entry['label']} {float(value):g}")
+    if changed:
+        bridge.run(f"""
+import FreeCAD
+FreeCAD.getDocument({document!r}).recompute()
+""")
+    return changed

@@ -113,7 +113,8 @@ class Modelling(StandIn):
             work = Path(tempfile.mkdtemp(prefix="standin_"))
             step = work / "s.step"
             cq.exporters.export(self._solid(), str(step))
-            return self._printed(base64.b64encode(step.read_bytes()).decode())
+            return self._printed(
+                base64.b64encode(step.read_bytes()).decode(), marked=True)
         if "BoundBox" in code:
             solid = self._solid().val()
             box = solid.BoundingBox()
@@ -121,7 +122,7 @@ class Modelling(StandIn):
                 "name": "Result", "label": "Result",
                 "volume": solid.Volume(), "area": solid.Area(),
                 "faces": len(solid.Faces()), "valid": solid.isValid(),
-                "bbox": [box.xlen, box.ylen, box.zlen]}]))
+                "bbox": [box.xlen, box.ylen, box.zlen]}]), marked=True)
         if 'doc.addObject("Part::Cut"' in code or "MultiFuse" in code:
             self.result = "Result"
             return self._printed("Result")
@@ -129,9 +130,17 @@ class Modelling(StandIn):
             return self._printed("StandardPart")
         return self._printed("")
 
-    def _printed(self, payload: str):
+    def _printed(self, payload: str, marked: bool = False):
+        """What the addon hands back: FreeCAD's chatter, then the output.
+
+        ``marked`` says whether the script wrapped its answer in the markers
+        the bridge looks for. It is passed explicitly rather than guessed
+        from the payload - a base64 blob is sometimes all letters and
+        digits, and a stand-in that decides by looking at the text fails
+        once in a while on nothing but the length of the file.
+        """
         body = (freecad._MARK_OPEN + payload + freecad._MARK_CLOSE  # noqa: SLF001
-                if payload and not payload.isidentifier() else payload)
+                if marked and payload else payload)
         return {"success": True,
                 "message": "Python code executed successfully.\nOutput: " + body}
 

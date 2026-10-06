@@ -67,6 +67,12 @@ class Session:
         #: Names FreeCAD actually assigned, in the order they were made, so
         #: a report can say what was built without asking FreeCAD again.
         self.built: list[str] = []
+        #: The handful of numbers that become sliders. Declared while
+        #: building rather than summarised afterwards: a model that has just
+        #: made the base plate knows that its Length is the one a person
+        #: would want to drag, and asking it again at the end invites a
+        #: tidy-sounding answer that does not match what it built.
+        self.declared: list[dict] = []
 
     # -- what every tool returns --------------------------------------------
 
@@ -217,6 +223,37 @@ print(result.Name)
             {"name": o.get("Name"), "type": o.get("TypeId") or o.get("Type"),
              "label": o.get("Label")}
             for o in self.bridge.objects(self.document)]}
+
+    def declare_parameter(self, name: str, label: str, object_name: str,
+                          property_name: str, scale: float = 1.0) -> dict:
+        """Name a number a person should be able to drag.
+
+        FreeCAD stores a cylinder's Radius; a person drags a diameter. The
+        scale carries that, so the panel can say "Hole diameter 6" over a
+        property holding 3 and the two never drift apart.
+        """
+        found = self.bridge.object(self.document, object_name)
+        if found is None:
+            raise ToolError(f"there is no object called {object_name!r}")
+        if property_name not in (found.get("Properties") or found):
+            # The stand-in and FreeCAD describe an object slightly
+            # differently; either way a property that is not there is worth
+            # catching now rather than when somebody drags it.
+            properties = found.get("Properties") or {}
+            if properties and property_name not in properties:
+                raise ToolError(
+                    f"{object_name} has no property called {property_name!r}. "
+                    f"It has: {', '.join(sorted(properties)) or 'none'}")
+        if scale == 0:
+            raise ToolError("scale cannot be zero")
+
+        self.declared = [d for d in self.declared if d["name"] != name]
+        self.declared.append({"name": name, "label": label,
+                              "object": object_name,
+                              "property": property_name,
+                              "scale": float(scale)})
+        return {"declared": name, "reads": f"{object_name}.{property_name}",
+                "parameters_so_far": [d["name"] for d in self.declared]}
 
     def run_python(self, code: str) -> dict:
         """Anything FreeCAD can do that the tools above cannot.
@@ -465,6 +502,19 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
                  "where": {**text, "enum": ["all", "top", "bottom"]}},
                  "required": ["radius"]},
              run=session.add_fillet),
+        Tool(name="declare_parameter",
+             description=(
+                 "Name a number a person should be able to adjust with a "
+                 "slider afterwards, and say which object property it reads. "
+                 "Declare the handful that matter - the overall sizes, a "
+                 "hole diameter, a wall thickness - not every property. Use "
+                 "scale=2 where you want a diameter over a Radius property."),
+             parameters={"type": "object", "properties": {
+                 "name": {**text, "description": "short, lower_case_with_underscores"},
+                 "label": {**text, "description": "what a person reads"},
+                 "object_name": text, "property_name": text, "scale": number},
+                 "required": ["name", "label", "object_name", "property_name"]},
+             run=session.declare_parameter),
         Tool(name="remove_object",
              description="Delete an object from the document by name.",
              parameters={"type": "object", "properties": {"name": text},
