@@ -255,6 +255,83 @@ print(result.Name)
         return {"declared": name, "reads": f"{object_name}.{property_name}",
                 "parameters_so_far": [d["name"] for d in self.declared]}
 
+    #: Which way a circular pattern turns, by the name a person uses.
+    AXES = {"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}
+
+    def pattern_circular(self, name: str, count: int,
+                         centre: Optional[list] = None, axis: str = "Z",
+                         angle: float = 360.0) -> dict:
+        """Repeat an object evenly around a circle - a bolt circle.
+
+        The one thing a part like a flange needs and no primitive provides.
+        Without it a model computes six placements in a script, which is
+        about 1,200 output tokens against the 40 a tool call costs, and the
+        script is where the arithmetic goes wrong unseen.
+        """
+        if count < 2:
+            raise ToolError("count is how many there are in all, so at least 2")
+        if axis.upper() not in self.AXES:
+            raise ToolError("axis is one of X, Y, Z")
+        if self.bridge.object(self.document, name) is None:
+            raise ToolError(f"there is no object called {name!r}")
+        centre = [float(v) for v in (centre or [0, 0, 0])]
+        if len(centre) != 3:
+            raise ToolError("centre is [x, y, z] in millimetres")
+
+        made = self._copies(f"""
+import FreeCAD, json
+doc = FreeCAD.getDocument({self.document!r})
+src = doc.getObject({name!r})
+centre = FreeCAD.Vector({centre[0]}, {centre[1]}, {centre[2]})
+spindle = FreeCAD.Vector{self.AXES[axis.upper()]}
+made = []
+for i in range(1, {int(count)}):
+    turn = FreeCAD.Rotation(spindle, {float(angle)} * i / {int(count)})
+    copy = doc.copyObject(src, False)
+    copy.Placement = FreeCAD.Placement(
+        centre + turn.multVec(src.Placement.Base - centre),
+        turn.multiply(src.Placement.Rotation))
+    made.append(copy.Name)
+doc.recompute()
+{freecad.marked("json.dumps(made)")}
+""")
+        return self._measured(patterned=name, copies=made,
+                              all_of_them=[name] + made)
+
+    def pattern_linear(self, name: str, count: int, spacing: list) -> dict:
+        """Repeat an object along a line - a row of holes."""
+        if count < 2:
+            raise ToolError("count is how many there are in all, so at least 2")
+        if len(spacing) != 3:
+            raise ToolError("spacing is [dx, dy, dz] in millimetres, "
+                            "the step from one to the next")
+        if self.bridge.object(self.document, name) is None:
+            raise ToolError(f"there is no object called {name!r}")
+        step = [float(v) for v in spacing]
+
+        made = self._copies(f"""
+import FreeCAD, json
+doc = FreeCAD.getDocument({self.document!r})
+src = doc.getObject({name!r})
+step = FreeCAD.Vector({step[0]}, {step[1]}, {step[2]})
+made = []
+for i in range(1, {int(count)}):
+    copy = doc.copyObject(src, False)
+    copy.Placement = FreeCAD.Placement(
+        src.Placement.Base + step * i, src.Placement.Rotation)
+    made.append(copy.Name)
+doc.recompute()
+{freecad.marked("json.dumps(made)")}
+""")
+        return self._measured(patterned=name, copies=made,
+                              all_of_them=[name] + made)
+
+    def _copies(self, code: str) -> list:
+        """Run a pattern script and return the names FreeCAD gave the copies."""
+        made = json.loads(self.bridge.value(code))
+        self.built.extend(made)
+        return made
+
     def run_python(self, code: str) -> dict:
         """Anything FreeCAD can do that the tools above cannot.
 
@@ -471,6 +548,32 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
                  "tools": {"type": "array", "items": text}},
                  "required": ["operation", "base", "tools"]},
              run=session.combine),
+        Tool(name="pattern_circular",
+             description=(
+                 "Repeat a shape evenly around a circle - a bolt circle, a "
+                 "ring of holes, spokes. Place one where the first should "
+                 "go, then pattern it. count is how many there are in all, "
+                 "including the one you placed. Use this rather than working "
+                 "out the positions yourself."),
+             parameters={"type": "object", "properties": {
+                 "name": text, "count": {"type": "integer"},
+                 "centre": point,
+                 "axis": {**text, "enum": ["X", "Y", "Z"]},
+                 "angle": {**number,
+                           "description": "degrees to spread over; 360 for "
+                                          "a full circle"}},
+                 "required": ["name", "count"]},
+             run=session.pattern_circular),
+        Tool(name="pattern_linear",
+             description=(
+                 "Repeat a shape along a line - a row of holes. count is "
+                 "how many there are in all; spacing is the step from one "
+                 "to the next. Pattern twice for a grid."),
+             parameters={"type": "object", "properties": {
+                 "name": text, "count": {"type": "integer"},
+                 "spacing": point},
+                 "required": ["name", "count", "spacing"]},
+             run=session.pattern_linear),
         Tool(name="list_objects",
              description="What is in the document, with the names to use.",
              parameters={"type": "object", "properties": {}},

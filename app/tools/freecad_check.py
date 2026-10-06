@@ -152,6 +152,40 @@ def main() -> int:
     if not geometry["is_valid"]:
         wrong.append("the solid is not watertight")
 
+    # A bolt circle, which is the thing with no primitive behind it and the
+    # reason a model used to write a script. Built in a second document so
+    # the plate above is unaffected, and measured here rather than taken on
+    # the pattern's word for it.
+    print("\nA bolt circle, by tool rather than by arithmetic")
+    try:
+        from app.server import freecad_tools
+        session = freecad_tools.Session(bridge, bridge.new_document("BoltCircle"))
+        session.add_shape(kind="Part::Cylinder", name="Disc",
+                          Radius=60, Height=15)
+        session.add_shape(kind="Part::Cylinder", name="Bolt", Radius=5,
+                          Height=45, position=[45, 0, -15])
+        spread = session.pattern_circular(name="Bolt", count=6,
+                                          centre=[0, 0, 0])
+        session.combine(operation="cut", base="Disc",
+                        tools=spread["all_of_them"])
+        ring = bridge.save(session.document, out / "bolt_circle.step")
+        measured = spec.measure_step(ring)
+        bolts = [d for d in measured["holes"] if abs(d - 10.0) < 0.01]
+        print(f"  5 tool calls, no script")
+        print(f"  {ring}  ({ring.stat().st_size:,} bytes)")
+        print(f"  holes        {measured['holes']}  (asked 6 x Ø10)")
+        print(f"  watertight   {measured['is_valid']}")
+        if len(bolts) != 6:
+            wrong.append(f"the bolt circle made {len(bolts)} holes, not 6")
+        if not args.keep:
+            bridge.run(f"""
+import FreeCAD
+FreeCAD.closeDocument({session.document!r})
+""")
+    except Exception as error:
+        print(f"  the bolt circle failed: {type(error).__name__}: {error}")
+        wrong.append("the bolt circle could not be built")
+
     print("\nDrawing it")
     try:
         from app.server import drawing

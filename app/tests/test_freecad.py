@@ -90,7 +90,7 @@ class StandIn:
         taken = {o["Name"] for o in self.documents_[doc_name]}
         actual = wanted if wanted not in taken else f"{wanted}001"
         self.documents_[doc_name].append(
-            {"Name": actual, "Type": obj_data["Type"],
+            {"Name": actual, "Label": actual, "TypeId": obj_data["Type"],
              "Properties": dict(obj_data.get("Properties") or {})})
         return {"success": True, "object_name": actual}
 
@@ -111,13 +111,33 @@ class StandIn:
         return {"success": True, "object_name": obj_name}
 
     def get_objects(self, doc_name):
-        return self.documents_.get(doc_name, [])
+        return [self._as_addon(o) for o in self.documents_.get(doc_name, [])]
 
     def get_object(self, doc_name, obj_name):
         for obj in self.documents_.get(doc_name, []):
             if obj["Name"] == obj_name:
-                return obj
+                return self._as_addon(obj)
         return None
+
+    def get_objects_(self, doc_name):
+        return [self._as_addon(o) for o in self.documents_.get(doc_name, [])]
+
+    @staticmethod
+    def _as_addon(obj: dict) -> dict:
+        """The object as the addon puts it on the wire.
+
+        Every property goes through str() unless it is already a plain
+        scalar, and a FreeCAD length is a Quantity - so a Length of 120
+        arrives as "120.0 mm". Reproduced here because a stand-in that hands
+        back a tidy float tests the code against a protocol nobody speaks:
+        the slider panel was empty for exactly this reason and every test
+        passed.
+        """
+        spoken = dict(obj)
+        spoken["Properties"] = {
+            name: (value if isinstance(value, (bool, str)) else f"{value} mm")
+            for name, value in (obj.get("Properties") or {}).items()}
+        return spoken
 
     def execute_code(self, code, timeout=None):
         self.calls.append(("execute_code", code, timeout))
@@ -207,8 +227,17 @@ def main() -> int:
 
     check("the document can be read back", len(bridge.objects(doc)) == 2,
           str([o["Name"] for o in bridge.objects(doc)]))
-    check("and one object by name",
-          (bridge.object(doc, box) or {}).get("Type") == "Part::Box")
+    check("and one object by name, under the key the addon uses",
+          (bridge.object(doc, box) or {}).get("TypeId") == "Part::Box",
+          str((bridge.object(doc, box) or {}).get("TypeId")))
+    # The addon sends every property through str(), and a FreeCAD length is
+    # a Quantity - so this is "120.0 mm", not a number. Anything that reads
+    # one has to go through freecad.number().
+    length = (bridge.object(doc, box) or {}).get("Properties", {}).get("Length")
+    check("a length arrives as a quantity, the way the addon sends it",
+          isinstance(length, str) and length.endswith("mm"), repr(length))
+    check("and reads back as the number it is",
+          freecad.number(length) == 75.0, str(freecad.number(length)))
     bridge.remove(doc, twin)
     check("an object can be deleted", len(bridge.objects(doc)) == 1)
 

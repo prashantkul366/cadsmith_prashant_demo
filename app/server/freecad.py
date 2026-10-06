@@ -93,6 +93,43 @@ def _tips(doc):
 """
 
 
+def number(raw: Any) -> Optional[float]:
+    """A property's value as a number, however the addon spelled it.
+
+    The addon serialises every property through ``str()`` for anything that
+    is not already an int, float, str or bool - and a ``Part::Box.Length`` is
+    a ``Quantity``, so what arrives is the string ``"120.0 mm"``, not 120.0.
+    Calling float() on that raises, and a caller that swallows the error
+    loses the property silently: the slider panel came back empty with
+    nothing anywhere saying why.
+
+    Handles the plain number, the quantity with its unit, and the degree
+    sign that comes back for an angle. ``None`` for anything else, which is
+    an answer rather than an exception - a Placement is not a number and
+    never will be.
+    """
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    match = re.match(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?", text)
+    if not match:
+        return None
+    rest = text[match.end():].strip()
+    # "120.0 mm" and "30.0 deg" are numbers; "120 mm x 50 mm" is a
+    # description of something and guessing at it would be worse than
+    # refusing it.
+    if rest and not re.fullmatch(r"[a-zA-Z°µ²³/^\d]+", rest):
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
 def marked(expression: str) -> str:
     """A print statement whose output the bridge can find in the noise.
 

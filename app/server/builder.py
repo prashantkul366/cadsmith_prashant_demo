@@ -66,12 +66,16 @@ How to work:
   3. Build solids, then cut the holes and pockets with combine(cut).
      Cutting tools must be long enough to pass clean through, and placed
      so they do.
-  4. Every tool tells you what it measured. Read it. If a size is wrong,
+  4. Anything repeated - a bolt circle, a row of holes - is one shape and
+     then pattern_circular or pattern_linear. Do not work the positions out
+     yourself and do not write a script for them: the tool is a tenth of
+     the tokens and the arithmetic is FreeCAD's.
+  5. Every tool tells you what it measured. Read it. If a size is wrong,
      fix it with set_size before carrying on.
-  5. Call declare_parameter for the handful of numbers a person should be
+  6. Call declare_parameter for the handful of numbers a person should be
      able to adjust afterwards - overall sizes, hole diameters, wall
      thicknesses. Use scale=2 to show a diameter over a Radius property.
-  6. When the part is finished and its measurements match the plan, stop
+  7. When the part is finished and its measurements match the plan, stop
      and say in one sentence what you built.
 
 FreeCAD's origin is at (0, 0, 0) and a Part::Box grows from its placement
@@ -335,12 +339,10 @@ def parameter_map(session: freecad_tools.Session) -> list[dict]:
     for declared in session.declared:
         found = session.bridge.object(session.document, declared["object"])
         raw = ((found or {}).get("Properties") or {}).get(declared["property"])
-        if raw is None:
+        reading = freecad.number(raw)
+        if reading is None:
             continue
-        try:
-            value = float(raw) * float(declared.get("scale") or 1.0)
-        except (TypeError, ValueError):
-            continue
+        value = reading * float(declared.get("scale") or 1.0)
         kind = edits._kind(declared["name"])                 # noqa: SLF001
         low, high, step = edits._range_for(kind, value)      # noqa: SLF001
         out.append({

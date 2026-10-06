@@ -118,25 +118,58 @@ class Headless:
         return self._describe(obj) if obj is not None else None
 
     @staticmethod
-    def _describe(obj) -> dict:
-        """An object as the addon reports it: name, type, properties.
+    def _value(value):
+        """One property, serialised the way the addon serialises it.
 
-        Only the properties that carry a number or a string. A Placement or
-        a link is not something this protocol can put on the wire, and the
-        caller reads these to find a value it could set back.
+        Copied in behaviour from rpc_server/serialize.py, down to the
+        str() fallback - which is the whole point. A Part::Box.Length is a
+        Quantity, so the addon sends the *string* "120.0 mm", not 120.0.
+        A fixture that helpfully sends a float instead is a fixture that
+        hides every bug in the code that reads these, which is how a slider
+        panel came to be empty with nothing anywhere saying why.
+        """
+        if isinstance(value, (int, float, str, bool)):
+            return value
+        if isinstance(value, FreeCAD.Vector):
+            return {"x": value.x, "y": value.y, "z": value.z}
+        if isinstance(value, FreeCAD.Rotation):
+            return {"Axis": {"x": value.Axis.x, "y": value.Axis.y,
+                             "z": value.Axis.z}, "Angle": value.Angle}
+        if isinstance(value, FreeCAD.Placement):
+            return {"Base": Headless._value(value.Base),
+                    "Rotation": Headless._value(value.Rotation)}
+        if isinstance(value, (list, tuple)):
+            return [Headless._value(v) for v in value]
+        return str(value)
+
+    @staticmethod
+    def _describe(obj) -> dict:
+        """An object as the addon reports it: Name, Label, TypeId, Properties.
+
+        TypeId rather than Type, which is what the addon sends and what a
+        caller therefore has to read.
         """
         properties = {}
         for prop in getattr(obj, "PropertiesList", []):
             try:
-                value = getattr(obj, prop)
-            except Exception:
-                continue
-            if hasattr(value, "Value"):          # a FreeCAD Quantity
-                value = value.Value
-            if isinstance(value, (int, float, str, bool)):
-                properties[prop] = value
+                properties[prop] = Headless._value(getattr(obj, prop))
+            except Exception as error:
+                properties[prop] = f"<error: {error}>"
         return {"Name": obj.Name, "Label": obj.Label,
-                "Type": obj.TypeId, "Properties": properties}
+                "TypeId": obj.TypeId, "Properties": properties,
+                "Shape": Headless._shape(getattr(obj, "Shape", None))}
+
+    @staticmethod
+    def _shape(shape):
+        if shape is None:
+            return None
+        try:
+            return {"Volume": shape.Volume, "Area": shape.Area,
+                    "VertexCount": len(shape.Vertexes),
+                    "EdgeCount": len(shape.Edges),
+                    "FaceCount": len(shape.Faces)}
+        except Exception as error:
+            return {"error": f"invalid shape: {error}"}
 
     # -- the wide door ------------------------------------------------------
 

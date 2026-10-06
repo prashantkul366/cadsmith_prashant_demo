@@ -243,6 +243,31 @@ def main() -> int:
           hole is not None and hole["id"].startswith("hole_"),
           str(hole))
 
+    print("\nRepetition is a tool, not arithmetic in a script")
+    # The reason this exists: a bolt circle has no primitive, so a model
+    # reaches for run_python and spends about 1,200 output tokens working
+    # out six placements - against the 40 a tool call costs. Measured on a
+    # flange: five tool calls where there had been a script.
+    check("a pattern is offered well before the escape hatch",
+          names.index("pattern_circular") < names.index("run_python")
+          and names.index("pattern_linear") < names.index("run_python"),
+          ", ".join(names[names.index("pattern_circular"):][:3]))
+    for call, args, wanted in [
+        ("pattern_circular", {"name": "Plate", "count": 1}, "at least 2"),
+        ("pattern_circular", {"name": "Plate", "count": 4, "axis": "W"},
+         "one of X, Y, Z"),
+        ("pattern_circular", {"name": "Ghost", "count": 4}, "no object called"),
+        ("pattern_linear", {"name": "Plate", "count": 3, "spacing": [1, 2]},
+         "[dx, dy, dz]"),
+    ]:
+        try:
+            box.invoke(call, args)
+            check(f"{call} refuses {list(args.values())[1]!r}", False,
+                  "it accepted it")
+        except ToolError as refused:
+            check(f"{call} refuses {list(args.values())[1]!r}",
+                  wanted in str(refused), str(refused)[:70])
+
     print("\nWhat the model makes up is refused, by name")
     for call, args, wanted in [
         ("add_shape", {"kind": "Part::Banana"}, "not one of the shapes"),

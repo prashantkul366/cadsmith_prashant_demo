@@ -994,6 +994,21 @@ geometry still comes back as bytes, but the live document stays there and
 the version record says it was not collected rather than naming a file that
 is not there.
 
+**Anything repeated is a tool, not arithmetic.** A bolt circle has no
+primitive behind it, so a model used to reach for `run_python` and spend
+about 1,200 output tokens working out six placements - against the 40 a tool
+call costs, and with the arithmetic somewhere nobody checks it.
+`pattern_circular` and `pattern_linear` take one shape and repeat it; the
+flange above is five tool calls and a tenth of a second of FreeCAD.
+
+**A property comes back as a string, not a number.** The addon serialises
+every property through `str()`, and a `Part::Box.Length` is a `Quantity` - so
+what arrives is `"120.0 mm"`. Read one with `freecad.number()`; calling
+`float()` on it raises, and a caller that swallows the error loses the
+property silently. That is what emptied the slider panel on the first
+FreeCAD-built part, and both test fixtures now send quantity strings so they
+cannot hide it again. The type is under `TypeId`, not `Type`.
+
 ### Dragging a parameter, without rewriting anything
 
 While building, the model calls `declare_parameter` for the handful of
