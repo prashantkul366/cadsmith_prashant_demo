@@ -1037,6 +1037,10 @@ bends the catalogue serves need no model at all.
                                                     # built, measured and drawn
 .venv/bin/python -m app.tests.test_direct           # editing an imported solid
                                                     # that has no feature tree
+.venv/bin/python -m app.tests.test_freecad          # the FreeCAD link, against a
+                                                    # stand-in for the addon
+.venv/bin/python -m app.tests.test_toolbox          # building step by step, with
+                                                    # and without tool calling
 .venv/bin/python -m app.tests.test_layout           # panel geometry, real browser
 .venv/bin/python -m app.tests.test_thinking_stream  # streamed reasoning, and the
                                                     # effort the run asked for
