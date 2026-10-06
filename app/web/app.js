@@ -228,6 +228,39 @@ function renderDiagRows(checks) {
     </div>`).join("");
 }
 
+/* ── which document a run works in ───────────────────────────────────
+   The difference between a generator and an assistant. Only FreeCAD knows
+   what the engineer has open, so this is read from it rather than
+   remembered: a document closed since the last look must not still be
+   offered, and the server checks the name again before using it. */
+
+async function loadDocuments() {
+  const row = $("#optDocRow");
+  const select = $("#optDocument");
+  if (!row || !select) return;
+
+  let found = { available: false, documents: [] };
+  try { found = await API.freecadDocuments(); } catch (_) { /* not running */ }
+
+  const chosen = select.value;
+  select.innerHTML = `<option value="">${esc(t("opt.document.new"))}</option>`
+    + found.documents.map(d => {
+        const label = d.size_mm
+          ? t("opt.document.one", {
+              name: d.name, n: d.objects,
+              size: d.size_mm.map(v => fmt(v)).join(" × ") })
+          : t("opt.document.empty", { name: d.name });
+        return `<option value="${esc(d.name)}">${esc(label)}</option>`;
+      }).join("");
+  // Keep the choice across a refresh, but only if it is still open.
+  if (chosen && found.documents.some(d => d.name === chosen)) {
+    select.value = chosen;
+  }
+  // Nothing to choose between is not a choice: the row stays out of the way
+  // until FreeCAD has something open.
+  row.hidden = !found.available || !found.documents.length;
+}
+
 /* ═══════════════════════ examples ═══════════════════════ */
 
 async function loadExamples() {
@@ -1267,6 +1300,7 @@ async function generate() {
     use_vision: $("#optVision").classList.contains("on"),
     use_catalog: $("#optCatalog").classList.contains("on"),
     use_freecad: $("#optFreecad").classList.contains("on"),
+    freecad_document: $("#optDocument").value,
     ground_dimensions: $("#optGround").classList.contains("on"),
     effort: $("#optEffort").value,
     provider: $("#optProvider").value,
@@ -1496,6 +1530,9 @@ for (const id of ["#optVision", "#optCatalog", "#optGround", "#optFreecad"]) {
   $(id).onclick = () => {
     const on = $(id).classList.toggle("on");
     $(id).setAttribute("aria-checked", String(on));
+    // Turning FreeCAD on is the moment to ask what it has open - it may
+    // have been started, or a part opened, since the page loaded.
+    if (id === "#optFreecad" && on) loadDocuments();
   };
 }
 
@@ -2601,6 +2638,7 @@ I18N.onChange(relocalise);
   await loadHealth();
   await loadProviders();
   await loadExamples();
+  await loadDocuments();
   await loadHistory();
   setCode("");
   paramsReset();

@@ -272,6 +272,25 @@ MESSAGES: dict[str, dict[str, str]] = {
               "単一の形状になり、次の値は調整できなくなりました: {names}。"
               "部品そのものには影響ありません。",
     },
+    "freecad.attached": {
+        "en": "Working in {document}, the document you already had open. "
+              "It is saved as it stands before anything is changed, so "
+              "stepping back in the filmstrip goes back to your part.",
+        "ja": "すでに開いていたドキュメント {document} で作業します。変更前の"
+              "状態を保存するため、フィルムストリップで戻れば元の部品に"
+              "戻ります。",
+    },
+    "freecad.asfound": {
+        "en": "Your part as found: {size} mm. Everything after this is a "
+              "step away from it.",
+        "ja": "現在の部品: {size} mm。これ以降はすべてこの状態からの変更です。",
+    },
+    "freecad.nodocument": {
+        "en": "FreeCAD has no document called {document} open any more, so "
+              "this was built in a new one.",
+        "ja": "FreeCAD に {document} というドキュメントは開かれていないため、"
+              "新しいドキュメントで構築しました。",
+    },
     "freecad.offline": {
         "en": "FreeCAD is not reachable, so this run used the generating "
               "pipeline instead. Open FreeCAD, start the MCP addon's RPC "

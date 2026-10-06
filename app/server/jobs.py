@@ -117,6 +117,11 @@ class JobOptions:
     #: there: the run falls back to the pipeline and says so. Off never
     #: looks for FreeCAD at all.
     use_freecad: bool = FREECAD_DEFAULT
+    #: A document the engineer already has open, to work in rather than
+    #: making a new one. Empty means a new one, which is what a part built
+    #: from nothing needs. The name is checked against what FreeCAD reports
+    #: before it is used - it reaches FreeCAD, so it is not taken on trust.
+    freecad_document: str = ""
     #: How hard the agents are asked to think. A simple part answered at low
     #: effort arrives in a fraction of the time; a hard one is worth the wait.
     #: Empty leaves the choice to the backend, which reasons at its own
@@ -139,6 +144,7 @@ class JobOptions:
             use_catalog=bool(raw.get("use_catalog", True)),
             ground_dimensions=bool(raw.get("ground_dimensions", True)),
             use_freecad=bool(raw.get("use_freecad", FREECAD_DEFAULT)),
+            freecad_document=str(raw.get("freecad_document") or "")[:200],
             effort=normalise_effort(raw.get("effort")),
         )
 
@@ -373,11 +379,22 @@ class JobManager:
                     sink.emit(PHASE_JOB, STATUS_INFO,
                               i18n.t("freecad.offline", lang))
                 else:
+                    # A document the browser named is checked against what
+                    # FreeCAD actually has open before a single call reaches
+                    # it. Anything else is a name from a request deciding
+                    # which of somebody's files gets edited.
+                    wanted = job.options.freecad_document
+                    if wanted and wanted not in bridge.documents():
+                        sink.emit(PHASE_JOB, STATUS_INFO,
+                                  i18n.t("freecad.nodocument", lang,
+                                         document=wanted))
+                        wanted = ""
                     try:
                         freecad_run.serve(
                             ctx, job.prompt,
                             instrument.client_for(ctx),
-                            ctx.llm.generation_model, bridge=bridge)
+                            ctx.llm.generation_model, bridge=bridge,
+                            document=wanted)
                         job.source = "freecad"
                         job.converged = bool(ctx.versions[-1]["passed"])
                         job.design_plan = ctx.design_plan or {}

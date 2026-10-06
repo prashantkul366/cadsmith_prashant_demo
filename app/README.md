@@ -966,6 +966,24 @@ that is not running is not an error - the run says so on the log line and
 falls back to the pipeline, which is exactly what this app did before there
 was a FreeCAD road at all.
 
+**It can work in the part you already have open.** The composer's options
+carry a *Work in* picker, filled from what FreeCAD reports - `bracket_rev_c
+- 2 objects, 100 x 60 x 10 mm` rather than a bare name. Pick one and the run
+attaches to it instead of making a document of its own, which is the
+difference between a generator and an assistant: "add a pin boss on the far
+end" against the bracket on your screen, not a new bracket.
+
+Working in somebody's document means their work is at stake, so two things
+are not optional. **Their part is published first, untouched** - version 0
+is what was on screen when they asked, with its own STEP, its own
+`part.FCStd` and its own measurements, so stepping back in the filmstrip
+goes back to their part rather than to the first thing this app made. And
+**the request is read as a change, not a specification**: no plan is asked
+for, the builder is given the part as it stands and the edit vocabulary.
+The document name is checked against what FreeCAD actually has open before
+a single call reaches it - a name from a request does not get to choose
+which of somebody's files gets edited.
+
 **Check the health panel first.** It carries a `freecad` row saying either
 `connected at 127.0.0.1:9875` or `not running at ...`, and it reads not-ok
 when FreeCAD is wanted and absent - because a run that was meant to be built

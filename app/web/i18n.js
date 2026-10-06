@@ -227,6 +227,18 @@ const I18N = (function () {
     /* ── kernel facts ───────────────────────────────────────────────── */
     "facts.updated":    ["Model updated", "モデルを更新しました"],
     "opt.freecad":      ["Build in FreeCAD", "FreeCAD で構築"],
+    "opt.document":     ["Work in", "作業対象"],
+    "opt.document.tip": [
+      "Work in a document you already have open in FreeCAD, instead of a "
+      + "new one. It is saved as it stands before anything is changed, so "
+      + "stepping back in the filmstrip goes back to your part.",
+      "新しいドキュメントではなく、FreeCAD ですでに開いているドキュメントで"
+      + "作業します。変更前の状態を保存するため、フィルムストリップで戻れば"
+      + "元の部品に戻ります。"],
+    "opt.document.new": ["A new document", "新しいドキュメント"],
+    "opt.document.one": ["{name} - {n} object(s), {size} mm",
+                         "{name} — オブジェクト {n} 個、{size} mm"],
+    "opt.document.empty": ["{name} - empty", "{name} — 空"],
     "opt.freecad.tip":  [
       "Build the part in a running FreeCAD instead of generating a script. "
       + "Needs FreeCAD open with the MCP addon's RPC server started; "

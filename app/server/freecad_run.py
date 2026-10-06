@@ -74,6 +74,49 @@ def available(bridge: Optional[freecad.Bridge] = None) -> bool:
     return (bridge or bridge_from_env()).alive()
 
 
+def open_documents(bridge: Optional[freecad.Bridge] = None) -> list[dict]:
+    """What the engineer already has open, enough to choose between.
+
+    The difference between a generator and an assistant is which document it
+    works in. This app has always made its own; an engineer wants the one on
+    their screen. Each entry carries what it is rather than only its name,
+    because "bracket_rev_c" and "Unnamed001" are both names and only one of
+    them tells you anything.
+
+    Never raises: a FreeCAD that is not running is an empty list, which is
+    what a picker should show.
+    """
+    bridge = bridge or bridge_from_env()
+    try:
+        names = bridge.documents()
+    except freecad.FreeCADError:
+        return []
+
+    found: list[dict] = []
+    for name in names:
+        entry = {"name": name, "objects": 0, "solids": 0, "size_mm": None,
+                 "volume_mm3": None}
+        try:
+            entry["objects"] = len(bridge.objects(name))
+            solids = bridge.measure(name).get("solids", [])
+            entry["solids"] = len(solids)
+            if solids:
+                entry["size_mm"] = [round(v, 2) for v in solids[0]["bbox"]]
+                entry["volume_mm3"] = round(solids[0]["volume"], 1)
+        except freecad.FreeCADError:
+            pass    # listed anyway: a document we cannot measure is still open
+        found.append(entry)
+    return found
+
+
+def holds_a_part(bridge: freecad.Bridge, document: str) -> bool:
+    """Whether this document already has something built in it."""
+    try:
+        return bool(bridge.measure(document).get("solids"))
+    except freecad.FreeCADError:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # The record of a build
 # ---------------------------------------------------------------------------
@@ -161,8 +204,16 @@ def facts(step: Path) -> dict:
 
 def serve(ctx: RunContext, prompt: str, client: Any, model: str,
           bridge: Optional[freecad.Bridge] = None,
-          max_steps: int = builder.MAX_STEPS) -> dict:
+          max_steps: int = builder.MAX_STEPS,
+          document: str = "") -> dict:
     """Plan it, build it in FreeCAD, measure it, and publish the version.
+
+    ``document`` attaches the run to one the engineer already has open
+    instead of making a new one. That is the whole difference between a
+    generator and an assistant, and it changes what the run *is*: a document
+    that already holds a part is not built from nothing, it is changed - so
+    the part as found is published first, and the request is carried out
+    against it.
 
     Raises if FreeCAD will not build it, which the caller treats the way it
     treats a catalogue part that will not build here: by falling through to
@@ -175,6 +226,14 @@ def serve(ctx: RunContext, prompt: str, client: Any, model: str,
     ctx.source = "freecad"
     ctx.method = "tools"
     started = time.time()
+
+    # Working in somebody's document. Publish what is there before touching
+    # it: the filmstrip then opens on their part, every version after is a
+    # step away from it, and going back is going back to their work rather
+    # than to the first thing this app made.
+    if document and holds_a_part(bridge, document):
+        return attached(ctx, prompt, client, model, bridge, document,
+                        max_steps=max_steps)
 
     # One budget, counted here. The build loop reports its own tokens and
     # the planning call reports its own; the pipeline's module-level
@@ -226,8 +285,8 @@ def serve(ctx: RunContext, prompt: str, client: Any, model: str,
         return ""
 
     session, transcript = builder.build(
-        bridge, prompt, client, model, design, on_step=step_done,
-        max_steps=max_steps, before_call=still_going)
+        bridge, prompt, client, model, design, document=document,
+        on_step=step_done, max_steps=max_steps, before_call=still_going)
     charge({"input_tokens": transcript.input_tokens,
             "output_tokens": transcript.output_tokens,
             "calls": transcript.calls})
@@ -380,6 +439,56 @@ def declared_from(record: dict) -> list[dict]:
              "scale": float(entry.get("scale") or 1.0)}
             for entry in (record.get("parameters") or [])
             if entry.get("object") and entry.get("property")]
+
+
+def attached(ctx: RunContext, prompt: str, client: Any, model: str,
+             bridge: freecad.Bridge, document: str,
+             max_steps: int = builder.MAX_STEPS) -> dict:
+    """Work in a document the engineer already had open.
+
+    Two things make this different from a build, and both are about whose
+    work it is.
+
+    *Their part is published first, untouched.* Version 0 is what was on
+    their screen when they asked - its geometry, its document, its
+    measurements. Everything after is a step away from it, and going back in
+    the filmstrip goes back to their work rather than to the first thing
+    this app made. Without that, an assistant that changes somebody's model
+    is a tool you can only use on work you are willing to lose.
+
+    *The request is a change, not a specification.* "Add a gusset" against
+    an open bracket is not a part description, so the builder is given the
+    part as it stands and the edit vocabulary, not the Planner's plan.
+    """
+    lang = ctx.lang
+    session = freecad_tools.Session(bridge, document)
+
+    ctx.emit(PHASE_FREECAD, STATUS_STARTED,
+             i18n.t("freecad.attached", lang, document=document),
+             document=document, attached=True)
+
+    # Their part, as found. Published before anything is called.
+    found = publish(
+        ctx, session, prompt, {}, bridge,
+        tokens={"input_tokens": 0, "output_tokens": 0, "calls": 0},
+        source="freecad", method="as found",
+        detail={"document": document, "attached": True, "as_found": True,
+                "steps": 0, "calls": 0})
+    ctx.emit(PHASE_FREECAD, STATUS_INFO,
+             i18n.t("freecad.asfound", lang,
+                    size=" x ".join(f"{v:g}" for v in (
+                        found["geometry"]["bounding_box"]["xlen"],
+                        found["geometry"]["bounding_box"]["ylen"],
+                        found["geometry"]["bounding_box"]["zlen"]))),
+             iteration=ctx.iteration)
+
+    # Now the change, against that.
+    ctx.iteration += 1
+    changed = amend(ctx, ctx.version_dir(found["iteration"]), prompt, client,
+                    model, prompt, design=None, bridge=bridge,
+                    max_steps=max_steps)
+    changed["freecad"]["attached"] = True
+    return changed
 
 
 EDIT_SYSTEM = """You change a mechanical part that is already built in FreeCAD.

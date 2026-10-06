@@ -682,6 +682,27 @@ async def replay_job(job_id: str, request: Request) -> JSONResponse:
     return JSONResponse({"job": job.summary()}, status_code=201)
 
 
+@app.get("/api/freecad/documents")
+def freecad_documents() -> JSONResponse:
+    """What FreeCAD has open, so a run can be pointed at one of them.
+
+    The difference between a generator and an assistant is which document it
+    works in, and only FreeCAD knows what is on the engineer's screen. Each
+    entry carries what the document holds rather than only its name, because
+    "Unnamed001" is a name and tells you nothing.
+
+    Always answers, with an empty list when FreeCAD is not running: a picker
+    with nothing in it is the right thing to show, not an error.
+    """
+    if not FREECAD_DEFAULT:
+        return JSONResponse({"available": False, "documents": []})
+    bridge = freecad_run.bridge_from_env()
+    if not bridge.alive(timeout=1.5):
+        return JSONResponse({"available": False, "documents": []})
+    return JSONResponse({"available": True,
+                         "documents": freecad_run.open_documents(bridge)})
+
+
 @app.get("/api/providers")
 def list_providers(models: bool = False) -> JSONResponse:
     """Which model backends are available, and what they serve.

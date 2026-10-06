@@ -204,6 +204,13 @@
                 title="Build the part in a running FreeCAD instead of generating a script. Needs FreeCAD open with the MCP addon's RPC server started; without it the run falls back to the pipeline.">Build in FreeCAD</span>
           <span class="sw on" id="optFreecad" role="switch" aria-checked="true" tabindex="0"></span>
         </div>
+        <!-- Which document. An assistant works in the one you have open;
+             only FreeCAD knows what that is, so this is filled from it. -->
+        <div class="opt" id="optDocRow" hidden>
+          <span data-i18n="opt.document" data-i18n-title="opt.document.tip"
+                title="Work in a document you already have open in FreeCAD. It is saved as it stands before anything is changed.">Work in</span>
+          <select id="optDocument"></select>
+        </div>
       </div>
       <!-- Everything that decides how a run is made, one click from the
          composer rather than always on screen. -->

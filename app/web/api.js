@@ -33,6 +33,11 @@ const API = (() => {
     providers: (withModels) =>
       json(`/api/providers${withModels ? "?models=true" : ""}`),
 
+    /* What FreeCAD has open, so a run can be pointed at the document the
+       engineer is actually looking at. Empty when FreeCAD is not running,
+       which is an ordinary state and not an error. */
+    freecadDocuments: () => json("/api/freecad/documents"),
+
     /* The key is posted once and held in server memory. It is never stored,
        never logged, and never sent back — the reply says only whether the
        provider is usable now. */

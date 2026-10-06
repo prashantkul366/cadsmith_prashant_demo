@@ -274,6 +274,48 @@ def main() -> int:
     check("and no version was left behind for it",
           not (job_dir / "v3" / "model.step").exists())
 
+    print("\nWorking in a document the engineer already had open")
+    # The difference between a generator and an assistant. Their part is
+    # published untouched first, so stepping back goes back to their work.
+    engineers = version["freecad"]["document"]
+    listed = freecad_run.open_documents(bridge)
+    check("what FreeCAD has open can be listed, with what it holds",
+          any(d["name"] == engineers and d["objects"] for d in listed),
+          ", ".join(f"{d['name']} ({d['objects']} obj)" for d in listed))
+    check("and a document with a part in it is recognised as holding one",
+          freecad_run.holds_a_part(bridge, engineers))
+
+    Endpoint.seen = []
+    Endpoint.script = [
+        {"tool": "find_features", "arguments": {}},
+        {"tool": "add_shape", "arguments": {
+            "kind": "Part::Cylinder", "name": "Pin",
+            "Radius": 4, "Height": 40, "position": [20, 25, -5]}},
+        {"content": "Added a 8 mm pin boss."},
+    ]
+    theirs = Path(tempfile.mkdtemp(prefix="cadsmith_theirs_"))
+    sink2 = EventSink(path=theirs / "events.jsonl")
+    ctx2 = RunContext(sink=sink2, job_dir=theirs, part_name="part",
+                      prompt="add a pin boss")
+    after = freecad_run.serve(ctx2, "add a pin boss", client, "fake",
+                              bridge=bridge, document=engineers)
+    check("their part was published before anything touched it",
+          (theirs / "v0" / "model.step").exists()
+          and ctx2.versions[0]["method"] == "as found",
+          ctx2.versions[0]["method"])
+    check("and the version after it is the change",
+          after["iteration"] == 1 and after["source"] == "edit",
+          f"v{after['iteration']} {after['source']}/{after['method']}")
+    check("the run says which document it worked in",
+          after["freecad"]["attached"] is True
+          and after["freecad"]["document"] == engineers,
+          after["freecad"]["document"])
+    check("their document was saved as found, so going back is their part",
+          (theirs / "v0" / "part.FCStd").exists())
+    check("nothing was built from nothing - no plan was asked for",
+          not any(e.phase == "plan" for e in sink2.all()),
+          ", ".join(sorted({e.phase for e in sink2.all()})))
+
     print("\nWhat cannot be done is refused, not half done")
     try:
         freecad_run.reapply(ctx, v0, {"made_up": 5}, PROMPT, bridge=bridge)
