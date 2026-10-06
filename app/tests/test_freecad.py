@@ -146,6 +146,15 @@ class StandIn:
         return base64.b64encode(b"\x89PNG\r\n\x1a\n fake").decode()
 
 
+def _compiles(code: str) -> bool:
+    """Would FreeCAD's interpreter accept this at all?"""
+    try:
+        compile(code, "<freecad>", "exec")
+        return True
+    except SyntaxError:
+        return False
+
+
 def serve(handler) -> tuple[SimpleXMLRPCServer, int]:
     server = SimpleXMLRPCServer(("127.0.0.1", 0), allow_none=True,
                                 logRequests=False)
@@ -227,6 +236,25 @@ def main() -> int:
     check("FreeCAD's own numbers come back too, as a sanity check",
           measured["solids"] and measured["solids"][0]["volume"] == 1000.0,
           str(measured["solids"][0] if measured["solids"] else None))
+
+    print("\nThe Python it sends FreeCAD is valid Python")
+    # This is the check that was missing. The scripts are assembled from a
+    # shared preamble and an f-string, and the first version indented the
+    # template around a preamble that was already flush left - textwrap
+    # then dedented nothing and FreeCAD answered with an IndentationError
+    # on line 2. Compiling here costs nothing and catches the whole class.
+    sent = [call for call in stand_in.calls if call[0] == "execute_code"]
+    check("every script sent so far compiles",
+          all(_compiles(call[1]) for call in sent),
+          f"{len(sent)} script(s)")
+    for kind in ("step", "stl", "brep"):
+        bridge.fetch(doc, kind)
+    broken = [call[1] for call in stand_in.calls
+              if call[0] == "execute_code" and not _compiles(call[1])]
+    check("including every export format, not just the one we tried",
+          not broken, (broken[0].strip().splitlines() or [""])[0] if broken else "")
+    check("and the measurement script",
+          _compiles(stand_in.calls[-1][1]) if stand_in.calls else False)
 
     print("\nFailures arrive as failures")
     try:

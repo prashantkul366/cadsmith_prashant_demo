@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import base64
 import re
-import textwrap
 import xmlrpc.client
 from pathlib import Path
 from typing import Any, Optional
@@ -60,6 +59,38 @@ _MARK_OPEN, _MARK_CLOSE = "<<<CADSMITH:", ":CADSMITH>>>"
 #: the payload was JSON.
 _PAYLOAD = re.compile(re.escape(_MARK_OPEN) + r"(.*?)" + re.escape(_MARK_CLOSE),
                       re.DOTALL)
+
+
+#: Every script below opens with this. Objects nothing else consumes: a Cut
+#: keeps its two operands in the document, and exporting all three would
+#: hand back the part plus the tool that made it. FreeCAD records the
+#: dependency the other way round in ``InList``, so an empty InList means
+#: "nobody builds on this" - which is the finished part.
+#:
+#: Flush left, and concatenated rather than interpolated into an indented
+#: template. textwrap.dedent finds the common leading whitespace of the
+#: whole string, so one block already at column 0 makes it dedent nothing
+#: and the surrounding lines keep their indent - which FreeCAD rejects with
+#: an IndentationError on line 2.
+_TIPS = """
+import FreeCAD
+
+
+def _tips(doc):
+    out = []
+    for obj in doc.Objects:
+        shape = getattr(obj, "Shape", None)
+        if shape is None or shape.isNull():
+            continue
+        if getattr(obj, "InList", None):
+            continue
+        out.append(obj)
+    if not out:
+        out = [o for o in doc.Objects
+               if getattr(o, "Shape", None) is not None
+               and not o.Shape.isNull()]
+    return out
+"""
 
 
 class FreeCADError(RuntimeError):
@@ -224,27 +255,6 @@ class Bridge:
 
     # -- getting the geometry out -------------------------------------------
 
-    #: Objects nothing else consumes. A Cut keeps its two operands in the
-    #: document, and exporting all three would hand back the part plus the
-    #: tool that made it. FreeCAD records the dependency the other way round
-    #: in ``InList``, so an empty InList means "nobody builds on this" -
-    #: which is the finished part.
-    _TIPS = textwrap.dedent("""
-        def _tips(doc):
-            out = []
-            for obj in doc.Objects:
-                shape = getattr(obj, "Shape", None)
-                if shape is None or shape.isNull():
-                    continue
-                if getattr(obj, "InList", None):
-                    continue
-                out.append(obj)
-            if not out:
-                out = [o for o in doc.Objects
-                       if getattr(o, "Shape", None) is not None
-                       and not o.Shape.isNull()]
-            return out
-    """)
 
     def fetch(self, document: str, kind: str = "step",
               timeout: Optional[float] = None) -> bytes:
@@ -269,22 +279,19 @@ class Bridge:
                      'Part.makeCompound([s.Shape for s in shapes]).exportBrep(path)'),
         }[suffix]
 
-        code = textwrap.dedent(f"""
-            import base64, os, tempfile
-            import FreeCAD
-            {self._TIPS}
-            doc = FreeCAD.getDocument({document!r})
-            shapes = _tips(doc)
-            if not shapes:
-                raise RuntimeError("that document has no solid to export")
-            path = os.path.join(tempfile.gettempdir(),
-                                "cadsmith_export.{suffix}")
-            {write}
-            with open(path, "rb") as handle:
-                blob = base64.b64encode(handle.read()).decode("ascii")
-            os.remove(path)
-            print({_MARK_OPEN!r} + blob + {_MARK_CLOSE!r})
-        """)
+        code = _TIPS + f"""
+import base64, os, tempfile
+doc = FreeCAD.getDocument({document!r})
+shapes = _tips(doc)
+if not shapes:
+    raise RuntimeError("that document has no solid to export")
+path = os.path.join(tempfile.gettempdir(), "cadsmith_export.{suffix}")
+{write}
+with open(path, "rb") as handle:
+    blob = base64.b64encode(handle.read()).decode("ascii")
+os.remove(path)
+print({_MARK_OPEN!r} + blob + {_MARK_CLOSE!r})
+"""
         printed = self.run(code, timeout=timeout)
         found = _PAYLOAD.search(printed)
         if not found:
@@ -308,23 +315,21 @@ class Bridge:
         exported solid, by ``spec.measure_step`` - FreeCAD's own numbers are
         a sanity check, not evidence.
         """
-        code = textwrap.dedent(f"""
-            import json
-            import FreeCAD
-            {self._TIPS}
-            doc = FreeCAD.getDocument({document!r})
-            shapes = _tips(doc)
-            out = []
-            for obj in shapes:
-                box = obj.Shape.BoundBox
-                out.append({{"name": obj.Name, "label": obj.Label,
-                             "volume": obj.Shape.Volume,
-                             "area": obj.Shape.Area,
-                             "faces": len(obj.Shape.Faces),
-                             "valid": obj.Shape.isValid(),
-                             "bbox": [box.XLength, box.YLength, box.ZLength]}})
-            print({_MARK_OPEN!r} + json.dumps(out) + {_MARK_CLOSE!r})
-        """)
+        code = _TIPS + f"""
+import json
+doc = FreeCAD.getDocument({document!r})
+shapes = _tips(doc)
+out = []
+for obj in shapes:
+    box = obj.Shape.BoundBox
+    out.append({{"name": obj.Name, "label": obj.Label,
+                 "volume": obj.Shape.Volume,
+                 "area": obj.Shape.Area,
+                 "faces": len(obj.Shape.Faces),
+                 "valid": obj.Shape.isValid(),
+                 "bbox": [box.XLength, box.YLength, box.ZLength]}})
+print({_MARK_OPEN!r} + json.dumps(out) + {_MARK_CLOSE!r})
+"""
         import json
         printed = self.run(code)
         found = _PAYLOAD.search(printed)
