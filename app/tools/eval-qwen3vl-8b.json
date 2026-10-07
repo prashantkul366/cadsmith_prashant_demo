@@ -1001,7 +1001,7 @@
       "iterations": 0,
       "llm_calls": 0,
       "tokens": 3873,
-      "error": "RuntimeError: custom returned 502 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html class=\"no-js ie8 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if gt IE 8]><!--> <html class=\"no-js\" lang=\"en-US\"> <!--<![endif]-->\n<head>\n\n<title>trycloudflare.com | 502: Bad gateway</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" c"
+      "error": "RuntimeError: custom returned 502 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 7]>    <html class=\"no-js ie7 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if IE 8]>    <html class=\"no-js ie8 oldie\" lang=\"en-US\"> <![endif]-->\n<!--[if gt IE 8]><!--> <html class=\"no-js\" lang=\"en-US\"> <!--<![endif]-->\n<head>\n\n<title>the-endpoint.example | 502: Bad gateway</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" c"
     },
     {
       "id": "heat-sink",
@@ -1018,7 +1018,7 @@
       "iterations": 0,
       "llm_calls": 0,
       "tokens": 0,
-      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | the-endpoint.example | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
     },
     {
       "id": "enclosure-lid",
@@ -1035,7 +1035,7 @@
       "iterations": 0,
       "llm_calls": 0,
       "tokens": 0,
-      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | the-endpoint.example | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
     },
     {
       "id": "manifold",
@@ -1052,7 +1052,7 @@
       "iterations": 0,
       "llm_calls": 0,
       "tokens": 0,
-      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | the-endpoint.example | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
     },
     {
       "id": "vee-pulley",
@@ -1069,7 +1069,7 @@
       "iterations": 0,
       "llm_calls": 0,
       "tokens": 0,
-      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | the-endpoint.example | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
     },
     {
       "id": "planet-carrier",
@@ -1086,7 +1086,7 @@
       "iterations": 0,
       "llm_calls": 0,
       "tokens": 0,
-      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | the-endpoint.example | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
     },
     {
       "id": "helical-gear",
@@ -1103,7 +1103,7 @@
       "iterations": 0,
       "llm_calls": 0,
       "tokens": 0,
-      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | the-endpoint.example | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
     },
     {
       "id": "moulded-cover",
@@ -1120,7 +1120,7 @@
       "iterations": 0,
       "llm_calls": 0,
       "tokens": 0,
-      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | the-endpoint.example | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
     },
     {
       "id": "spline-hub",
@@ -1137,7 +1137,7 @@
       "iterations": 0,
       "llm_calls": 0,
       "tokens": 0,
-      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | mothers-profession-discover-chosen.trycloudflare.com | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
+      "error": "RuntimeError: custom returned 530 for model 'Qwen/Qwen3-VL-8B-Instruct': <!DOCTYPE html>\n\n\n\n <html class=\"no-js\" lang=\"en-US\"> \n<head>\n<title>Cloudflare Tunnel error | the-endpoint.example | Cloudflare</title>\n<meta charset=\"UTF-8\" />\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\n<meta name=\"robots\" content=\"noindex, nofollow\" />\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />\n<link rel=\"stylesheet\" id=\"cf_styles-css\" href=\"/cdn-cgi/styles/main.css\" />\n\n\n<script>\n(function(){if(document.addEventListener&&window.XMLHttpRequest&&JSON&&"
     }
   ]
 }

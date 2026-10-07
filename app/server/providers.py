@@ -28,6 +28,7 @@ browser.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -757,6 +758,73 @@ def _as_tool_call(payload: dict) -> list[ToolCall]:
     return [ToolCall(name=str(name), arguments=arguments, id="improvised")]
 
 
+def _plain(value: Any) -> Any:
+    """Tuples and sets become lists, so what comes out is JSON-shaped."""
+    if isinstance(value, dict):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_plain(item) for item in value]
+    return value
+
+
+def _loose_object(chunk: str) -> Optional[Any]:
+    """One object, read as JSON if it is JSON and as Python if it is not.
+
+    A model writing a call by hand writes Python: ``(0, 0)`` for a point,
+    single quotes, ``True``. ``literal_eval`` reads exactly those and
+    nothing that can run - no calls, no names, no attribute access - so it
+    is the right reader for a chunk of somebody else's text.
+    """
+    try:
+        return json.loads(chunk)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    try:
+        return _plain(ast.literal_eval(chunk))
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        return None
+
+
+def _json_objects(text: str) -> list[Any]:
+    """Every brace-balanced object a reply carries, in the order written.
+
+    Measured on an 8B asked for a 300 mm plate: it answered with an
+    extrude_profile and a pattern_circular, one JSON object per line, and
+    wrote the profile's points as Python tuples. Read as a single JSON
+    document that is a syntax error, and both calls were dropped - after
+    the loop had asked it twice to reply in exactly that shape.
+
+    Only a double quote opens a string here. JSON has no other kind, and
+    treating an apostrophe as one loses every call in a reply that says
+    "here's the call".
+    """
+    found: list[Any] = []
+    depth, start, in_string, escaped = 0, -1, False, False
+    for at, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = at
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                parsed = _loose_object(text[start:at + 1])
+                if parsed is not None:
+                    found.append(parsed)
+                start = -1
+    return found
+
+
 def _call_in_text(text: str, tools: list) -> list[ToolCall]:
     """A tool call a model wrote into its reply instead of calling.
 
@@ -780,14 +848,25 @@ def _call_in_text(text: str, tools: list) -> list[ToolCall]:
     if not tools or not text or not text.strip():
         return []
     offered = {t.get("name") for t in tools if isinstance(t, dict)}
-    try:
-        payload = json.loads(repair_json(text))
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return []
-    meant_a_call = (isinstance(payload, dict) and "tool" in payload
-                    and isinstance(payload.get("arguments"), dict))
-    return [call for call in _as_tool_call(payload)
-            if call.name in offered or meant_a_call]
+
+    payloads = _json_objects(text)
+    if not payloads:
+        # Nothing brace-balanced survived, so fall back to the whole reply
+        # read as one document, which is what a fenced object needs.
+        try:
+            payloads = [json.loads(repair_json(text))]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return []
+
+    calls: list[ToolCall] = []
+    for payload in payloads:
+        # An explicit "tool" key is the signal, with or without arguments:
+        # a model that asks for a tool that does not exist has to be told
+        # so by name, and a Planner's design plan has no such key at all.
+        meant_a_call = isinstance(payload, dict) and "tool" in payload
+        calls += [call for call in _as_tool_call(payload)
+                  if call.name in offered or meant_a_call]
+    return calls
 
 
 _JSON_EXPECTED = "Output ONLY valid JSON"
@@ -1029,10 +1108,12 @@ class OpenAICompatibleClient:
                 target, payload_messages, max_tokens, role, wire)
 
         if improvise:
-            try:
-                calls = _as_tool_call(json.loads(repair_json(text)))
-            except (json.JSONDecodeError, TypeError):
-                calls = []   # prose, which the loop reads as "finished"
+            # The same reader as the road below. Two readers meant two
+            # answers to "is this a call": this one parsed the reply as a
+            # single JSON document, so a model that wrote two objects had
+            # its second call silently dropped, and one that wrote its
+            # points as Python tuples had both dropped.
+            calls = _call_in_text(text, tools)
         elif _JSON_EXPECTED in system:
             text = repair_json(text)
 

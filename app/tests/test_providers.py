@@ -29,6 +29,7 @@ from app.server.jobs import (  # noqa: E402
     JobManager, JobOptions, STATUS_DONE, STATUS_ERROR)
 from app.server.providers import (  # noqa: E402
     LLMConfig, OpenAICompatibleClient, repair_json)
+from app.server.providers import _call_in_text  # noqa: E402
 
 PROMPT = "A flat washer, 20mm outer diameter, 10.5mm bore, 2mm thick."
 
@@ -172,6 +173,33 @@ def main() -> int:
     clean = '{"already": "fine"}'
     check("a clean reply is untouched", repair_json(clean) == clean)
     check("non-JSON is returned as-is", repair_json("no object here") == "no object here")
+
+    print("\nA call a model wrote out instead of calling")
+    offered = [{"name": "extrude_profile"}, {"name": "pattern_circular"},
+               {"name": "add_shape"}]
+    two = ('{"tool": "extrude_profile", "arguments": {"depth": 25, '
+           '"points": [(0, 0), (300, 0), (300, 300)]}}\n'
+           '{"tool": "pattern_circular", "arguments": {"count": 8}}')
+    read = _call_in_text(two, offered)
+    check("two objects in one reply are both read",
+          [c.name for c in read] == ["extrude_profile", "pattern_circular"],
+          str([c.name for c in read]))
+    check("and Python tuples in the points survive as a list",
+          read and read[0].arguments.get("points") == [[0, 0], [300, 0], [300, 300]],
+          str(read and read[0].arguments.get("points")))
+    check("a call wrapped in prose is still found",
+          [c.name for c in _call_in_text(
+              'Here is the call: {"tool": "add_shape", "arguments": '
+              '{"kind": "Part::Box"}}', offered)] == ["add_shape"])
+    check("a brace inside a string does not end the object",
+          _call_in_text('{"tool": "add_shape", "arguments": '
+                        '{"name": "a}b"}}', offered)[0]
+          .arguments.get("name") == "a}b")
+    check("prose with no call is not read as one",
+          _call_in_text("I have finished the part.", offered) == [])
+    check("and a design plan is not mistaken for a call",
+          _call_in_text('{"description": "a plan", "components": ["a"]}',
+                        offered) == [])
 
     print("\nProvider registry")
     providers.set_session_key("custom", api_key="test-key", base_url=base_url)

@@ -223,6 +223,25 @@ def main() -> int:
     check("the refusal was paid for once, not on every step", rejected == 1,
           f"{rejected} request(s) carried tools")
 
+    print("\nTwo calls in one reply, written the way a model writes them")
+    # An 8B asked for a 300mm plate answered with two objects, one per
+    # line, and wrote the second in Python rather than JSON. Read as one
+    # JSON document that is a syntax error, and both calls were dropped -
+    # after the loop had asked it twice to reply in exactly that shape.
+    together = [
+        {"content": '{"tool": "add_box", "arguments": {"name": "Plate", '
+                    '"length": 60, "width": 40, "height": 12}}\n'
+                    "{'tool': 'drill', 'arguments': {'name': 'Plate', "
+                    "'diameter': 6}}"},
+        {"content": json.dumps({"done": True, "answer": "Both done."})},
+    ]
+    run, model = run_against(port, together, supported=False)
+    check("both calls in one reply are taken, not dropped",
+          len(run.steps) == 2 and all(s.ok for s in run.steps),
+          f"{len(run.steps)} step(s): {[s.error or s.name for s in run.steps]}")
+    check("and the second, written in Python, did its work too",
+          model["cuts"] == 1, str(model["cuts"]))
+
     print("\nWhat the model makes up is refused, by name")
     run, _ = run_against(port, [
         {"tool": "emboss_logo", "arguments": {"name": "Plate", "text": "Y"}},
