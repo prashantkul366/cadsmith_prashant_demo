@@ -35,7 +35,12 @@ real kernel.
 | Solids watertight | **61 of 61** |
 | Drawing sheets produced | **61 of 61** |
 | Parts with working parameter sliders | 14 |
-| Kernel time, all 61 | 410 s |
+| Kernel time, all 61 | 390-410 s |
+
+Run twice: once before the vocabulary work below and once after it, because
+the thread change rewrote `_hole_size`, which every tapped hole goes
+through. Both runs: 61 clean, 931 of 931 calls, 401 holes, 61 watertight,
+61 sheets, 14 parts with sliders, 0 refusals. No number moved.
 
 The calls in this run were written by hand, one list per prompt. That is
 a statement about the *vocabulary* - every one of the 61 parts is
