@@ -299,6 +299,14 @@ def check_configuration(args) -> dict:
     return {"config": config, "providers": providers}
 
 
+#: How a timed-out probe says so, so a caller can tell "slow" from "broken"
+#: without matching on prose. The two are not the same answer: an endpoint
+#: that has already answered one call is not a broken layer, it is a slow
+#: one, and telling someone to fix it before starting the app sends them
+#: hunting a fault that is not there.
+_TIMED_OUT = "no response"
+
+
 def _chat(config, model: str, messages: list, timeout: float,
           max_tokens: int = 32) -> tuple[bool, str, float, str]:
     """One raw chat call. Returns (ok, text, seconds, error)."""
@@ -316,7 +324,8 @@ def _chat(config, model: str, messages: list, timeout: float,
                   "max_tokens": max_tokens, "temperature": 0},
             timeout=timeout)
     except httpx.TimeoutException:
-        return False, "", time.time() - started, f"no response within {timeout:.0f}s"
+        return (False, "", time.time() - started,
+                f"{_TIMED_OUT} within {timeout:.0f}s")
     except httpx.HTTPError as exc:
         return False, "", time.time() - started, f"{type(exc).__name__}: {exc}"
 
@@ -384,7 +393,16 @@ def check_models(args, resolved: dict) -> None:
         [{"role": "system", "content": "Output ONLY valid JSON, no other text."},
          {"role": "user", "content": 'Return {"ok": true} and nothing else.'}],
         args.timeout, max_tokens=200)
-    if not good:
+    if not good and _TIMED_OUT in error:
+        # The call before this one answered, so the endpoint works and this
+        # is slowness. A longer reply from a small model behind a tunnel
+        # goes past 30s without anything being wrong.
+        warn("strict JSON reply", f"{error} - the reply before this one "
+             f"arrived, so the endpoint is slow rather than broken",
+             "Raise --timeout, or serve a faster model. "
+             "The app itself waits CADSMITH_LLM_TIMEOUT (600s by default) "
+             "and retries a tunnel that gives up.")
+    elif not good:
         fail("strict JSON reply", error)
     else:
         from app.server.providers import repair_json
