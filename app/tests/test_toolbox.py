@@ -225,13 +225,32 @@ def main() -> int:
 
     print("\nWhat the model makes up is refused, by name")
     run, _ = run_against(port, [
-        {"tool": "add_hole", "arguments": {"name": "Plate", "diameter": 6}},
+        {"tool": "emboss_logo", "arguments": {"name": "Plate", "text": "Y"}},
         {"content": "sorry"}], supported=True)
     check("an invented tool is refused before anything runs",
-          run.steps[0].error and "no tool called 'add_hole'" in run.steps[0].error,
+          run.steps[0].error and "no tool called 'emboss_logo'" in run.steps[0].error,
           run.steps[0].error[:80])
     check("and the refusal lists what does exist",
           "add_box" in run.steps[0].error and "drill" in run.steps[0].error)
+
+    # A name that is not invented, only remembered from the FreeCAD API, is
+    # a different thing. Three reminders will not teach an 8B a vocabulary
+    # it is not reading, and `Part.makeBox` is not ambiguous: it is
+    # translated, with the primitive the name already states filled in.
+    print("\nA name remembered from the API is translated, not refused")
+    run, _ = run_against(port, [
+        {"tool": "add_box", "arguments": {"name": "Plate", "length": 10,
+                                          "width": 10, "height": 10}},
+        {"tool": "add_hole", "arguments": {"name": "Plate", "diameter": 6}},
+        {"content": "done"}], supported=True)
+    check("add_hole runs drill rather than being refused",
+          len(run.steps) == 2 and run.steps[1].ok,
+          run.steps[1].error if len(run.steps) > 1 else str(run.steps))
+    check("and a wrong argument is named after the real tool",
+          "drill" in (run_against(port, [
+              {"tool": "add_hole", "arguments": {"name": "P", "bore": 6}},
+              {"content": "x"}], supported=True)[0].steps[0].error or ""),
+          "")
 
     run, _ = run_against(port, [
         {"tool": "add_box", "arguments": {"name": "P", "length": 1, "width": 1,

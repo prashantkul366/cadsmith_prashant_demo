@@ -441,6 +441,11 @@ class Session:
                 f"{kind!r} is not one of the shapes offered here. There is: "
                 + ", ".join(PRIMITIVES)
                 + ". For anything else use run_python.")
+        # FreeCAD spells these Length, Width, Height; a model writing from
+        # memory spells them length, width, height, and a cube refused for
+        # the case of its own letters is a round trip spent on nothing.
+        wanted = {p.lower(): p for p in PRIMITIVES[kind]}
+        sizes = {wanted.get(str(k).lower(), k): v for k, v in sizes.items()}
         needed = [p for p in PRIMITIVES[kind] if p not in sizes]
         if needed:
             raise ToolError(f"{kind} needs {', '.join(needed)}")

@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import cadquery as cq  # noqa: E402
 
-from app.server import freecad, freecad_tools  # noqa: E402
+from app.server import freecad, freecad_tools, toolbox  # noqa: E402
 from app.server.toolbox import ToolError  # noqa: E402
 from app.tests.test_freecad import StandIn, serve  # noqa: E402
 
@@ -255,6 +255,33 @@ def main() -> int:
           names[-1] == "run_python", names[-1])
     check("every tool carries a description the model can act on",
           all(len(t.description) > 40 for t in box.tools.values()))
+
+    print("\nEvery alias points at a tool that exists, and fits it")
+    stale = [wrong for wrong, (real, _) in toolbox.ALIASES.items()
+             if real not in box.tools]
+    check("no alias names a tool that is not offered", not stale, str(stale))
+    wrong_args = []
+    for wrong, (real, extra) in toolbox.ALIASES.items():
+        takes = (box.tools[real].parameters.get("properties") or {})
+        for key, value in extra.items():
+            allowed = (takes.get(key) or {}).get("enum")
+            if key not in takes or (allowed and value not in allowed):
+                wrong_args.append(f"{wrong} -> {real}.{key}={value}")
+    check("and what an alias fills in is an argument that tool takes",
+          not wrong_args, "; ".join(wrong_args))
+    resolved, implied = box.resolve("Part.makeBox")
+    check("Part.makeBox resolves to add_shape, with the kind filled in",
+          resolved is not None and resolved.name == "add_shape"
+          and implied == {"kind": "Part::Box"},
+          f"{resolved and resolved.name} {implied}")
+
+    print("\nA size spelled the way a model spells it")
+    lower = box.invoke("add_shape", {"kind": "Part::Box", "name": "Cased",
+                                     "length": 10, "width": 20, "height": 30})
+    check("length/width/height work as well as Length/Width/Height",
+          lower["part_now"][-1]["size_mm"] == [10, 20, 30],
+          str(lower["part_now"][-1]["size_mm"]))
+    box.invoke("remove_object", {"name": "Cased"})
 
     print("\nBuilding a plate, step by step")
     made = box.invoke("add_shape", {"kind": "Part::Box", "name": "Plate",

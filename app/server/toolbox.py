@@ -34,6 +34,8 @@ keep the road open - it is what lets this run on hardware you own.
 
 from __future__ import annotations
 
+import difflib
+
 import json
 import time
 from dataclasses import dataclass, field
@@ -65,6 +67,81 @@ NOT_A_CALL = (
     "your reply cannot carry a tool call, answer with JSON on its own and "
     "nothing else: {\"tool\": \"<name>\", \"arguments\": {...}}"
 )
+
+
+#: Names a model reaches for when it is writing FreeCAD or CadQuery from
+#: memory instead of calling what it was offered, and the tool each one
+#: means. Measured on an 8B against this toolbox: asked for a 25 mm cube it
+#: answered ``Part.makeBox(25, 25, 25)``, was told three times that no such
+#: tool exists, and the run ended with an empty document and a cheerful
+#: summary. The intent was never in doubt - only the name - so the name is
+#: translated and the call goes through.
+#:
+#: The second element is what the name itself says that the arguments do
+#: not: ``makeBox`` names the primitive, so ``kind`` need not be asked for
+#: again. Anything the model did pass wins over it.
+ALIASES: dict[str, tuple[str, dict]] = {
+    "box": ("add_shape", {"kind": "Part::Box"}),
+    "cube": ("add_shape", {"kind": "Part::Box"}),
+    "add_box": ("add_shape", {"kind": "Part::Box"}),
+    "make_box": ("add_shape", {"kind": "Part::Box"}),
+    "makebox": ("add_shape", {"kind": "Part::Box"}),
+    "part.makebox": ("add_shape", {"kind": "Part::Box"}),
+    "cylinder": ("add_shape", {"kind": "Part::Cylinder"}),
+    "add_cylinder": ("add_shape", {"kind": "Part::Cylinder"}),
+    "make_cylinder": ("add_shape", {"kind": "Part::Cylinder"}),
+    "makecylinder": ("add_shape", {"kind": "Part::Cylinder"}),
+    "part.makecylinder": ("add_shape", {"kind": "Part::Cylinder"}),
+    "sphere": ("add_shape", {"kind": "Part::Sphere"}),
+    "makesphere": ("add_shape", {"kind": "Part::Sphere"}),
+    "part.makesphere": ("add_shape", {"kind": "Part::Sphere"}),
+    "cone": ("add_shape", {"kind": "Part::Cone"}),
+    "makecone": ("add_shape", {"kind": "Part::Cone"}),
+    "part.makecone": ("add_shape", {"kind": "Part::Cone"}),
+    "torus": ("add_shape", {"kind": "Part::Torus"}),
+    "maketorus": ("add_shape", {"kind": "Part::Torus"}),
+    "part.maketorus": ("add_shape", {"kind": "Part::Torus"}),
+    "add_primitive": ("add_shape", {}),
+    "create_shape": ("add_shape", {}),
+    "primitive": ("add_shape", {}),
+    "hole": ("drill", {}),
+    "add_hole": ("drill", {}),
+    "make_hole": ("drill", {}),
+    "cut_hole": ("drill", {}),
+    "cut": ("combine", {"operation": "cut"}),
+    "part.cut": ("combine", {"operation": "cut"}),
+    "subtract": ("combine", {"operation": "cut"}),
+    "difference": ("combine", {"operation": "cut"}),
+    "fuse": ("combine", {"operation": "union"}),
+    "part.fuse": ("combine", {"operation": "union"}),
+    "union": ("combine", {"operation": "union"}),
+    "boolean": ("combine", {}),
+    "common": ("combine", {"operation": "intersect"}),
+    "intersect": ("combine", {"operation": "intersect"}),
+    "pad": ("extrude_profile", {}),
+    "extrude": ("extrude_profile", {}),
+    "pocket": ("extrude_profile", {}),
+    "sketch": ("extrude_profile", {}),
+    "revolve": ("revolve_profile", {}),
+    "fillet": ("add_fillet", {}),
+    "round": ("add_fillet", {}),
+    "chamfer": ("add_chamfer", {}),
+    "polar_pattern": ("pattern_circular", {}),
+    "array_polar": ("pattern_circular", {}),
+    "circular_pattern": ("pattern_circular", {}),
+    "linear_pattern": ("pattern_linear", {}),
+    "array": ("pattern_linear", {}),
+    "set_parameter": ("declare_parameter", {}),
+    "add_parameter": ("declare_parameter", {}),
+    "material": ("set_material", {}),
+    "thickness": ("shell", {}),
+    "hollow": ("shell", {}),
+    "translate": ("move", {}),
+    "delete": ("remove_object", {}),
+    "remove": ("remove_object", {}),
+    "python": ("run_python", {}),
+    "execute": ("run_python", {}),
+}
 
 
 class ToolError(Exception):
@@ -152,6 +229,19 @@ class Toolbox:
     def definitions(self) -> list[dict]:
         return [tool.definition() for tool in self.tools.values()]
 
+    def resolve(self, name: str) -> tuple[Optional["Tool"], dict]:
+        """The tool this name means, and what the name itself already says.
+
+        An exact name first, then the alias table. Nothing is guessed: a
+        name that is in neither is refused, because a tool chosen by
+        resemblance is a tool the model did not ask for.
+        """
+        tool = self.tools.get(name)
+        if tool is not None:
+            return tool, {}
+        aliased, extra = ALIASES.get(name.strip().lower().lstrip("."), ("", {}))
+        return self.tools.get(aliased), dict(extra)
+
     def invoke(self, name: str, arguments: dict) -> Any:
         """Run one tool, having checked the model did not make it up.
 
@@ -159,23 +249,54 @@ class Toolbox:
         tool is ``drill`` gets told so, by name, with the real list - which
         it recovers from in one step. A model whose invented call is quietly
         dropped learns nothing and repeats it.
-        """
-        tool = self.tools.get(name)
-        if tool is None:
-            raise ToolError(
-                f"there is no tool called {name!r}. There is: "
-                + ", ".join(sorted(self.tools)))
 
+        One class of wrong name is not worth a round trip, though: a small
+        model that writes the FreeCAD API it was trained on rather than the
+        tools it was handed. ``Part.makeBox`` is not ambiguous, and three
+        reminders will not teach it a vocabulary it is not reading. Those
+        names are translated, and the arguments the name implies are filled
+        in - which is how a run that ended with an empty document now ends
+        with a cube.
+        """
+        tool, implied = self.resolve(name)
+        if tool is None:
+            near = difflib.get_close_matches(name, list(self.tools), n=1)
+            hint = ""
+            if near:
+                wanted = self.tools[near[0]]
+                needs = ", ".join(wanted.parameters.get("required") or [])
+                hint = (f" The closest is {near[0]}, which needs "
+                        f"{needs or 'nothing'}.")
+            raise ToolError(
+                f"there is no tool called {name!r}.{hint} There is: "
+                + ", ".join(sorted(self.tools)))
+        if implied:
+            # What the model passed wins: it may have named a different
+            # primitive in `kind` than the alias assumed.
+            arguments = {**implied, **arguments}
+
+        # Named by the tool that will run, not by what was typed: a message
+        # about `Part.makeBox`'s arguments teaches the wrong vocabulary.
+        real = tool.name
         allowed = set((tool.parameters.get("properties") or {}))
+        # FreeCAD spells a box's sides Length, Width, Height; a model
+        # writing from memory spells them length, width, height, and a cube
+        # refused over the case of its own letters is a round trip spent on
+        # nothing. Folding a name onto the one this tool declares is not
+        # guessing: where the two differ only in case there is exactly one
+        # property it can mean.
+        spelled = {key.lower(): key for key in allowed}
+        arguments = {spelled.get(str(key).lower(), key): value
+                     for key, value in arguments.items()}
         unknown = sorted(set(arguments) - allowed)
         if unknown and allowed:
             raise ToolError(
-                f"{name} has no argument called {', '.join(repr(u) for u in unknown)}. "
+                f"{real} has no argument called {', '.join(repr(u) for u in unknown)}. "
                 f"It takes: {', '.join(sorted(allowed)) or 'nothing'}")
         missing = sorted(set(tool.parameters.get("required") or []) - set(arguments))
         if missing:
             raise ToolError(
-                f"{name} needs {', '.join(repr(m) for m in missing)}")
+                f"{real} needs {', '.join(repr(m) for m in missing)}")
 
         return tool.run(**arguments)
 
