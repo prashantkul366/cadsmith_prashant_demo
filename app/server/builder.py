@@ -96,6 +96,27 @@ shapes to exist, a pattern needs the shape it repeats.
 
 FreeCAD's origin is at (0, 0, 0) and a Part::Box grows from its placement
 towards +X, +Y, +Z. A Part::Cylinder grows along +Z from its placement.
+
+What the words mean, when a request uses them:
+  boss          a raised round pad, usually drilled - revolve_profile, or a
+                cylinder fused to the face
+  spigot        a round male location feature that fits a bore
+  rib, web      a thin upstand stiffening a face - extrude_profile, thin
+  gusset        a triangular rib across the inside of a corner
+  flange        a plate at the end of something, usually bolted
+  pad, land     a flat raised area a fastener or another part sits on
+  spotface      a shallow counterbore, just enough to give a flat seat
+  counterbore   a wider flat-bottomed hole over a hole, for a cap screw head
+  countersink   a cone over a hole, for a countersunk screw, usually 90
+  PCD           pitch circle diameter: the circle a bolt pattern sits on, so
+                pattern_circular about the centre at half that radius
+  n off         how many: "4 off" means four of them
+  M8 tapped     a hole threaded M8 - drill(thread="M8"), drilled 6.8
+  M8 clearance  a hole an M8 passes through - drill(clearance_for="M8"), 9
+  break edges   a small chamfer or radius all round, typically 0.5 to 1
+  fillet        an internal radius; a round is an external one
+  blind         a hole that does not go through - give drill a depth
+  proud of      standing above the face it sits on
 """
 
 
@@ -378,6 +399,22 @@ def for_panel(design: dict) -> dict:
     }
 
 
+def _with_threads(wanted: dict) -> dict:
+    """Fold the holes a named thread means into the bores that are checked.
+
+    "Two M8 tapped holes" states a diameter and writes no number: 6.8, which
+    is what an M8 tap goes into. Without this the gate had a hole count and
+    nothing to check the holes against, which is how a part comes back with
+    the right number of wrong holes.
+    """
+    drilled = [t["drilled"] for t in wanted.get("threads") or []]
+    if not drilled:
+        return wanted
+    folded = dict(wanted)
+    folded["bores"] = sorted(set(list(wanted.get("bores") or []) + drilled))
+    return folded
+
+
 #: A change that is meant to leave less of the part than it found.
 _REMOVAL = re.compile(
     r"\b(remove|delete|drop|lose|get\s+rid\s+of|take\s+out|fill\s+in|plug|"
@@ -401,10 +438,10 @@ def _wanted(prompt: str, instruction: str = "") -> dict:
     dimension; it does not quietly delete a feature. So unless the change
     says how many holes there should be, the original's count still blocks.
     """
-    original = stated.requirements(prompt)
+    original = _with_threads(stated.requirements(prompt))
     if not instruction:
         return original
-    asked = stated.requirements(instruction)
+    asked = _with_threads(stated.requirements(instruction))
 
     def many(key: str) -> list:
         return list(asked.get(key) or []) + list(original.get(key) or [])

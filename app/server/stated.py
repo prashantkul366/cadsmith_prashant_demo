@@ -277,6 +277,74 @@ def holes(prompt: str) -> tuple[Optional[int], list[float]]:
     return (total or None), diameters
 
 
+#: A thread named in a request, and whether the hole is tapped for it or
+#: clears it. The two are nothing alike: a tapped M8 hole is drilled 6.8 and
+#: a clearance M8 hole is drilled 9, so a request that says which one it
+#: wants has stated a diameter without writing a number down.
+_THREAD = re.compile(r"\bM(?P<size>3|4|5|6|8|10|12|16|20|24)\b", re.I)
+
+#: The words that make it a clearance hole rather than a tapped one, read
+#: either side of the thread: "M8 clearance", "clearance for M8", "a hole an
+#: M8 passes through".
+_CLEARS = re.compile(r"\bclear(?:ance|ing)?\b|\bpass(?:es)?\s+through\b"
+                     r"|\bfree\s+fit\b|\bthrough\s+hole\s+for\b", re.I)
+_TAPS = re.compile(r"\btapp?ed\b|\bthreaded?\b|\bscrew(?:s|ed)?\s+into\b"
+                   r"|\bfemale\s+thread\b", re.I)
+
+#: ISO 262 tapping drills and ISO 273 medium clearance, which is what the
+#: numbers above actually are. Kept here as well as in freecad_tools so that
+#: reading a request does not need FreeCAD.
+TAP_DRILL = {3: 2.5, 4: 3.3, 5: 4.2, 6: 5.0, 8: 6.8, 10: 8.5, 12: 10.2,
+             16: 14.0, 20: 17.5, 24: 21.0}
+CLEARANCE_DRILL = {3: 3.4, 4: 4.5, 5: 5.5, 6: 6.6, 8: 9.0, 10: 11.0,
+                   12: 13.5, 16: 17.5, 20: 22.0, 24: 26.0}
+
+#: "4 off", "6 off Ø8.5" - the drawing-office way of saying how many.
+_OFF = re.compile(r"\b(?P<n>\d{1,2})\s*off\b", re.I)
+
+
+def threads(prompt: str) -> list[dict]:
+    """Every thread the request names, and the hole each one means.
+
+    A request saying "two M8 tapped holes" has stated a diameter - 6.8 - and
+    written no number at all. Without this the gate has a hole count and
+    nothing to check the holes against, which is how a part came back with
+    the right number of wrong holes.
+    """
+    found: list[dict] = []
+    text = prompt or ""
+
+    def nearest(pattern, at: int) -> Optional[int]:
+        """How far the closest such word is from this thread, or None.
+
+        Distance rather than presence, because one sentence names several
+        threads - "two M8 tapped holes and an M10 clearance hole" - and
+        whichever qualifier happens to be in a fixed window would give both
+        of them the same answer, which is wrong for one of them.
+        """
+        best = None
+        for word in pattern.finditer(text):
+            gap = (at - word.end()) if word.end() <= at else (word.start() - at)
+            if gap < 0 or gap > 45:
+                continue
+            best = gap if best is None else min(best, gap)
+        return best
+
+    for match in _THREAD.finditer(text):
+        size = int(match.group("size"))
+        at = match.start()
+        clears, taps = nearest(_CLEARS, at), nearest(_TAPS, at)
+        if clears is None and taps is None:
+            continue        # an M8 screw is a fastener, not a hole
+        if taps is None or (clears is not None and clears <= taps):
+            kind, drilled = "clearance", CLEARANCE_DRILL.get(size)
+        else:
+            kind, drilled = "tapped", TAP_DRILL.get(size)
+        if drilled:
+            found.append({"spec": f"M{size}", "kind": kind, "drilled": drilled})
+    return found
+
+
 def requirements(prompt: str) -> dict:
     """Everything read from one request, in a shape the plan can carry."""
     dimensions = read(prompt)
@@ -287,6 +355,13 @@ def requirements(prompt: str) -> dict:
     # advisory check looks for extents, and would report a hole missing from
     # the outside of the part.
     bore_values = {round(d, 4) for d in bores}
+    named = threads(prompt)
+    if count is None:
+        # "4 off" is how a drawing office writes a quantity, and it is the
+        # only thing in the sentence that is one.
+        off = _OFF.search(prompt or "")
+        if off:
+            count = int(off.group("n"))
     return {
         "extents": sorted({round(s.value, 4) for s in dimensions
                            if s.role in HARD_ROLES} - bore_values),
@@ -294,6 +369,11 @@ def requirements(prompt: str) -> dict:
                             if not s.is_hard} - bore_values),
         "bores": [round(d, 4) for d in bores],
         "hole_count": count,
+        # The threads the request named, with the hole each one means.
+        # Additive: nothing that already read this dictionary sees a
+        # difference, and the gate on the FreeCAD road folds them into the
+        # bores it checks.
+        "threads": named,
         "read": [{"value": s.value, "role": s.role, "phrase": s.phrase,
                   "hard": s.is_hard} for s in dimensions],
     }

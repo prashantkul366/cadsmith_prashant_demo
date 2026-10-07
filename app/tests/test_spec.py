@@ -254,6 +254,33 @@ def main() -> int:
               for k, v in (("xlen", 80), ("ylen", 60), ("zlen", 8))))
     check("the solid reports watertight", measured["is_valid"])
 
+    print("\nA thread names a hole size without writing a number")
+    # "Two M8 tapped holes" states a diameter - 6.8, which is what an M8 tap
+    # goes into - and writes no number at all. Without this the gate had a
+    # hole count and nothing to check the holes against, which is how a part
+    # comes back with the right number of wrong holes.
+    from app.server import stated as stated_mod
+    read = stated_mod.threads(
+        "a bracket with two M8 tapped holes and an M10 clearance hole")
+    check("a tapped hole is read at its tapping drill",
+          any(t["spec"] == "M8" and t["kind"] == "tapped"
+              and t["drilled"] == 6.8 for t in read), str(read))
+    check("and a clearance hole at its clearance drill",
+          any(t["spec"] == "M10" and t["kind"] == "clearance"
+              and t["drilled"] == 11.0 for t in read), str(read))
+    # One sentence naming both is where a fixed window gets it wrong: the
+    # qualifier nearest the thread is the one that applies to it.
+    both = stated_mod.threads("four M6 clearance holes and two M12 tapped")
+    check("each thread takes the qualifier nearest to it",
+          [(t["spec"], t["kind"]) for t in both]
+          == [("M6", "clearance"), ("M12", "tapped")], str(both))
+    check("a screw is a fastener, not a hole",
+          stated_mod.threads("fixed with an M8 socket head cap screw") == [],
+          "no hole is stated")
+    check("and 'off' is how a drawing office counts",
+          stated_mod.requirements("4 off 8.5mm holes")["hole_count"] == 4,
+          str(stated_mod.requirements("4 off 8.5mm holes")["hole_count"]))
+
     shutil.rmtree(work, ignore_errors=True)
 
     print(f"\n{'=' * 58}")
