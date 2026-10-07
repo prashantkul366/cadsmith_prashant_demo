@@ -112,9 +112,16 @@ _NOT_A_SIZE = re.compile(
     # "0.5 mm x 45 deg chamfer" was read as a part 45 mm across - and every
     # prompt in a dimensioned library ends with one, so every part failed
     # the gate for a number that was an angle.
-    r"|deg\b|degree|chamfer|countersink|counterbore|c'?bore|csk"
-    # "counterbored Dia 17.5 x 11 deep" is a hole's depth, not an extent.
-    r"|deep\b)\b", re.I)
+    r")\b", re.I)
+
+#: Words that make a chain not a dimension of this part at all - as opposed
+#: to a pitch, which is worth telling the Planner even though it cannot
+#: block. A chamfer's angle is not a size the part either has or lacks, so
+#: reporting it leaves a red row reading "stated 45 mm" beside a part with
+#: no 45 anywhere, which reads as a broken check rather than a note.
+_NOT_A_DIMENSION = re.compile(
+    r"^\s*(?:\w+\s+){0,2}?(?:deg\b|degree|chamfer|countersink|counterbore|"
+    r"c'?bore|csk|deep\b)", re.I)
 
 #: A chain introduced by a diameter or a radius describes one feature, not
 #: the part. "Dia 14 x 3 deep", "R12.5 x 8" - the first number is already
@@ -222,8 +229,11 @@ def read(prompt: str) -> list[Stated]:
         # A chain qualified as a pattern or pitch is not the overall size.
         # It is still worth telling the Planner about, so it is kept - just
         # not as something that can block.
+        after = text[match.end():]
+        if _NOT_A_DIMENSION.match(after):
+            continue
         before = text[max(0, match.start() - 24):match.start()]
-        role = ("pitch" if (_NOT_A_SIZE.match(text[match.end():])
+        role = ("pitch" if (_NOT_A_SIZE.match(after)
                             or _FEATURE_CHAIN.search(before))
                 else "extent")
         for name in ("a", "b", "c"):

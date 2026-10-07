@@ -178,8 +178,15 @@ def _upright_edges(feature, radius):
 
 
 def _axis(name):
-    return {"X": FreeCAD.Vector(1, 0, 0), "Y": FreeCAD.Vector(0, 1, 0),
-            "Z": FreeCAD.Vector(0, 0, 1)}[name]
+    # Signed, because a hole is drilled INTO a face. "M6 from the top face
+    # at Z=30, 14 deep" goes down; with +Z only, that cutter left the part
+    # and the hole was never made - and the cut still succeeded, because
+    # cutting nothing is a valid boolean.
+    sign = -1.0 if str(name).startswith("-") else 1.0
+    bare = str(name).lstrip("+-").upper()
+    base = {"X": FreeCAD.Vector(1, 0, 0), "Y": FreeCAD.Vector(0, 1, 0),
+            "Z": FreeCAD.Vector(0, 0, 1)}[bare]
+    return base * sign
 
 
 def _consume(doc, obj):
@@ -587,8 +594,10 @@ doc.recompute()
             raise ToolError(f"there is no object called {target!r} to drill")
         if len(at) != 3:
             raise ToolError("at is [x, y, z] in millimetres, where the hole goes")
-        if axis.upper() not in ("X", "Y", "Z"):
-            raise ToolError("axis is X, Y or Z - the way the drill points")
+        if axis.upper().lstrip("+-") not in ("X", "Y", "Z"):
+            raise ToolError(
+                "axis is the way the drill points: X, Y or Z, or -X, -Y, -Z "
+                "to go the other way. A hole in a top face is drilled -Z.")
 
         size, callout, kind = self._hole_size(diameter, thread, clearance_for)
         cb = self._counterbore(counterbore, size)
@@ -616,6 +625,14 @@ for extra in cutters[1:]:
 holed = target.Shape.cut(tool)
 if holed is None or holed.isNull() or holed.Volume <= 0:
     raise RuntimeError("that hole would remove the whole part")
+# Cutting nothing is a perfectly valid boolean, so without this a cutter
+# that missed the part - pointing the wrong way, or placed off it -
+# reported a hole it had not made, and the drawing then called it out.
+if target.Shape.Volume - holed.Volume < 1e-6:
+    raise RuntimeError(
+        "that hole removed no material: the cutter never met the part. "
+        "Check the point it starts from and the way the axis points - a "
+        "hole going into a top face is drilled -Z, not Z.")
 out = doc.addObject("Part::Feature", {self._clean(target) + "Drilled"!r})
 out.Shape = holed
 _consume(doc, target)
@@ -1018,6 +1035,11 @@ print(obj.Name)
         return self._edit_feature({"op": "add_fillet", "radius": float(radius),
                                    "where": where})
 
+    def add_chamfer(self, size: float, where: str = "all") -> dict:
+        """Break the edges flat. The last line of almost every drawing."""
+        return self._edit_feature({"op": "add_chamfer", "size": float(size),
+                                   "where": where})
+
     def _export_shape(self):
         """The finished solid, here, as a file direct.py can read."""
         import tempfile
@@ -1262,6 +1284,17 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
              parameters={"type": "object", "properties": {
                  "feature_id": text}, "required": ["feature_id"]},
              run=session.remove_feature),
+        Tool(name="add_chamfer",
+             description=("Break edges flat, at 45 degrees - what a drawing "
+                          "means by '0.5 x 45 deg chamfer on all edges'. Use "
+                          "this for a chamfer and add_fillet for a radius: "
+                          "they are different features with different "
+                          "callouts. where is 'all', 'top' or 'bottom'."),
+             parameters={"type": "object", "properties": {
+                 "size": number,
+                 "where": {**text, "enum": ["all", "top", "bottom"]}},
+                 "required": ["size"]},
+             run=session.add_chamfer),
         Tool(name="add_fillet",
              description=("Break edges with a radius. where is 'all', 'top' "
                           "or 'bottom'."),

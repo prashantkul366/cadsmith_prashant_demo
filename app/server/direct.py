@@ -42,7 +42,8 @@ from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Defeaturing
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
-from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+from OCP.BRepFilletAPI import (BRepFilletAPI_MakeChamfer,
+                               BRepFilletAPI_MakeFillet)
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
 from OCP.Bnd import Bnd_Box
@@ -343,6 +344,34 @@ def add_fillet(shape: TopoDS_Shape, radius: float,
     return maker.Shape()
 
 
+def add_chamfer(shape: TopoDS_Shape, size: float,
+                where: str = "all") -> TopoDS_Shape:
+    """Break the sharp edges flat instead of round.
+
+    A chamfer is not a small fillet and a drawing never confuses the two:
+    "0.5 x 45 deg chamfer on all 12 edges" is the last line of almost every
+    dimensioned part, and without this the only answer was a radius, which
+    is a different feature with a different callout and a different cutter.
+
+    Symmetric at 45 degrees, which is what a bare "N x 45 deg" means.
+    """
+    if size <= 0:
+        raise ValueError("a chamfer needs a positive size")
+
+    wanted = _edges_for(shape, where)
+    if not wanted:
+        raise ValueError(f"no edges found for {where!r}")
+    maker = BRepFilletAPI_MakeChamfer(shape)
+    for edge in wanted:
+        maker.Add(size, edge)
+    maker.Build()
+    if not maker.IsDone():
+        raise RuntimeError(
+            f"a {size:g} mm chamfer will not fit on those edges - the "
+            f"kernel could not build it. Try a smaller size.")
+    return maker.Shape()
+
+
 def _same_edge(edge) -> int:
     """A key that is equal for the two halves of one shared edge.
 
@@ -404,6 +433,7 @@ VERBS = {
     "remove": ("select",),
     "resize_hole": ("select", "diameter"),
     "add_fillet": ("radius", "where"),
+    "add_chamfer": ("size", "where"),
 }
 
 
@@ -419,6 +449,9 @@ def apply(shape: TopoDS_Shape, recipe: dict) -> TopoDS_Shape:
     if op == "resize_hole":
         return resize_hole(shape, select(features, recipe["select"]),
                            float(recipe["diameter"]))
+    if op == "add_chamfer":
+        return add_chamfer(shape, float(recipe["size"]),
+                           str(recipe.get("where", "all")))
     return add_fillet(shape, float(recipe["radius"]),
                       str(recipe.get("where", "all")))
 
@@ -466,6 +499,7 @@ these operations, and you may only select features by the ids listed:
   {"op": "resize_hole", "select": "<feature id>", "diameter": <mm>}
   {"op": "remove",      "select": "<feature id>"}
   {"op": "add_fillet",  "radius": <mm>, "where": "all" | "top" | "bottom"}
+  {"op": "add_chamfer", "size": <mm>,   "where": "all" | "top" | "bottom"}
 
 Reply with strict JSON only, no prose:
   {"edits": [ ... ], "note": "<one short sentence>"}
