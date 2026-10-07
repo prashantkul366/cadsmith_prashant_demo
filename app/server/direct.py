@@ -343,6 +343,24 @@ def add_fillet(shape: TopoDS_Shape, radius: float,
     return maker.Shape()
 
 
+def _same_edge(edge) -> int:
+    """A key that is equal for the two halves of one shared edge.
+
+    An edge belongs to two faces, so walking the solid meets each one
+    twice, and adding the same edge to a fillet twice makes the kernel
+    refuse the whole blend. OCCT 7.8 removed ``TopoDS_Shape.HashCode``,
+    which is what this used; the binding hashes a shape directly now, with
+    the same orientation-insensitive meaning. Both are tried because which
+    one exists depends on the OCCT the host happens to ship, and a missing
+    method here took out add_fillet entirely - "include rounded edges" came
+    back as an AttributeError naming a class nobody asked about.
+    """
+    hash_code = getattr(edge, "HashCode", None)
+    if hash_code is not None:
+        return hash_code(1 << 30)
+    return hash(edge)
+
+
 def _edges_for(shape: TopoDS_Shape, where: str) -> list:
     """The edges a plain-language selector means."""
     if where == "all":
@@ -350,7 +368,7 @@ def _edges_for(shape: TopoDS_Shape, where: str) -> list:
             shape, TopAbs_ShapeEnum.TopAbs_EDGE)
         while explorer.More():
             edge = TopoDS.Edge_s(explorer.Current())
-            key = edge.HashCode(1 << 30)
+            key = _same_edge(edge)
             if key not in seen:
                 seen.add(key)
                 out.append(edge)

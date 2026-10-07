@@ -182,6 +182,38 @@ def _axis(name):
             "Z": FreeCAD.Vector(0, 0, 1)}[name]
 
 
+def _consume(doc, obj):
+    # Remove an object AND whatever only existed to feed it.
+    #
+    # Deleting just the object leaves its operands behind, and what the app
+    # calls the part is "every shape nothing else depends on" - so a fused
+    # blade and boss, drilled, came back as THREE overlapping solids: the
+    # drilled result and the two halves that had made it, suddenly tips of
+    # the tree again. The gate caught it, the mass was 119 g instead of 72,
+    # and nothing said why. A padded body leaves its sketch and pad the same
+    # way, which is the other half of this: the pad kept its Length, so the
+    # slider panel went on offering a dimension that no longer drove
+    # anything, and dragging it moved a ghost.
+    doomed, queue = [], [obj]
+    while queue:
+        node = queue.pop()
+        if any(node is seen for seen in doomed):
+            continue
+        doomed.append(node)
+        for child in (getattr(node, "OutList", None) or []):
+            # Only if nothing outside this subtree still needs it.
+            needed = [p for p in (getattr(child, "InList", None) or [])
+                      if not any(p is seen for seen in doomed)
+                      and p is not node]
+            if not needed:
+                queue.append(child)
+    for node in doomed:
+        try:
+            doc.removeObject(node.Name)
+        except Exception:
+            pass
+
+
 def _face_towards(shape, where):
     # The outermost flat face looking the way asked. "top" is +Z, and a
     # shell opens the face somebody would reach into.
@@ -586,7 +618,7 @@ if holed is None or holed.isNull() or holed.Volume <= 0:
     raise RuntimeError("that hole would remove the whole part")
 out = doc.addObject("Part::Feature", {self._clean(target) + "Drilled"!r})
 out.Shape = holed
-doc.removeObject(target.Name)
+_consume(doc, target)
 doc.recompute()
 made = [out.Name]
 """)
@@ -787,7 +819,7 @@ if hollow is None or hollow.isNull() or hollow.Volume <= 0:
 out = doc.addObject("Part::Feature", {self._clean(name) + "Shell"!r})
 out.Shape = hollow
 target.Visibility = False
-doc.removeObject(target.Name)
+_consume(doc, target)
 doc.recompute()
 made = [out.Name]
 """)
