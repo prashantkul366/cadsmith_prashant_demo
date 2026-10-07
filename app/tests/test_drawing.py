@@ -474,6 +474,47 @@ def main() -> int:
               len(on_layer) == len(cut_plan["hatch"]),
               f"{len(on_layer)} in the DXF, {len(cut_plan['hatch'])} planned")
 
+        print("\nA hole is called out the way it was meant, not as it measures")
+        # A tapped M8 hole is drilled 6.8. Measured off the finished solid it
+        # is a 6.8 hole and nothing recovers the M8, so a sheet that calls it
+        # out Ø6.8 sends somebody to the wrong drawer.
+        meant = [{"diameter": 6.8, "label": "M8 THRU"},
+                 {"diameter": 6.8, "label": "M8 THRU"},
+                 {"diameter": 11.0, "label": "\u00d811 THRU, \u2334\u00d818 8 DEEP"}]
+        callouts = drawing.hole_callouts(meant)
+        check("the drilled size maps to what it was meant to be",
+              callouts[6.8] == "M8 THRU" and callouts[11.0].startswith("\u00d811"),
+              str(callouts))
+        check("a count still comes from the measurement",
+              drawing._hole_label({"radius": 3.4, "count": 2, "kind": "pattern"},  # noqa: SLF001
+                                  callouts) == "2\u00d7 M8 THRU",
+              drawing._hole_label({"radius": 3.4, "count": 2, "kind": "pattern"},  # noqa: SLF001
+                                  callouts))
+        check("and with nothing recorded it says what it can see",
+              drawing._hole_label({"radius": 3.4, "count": 2,  # noqa: SLF001
+                                   "kind": "pattern"}, {}) == "2\u00d7 \u00d86.8")
+        # Two different intentions behind one measured size is exactly when
+        # the drawing should fall back to what it can see.
+        check("one size meaning two things is called out as neither",
+              drawing.hole_callouts(
+                  [{"diameter": 6.8, "label": "M8 THRU"},
+                   {"diameter": 6.8, "label": "\u00d86.8 THRU"}]) == {},
+              "ambiguous")
+
+        print("\nThe title block says what it is made of and what it weighs")
+        titled = dict(geometry)
+        titled["mass"] = {"material": "Aluminum-6061-T6", "mass_kg": 0.77,
+                          "mass_g": 770.0}
+        with_mass = drawing.build_sheet(step, titled, "a plate", "JOB-M", 0)
+        check("the material is named", "Aluminum-6061-T6" in with_mass)
+        check("and the mass is there, in the unit that suits it",
+              "770 g" in with_mass, "under a kilo reads in grams")
+        # Not a default alloy. A part reported as aluminium because nobody
+        # said otherwise is a number presented as a fact.
+        plain = drawing.build_sheet(step, geometry, "a plate", "JOB-N", 0)
+        check("and with nothing said, neither is claimed",
+              plain.count("\u2014") >= 2, "both fields read as a dash")
+
         print("\nThe same drawing as DXF")
         # The SVG is a picture of the drawing; the DXF is the drawing. Its
         # dimensions carry the geometry they measure, so this asks the file

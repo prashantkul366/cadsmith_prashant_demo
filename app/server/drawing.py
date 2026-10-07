@@ -410,10 +410,39 @@ def section(direction, x_direction, normal, origin):
             wires.sort(key=lambda w: -_span(w))
             hatched.append(wires)
 
+    # A section still shows its holes, and a hole with no callout on the
+    # only view that shows it is a hole nobody can make. Read off the cut
+    # solid, the same way a plain view reads them off the whole one.
+    circles = []
+    look = gp_Vec(*direction).Normalized()
+    for edge in cut.Edges():
+        adaptor = BRepAdaptor_Curve(edge.wrapped)
+        if adaptor.GetType() != GeomAbs_CurveType.GeomAbs_Circle:
+            continue
+        circle = adaptor.Circle()
+        if abs(gp_Vec(circle.Axis().Direction()).Normalized().Dot(look)) < 0.999:
+            continue
+        first, last = adaptor.FirstParameter(), adaptor.LastParameter()
+        u, v = flat((circle.Location().X(), circle.Location().Y(),
+                     circle.Location().Z()))
+        start = adaptor.Value(first)
+        end = adaptor.Value(last)
+        middle = adaptor.Value((first + last) / 2.0)
+        su, sv = flat((start.X(), start.Y(), start.Z()))
+        eu, ev = flat((end.X(), end.Y(), end.Z()))
+        mu, mv = flat((middle.X(), middle.Y(), middle.Z()))
+        circles.append({
+            "u": u, "v": v, "r": round(circle.Radius(), 3),
+            "span": round(abs(last - first), 4),
+            "a0": round(math.degrees(math.atan2(sv - v, su - u)) % 360.0, 1),
+            "a1": round(math.degrees(math.atan2(ev - v, eu - u)) % 360.0, 1),
+            "mu": mu, "mv": mv,
+        })
+
     us = [p[0] for line in visible for p in line]
     vs = [p[1] for line in visible for p in line]
     return {
-        "visible": visible, "hidden": [], "circles": [], "bends": [],
+        "visible": visible, "hidden": [], "circles": circles, "bends": [],
         "tips": [], "cut": hatched, "basis": [list(ex), list(ey)],
         "bbox": ([min(us), min(vs), max(us), max(vs)] if us else [0, 0, 0, 0]),
     }
@@ -480,7 +509,7 @@ def _section_origin(step_path: Path) -> list:
 #: centreline radius the projected edges only approximate. Schema 4 added
 #: where each bend starts and stops, and where the tube ends - the vertices
 #: of its path, which is what a drawing of a bent tube dimensions.
-PROJECTION_SCHEMA = 5
+PROJECTION_SCHEMA = 6
 
 
 def _project(step_path: Path, timeout: int = 180,
@@ -807,14 +836,48 @@ def _classify_holes(radius: float, members: list[dict]) -> dict:
     return group
 
 
-def _hole_label(group: dict) -> str:
-    """What the leader says: the count, the size, and the pattern if any."""
+def _hole_label(group: dict, callouts: Optional[dict] = None) -> str:
+    """What the leader says: the count, the size, and the pattern if any.
+
+    ``callouts`` maps a drilled diameter to what the hole was *meant* to be,
+    recorded as it was made. It matters because the two are not the same
+    thing and the drawing needs the first: a tapped M8 hole is drilled 6.8,
+    and a sheet that calls it out Ø6.8 sends somebody to the wrong drawer.
+    A counterbore is two diameters and a depth, and measures as two holes.
+
+    Measurement still decides the geometry - how many there are and where -
+    and only the wording comes from the record.
+    """
     diameter = _num(group["radius"] * 2.0)
-    text = f"\u00d8{diameter}" if group["count"] == 1 \
-        else f"{group['count']}\u00d7 \u00d8{diameter}"
+    meant = (callouts or {}).get(round(group["radius"] * 2.0, 2))
+    size = meant or f"\u00d8{diameter}"
+    text = size if group["count"] == 1 else f"{group['count']}\u00d7 {size}"
     if group["kind"] == "bolt_circle":
         text += f" ON \u00d8{_num(group['pcd'])} PCD"
     return text
+
+
+def hole_callouts(holes: Any) -> dict:
+    """Drilled diameter to the callout it was meant to carry.
+
+    A diameter whose holes disagree about what they are gets none: two
+    different intentions behind one measured size is exactly when the
+    drawing should fall back to what it can see.
+    """
+    meant: dict = {}
+    for hole in holes or []:
+        try:
+            size = round(float(hole["diameter"]), 2)
+            label = str(hole["label"]).strip()
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not label:
+            continue
+        if size in meant and meant[size] != label:
+            meant[size] = None          # two meanings, so say neither
+        else:
+            meant.setdefault(size, label)
+    return {size: label for size, label in meant.items() if label}
 
 
 def _distinct_bends(bends: list[dict]) -> list[dict]:
@@ -924,7 +987,8 @@ def _path_profile(view: dict) -> dict:
     return {"level": level, "widths": widths, "datum": datum}
 
 
-def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
+def plan_view(name: str, view: dict, scale: float, dimension: str,
+              callouts: Optional[dict] = None) -> dict:
     """Where everything in one view goes, without drawing any of it.
 
     Separated from the drawing so that the SVG on screen and the DXF someone
@@ -1158,7 +1222,7 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
                       py - (radius + run) * sin_a),
             "shoulder": 6.0 if cos_a > 0 else -6.0,
             "measure": circle["r"] * 2.0,
-            "label": _hole_label(group)})
+            "label": _hole_label(group, callouts)})
 
     # Rounds are called out the way a radius is: the arrow lands on the arc
     # and the leader lies along the radius that made it, so the reader can
@@ -1289,7 +1353,7 @@ def hatch(face: list, pitch: float = HATCH_PITCH,
     return segments
 
 
-def plan_sheet(views: dict) -> dict:
+def plan_sheet(views: dict, callouts: Optional[dict] = None) -> dict:
     """Everything the sheet says, before anything is drawn."""
     scale = _choose_scale(views)
     # Which view carries which overall dimension. Every length appears once:
@@ -1301,7 +1365,7 @@ def plan_sheet(views: dict) -> dict:
     # same view of the same part, one cut open, and a sheet carrying both
     # says everything twice and has nowhere to put the view from above.
     order = ["SECTION" if "SECTION" in views else "FRONT", "LEFT", "TOP", "ISO"]
-    planned = [plan_view(name, views[name], scale, carries[name])
+    planned = [plan_view(name, views[name], scale, carries[name], callouts)
                for name in order if name in views]
     sheet = {"scale": scale, "views": planned}
     _mark_cutting_plane(sheet, views)
@@ -1478,15 +1542,25 @@ def _title_block(prompt: str, geometry: dict, job_id: str, version: int,
 
     # Row 4 - what the kernel measured, which is the part of a title block
     # this app can fill in honestly
-    volume = geometry.get("volume")
-    field(TITLE_L, edges[2], 110, i18n.t('sheet.overall', lang),
+    # Material and mass rather than volume. Every drawing office title block
+    # carries them and nobody has ever asked a shop for a volume; the number
+    # is still a measurement, because a mass is a density multiplied by the
+    # volume the kernel found. Both read "—" when nothing said what the part
+    # is made of, which is the honest answer rather than a default alloy.
+    weighed = geometry.get("mass") or {}
+    field(TITLE_L, edges[2], 70, i18n.t('sheet.overall', lang),
           "{:g} x {:g} x {:g}".format(
               round(bbox.get("xlen", 0), 2), round(bbox.get("ylen", 0), 2),
               round(bbox.get("zlen", 0), 2)))
-    out.append(_line(TITLE_L + 110, edges[2], TITLE_L + 110,
+    out.append(_line(TITLE_L + 70, edges[2], TITLE_L + 70,
                      TITLE_T + TITLE_H, W_THIN))
-    field(TITLE_L + 110, edges[2], 70, "VOLUME mm³",
-          f"{volume:.0f}" if volume else "—")
+    field(TITLE_L + 70, edges[2], 65, i18n.t('sheet.material', lang),
+          weighed.get("material") or "—")
+    out.append(_line(TITLE_L + 135, edges[2], TITLE_L + 135,
+                     TITLE_T + TITLE_H, W_THIN))
+    field(TITLE_L + 135, edges[2], 45, i18n.t('sheet.mass', lang),
+          (f"{weighed['mass_kg']:.3f} kg" if weighed.get("mass_kg", 0) >= 1
+           else f"{weighed['mass_g']:.0f} g") if weighed else "—")
     return out
 
 
@@ -1567,7 +1641,8 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
                 spec: Any = None, lang: str = "en") -> str:
     """Compose the drawing as a standalone SVG document."""
     sheet = plan_sheet(_project(step_path, cache=projection,
-                                section=worth_sectioning(geometry)))
+                                section=worth_sectioning(geometry)),
+                       hole_callouts(geometry.get("holes_as_meant")))
     scale = sheet["scale"]
 
     body: list[str] = []
@@ -1707,7 +1782,8 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
             "does not need it.") from exc
 
     sheet = plan_sheet(_project(step_path, cache=projection,
-                                section=worth_sectioning(geometry)))
+                                section=worth_sectioning(geometry)),
+                       hole_callouts(geometry.get("holes_as_meant")))
     scale = sheet["scale"]
 
     doc = ezdxf.new("R2010", setup=True)

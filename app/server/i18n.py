@@ -50,6 +50,8 @@ MESSAGES: dict[str, dict[str, str]] = {
     "sheet.projection": {"en": "PROJECTION", "ja": "投影法"},
     "sheet.sheet": {"en": "SHEET", "ja": "用紙"},
     "sheet.overall": {"en": "OVERALL", "ja": "全体寸法"},
+    "sheet.material": {"en": "MATERIAL", "ja": "材質"},
+    "sheet.mass": {"en": "MASS", "ja": "質量"},
 
     "stated.read": {
         "en": "{n} dimension(s) stated in the request, held fixed",

@@ -409,8 +409,14 @@ def publish(ctx: RunContext, session: freecad_tools.Session, prompt: str,
         instruction or prompt, bridge)
     verdict = builder.check(files["step"], prompt, design,
                             instruction=instruction, material=card)
+    # What the drawing needs that the solid cannot tell it: what the part is
+    # made of, and what each hole was meant to be. A tapped M8 hole measures
+    # 6.8 and no amount of looking at the geometry recovers the M8.
     if verdict.get("mass"):
         geometry["mass"] = verdict["mass"]
+    if getattr(session, "holes", None):
+        geometry["holes_as_meant"] = list(session.holes)
+    if verdict.get("mass") or geometry.get("holes_as_meant"):
         (version_dir / "geometry.json").write_text(
             json.dumps(geometry, indent=2), encoding="utf-8")
     (version_dir / "validation.json").write_text(json.dumps({

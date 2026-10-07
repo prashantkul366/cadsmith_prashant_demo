@@ -60,6 +60,24 @@ PLANES = {
     "YZ": {"rotation": (0.5, 0.5, 0.5, 0.5), "reversed": False},
 }
 
+#: Tapping drill and clearance drill for the coarse metric threads a part
+#: actually uses, from ISO 262 and ISO 273 (medium fit). A tapped M8 hole is
+#: drilled 6.8 and a clearance M8 hole is drilled 9: the geometry of the two
+#: is nothing alike, and neither is the callout, and a model that is handed
+#: "M8" and left to guess picks 8 - which is the one size it is never.
+THREADS = {
+    "M3": {"tap": 2.5, "clear": 3.4, "pitch": 0.5},
+    "M4": {"tap": 3.3, "clear": 4.5, "pitch": 0.7},
+    "M5": {"tap": 4.2, "clear": 5.5, "pitch": 0.8},
+    "M6": {"tap": 5.0, "clear": 6.6, "pitch": 1.0},
+    "M8": {"tap": 6.8, "clear": 9.0, "pitch": 1.25},
+    "M10": {"tap": 8.5, "clear": 11.0, "pitch": 1.5},
+    "M12": {"tap": 10.2, "clear": 13.5, "pitch": 1.75},
+    "M16": {"tap": 14.0, "clear": 17.5, "pitch": 2.0},
+    "M20": {"tap": 17.5, "clear": 22.0, "pitch": 2.5},
+    "M24": {"tap": 21.0, "clear": 26.0, "pitch": 3.0},
+}
+
 #: Booleans, by the name a person uses rather than the FreeCAD class.
 BOOLEANS = {"cut": "Part::Cut", "union": "Part::MultiFuse",
             "intersect": "Part::MultiCommon"}
@@ -150,9 +168,18 @@ def _upright_edges(feature, radius):
         lengths.setdefault(round(edge.Length, 4), []).append(n)
     if not lengths:
         return []
-    # The pad depth is the length shared by every corner edge.
-    depth = min(lengths)
-    return lengths[depth] if len(lengths[depth]) >= 3 else []
+    # The corners of a pad are the edges running along it, and they all
+    # share one length: the pad depth. FreeCAD wants their names.
+    for size in sorted(lengths, reverse=True):
+        found = lengths[size]
+        if len(found) >= 3:
+            return ["Edge%d" % n for n in found]
+    return []
+
+
+def _axis(name):
+    return {"X": FreeCAD.Vector(1, 0, 0), "Y": FreeCAD.Vector(0, 1, 0),
+            "Z": FreeCAD.Vector(0, 0, 1)}[name]
 
 
 def _face_towards(shape, where):
@@ -202,6 +229,10 @@ class Session:
         #: default: a part reported as aluminium because nobody said
         #: otherwise is a number presented as a fact.
         self.material: Optional[dict] = None
+        #: Every hole as it was meant, not as it measures. A tapped M8 hole
+        #: and a 6.8 clearance hole are the same cylinder afterwards and a
+        #: different line on the drawing.
+        self.holes: list[dict] = []
 
     # -- what every tool returns --------------------------------------------
 
@@ -501,6 +532,150 @@ doc.recompute()
         made = json.loads(self.bridge.value(code))
         self.built.extend(made)
         return made
+
+    def drill(self, target: str, at: list, diameter: float = 0.0,
+              depth: float = 0.0, axis: str = "Z", thread: str = "",
+              clearance_for: str = "", counterbore: Optional[list] = None,
+              countersink: float = 0.0) -> dict:
+        """Put a hole in a part, as a hole rather than as a subtracted cylinder.
+
+        A hole carries more than its diameter, and none of the rest survives
+        being cut with a cylinder. A tapped M8 hole is drilled 6.8 and called
+        out M8; a clearance hole for the same screw is drilled 9 and called
+        out Ø9. A counterbore is two diameters and a depth. Measured off the
+        finished solid afterwards, all of them are just round holes, and the
+        drawing has to guess.
+
+        So the intent is recorded as the hole is made, and the drawing reads
+        it. The geometry is still measured - the callout says what was meant,
+        the measurement says what is there, and the two are checked against
+        each other rather than one being trusted.
+        """
+        if self.bridge.object(self.document, target) is None:
+            raise ToolError(f"there is no object called {target!r} to drill")
+        if len(at) != 3:
+            raise ToolError("at is [x, y, z] in millimetres, where the hole goes")
+        if axis.upper() not in ("X", "Y", "Z"):
+            raise ToolError("axis is X, Y or Z - the way the drill points")
+
+        size, callout, kind = self._hole_size(diameter, thread, clearance_for)
+        cb = self._counterbore(counterbore, size)
+        if countersink and not 60 <= countersink <= 120:
+            raise ToolError("countersink is the included angle in degrees, "
+                            "usually 90 for a metric screw")
+
+        made = self._build(f"""
+import Part
+target = doc.getObject({target!r})
+box = target.Shape.BoundBox
+reach = 2.0 * max(box.XLength, box.YLength, box.ZLength, 1.0)
+at = FreeCAD.Vector({float(at[0])}, {float(at[1])}, {float(at[2])})
+towards = _axis({axis.upper()!r})
+deep = {float(depth)}
+cutters = []
+start = at if deep > 0 else at - towards * reach
+length = deep if deep > 0 else 2.0 * reach
+cutters.append(Part.makeCylinder({size / 2.0}, length, start, towards))
+{self._counterbore_script(cb)}
+{self._countersink_script(countersink, size)}
+tool = cutters[0]
+for extra in cutters[1:]:
+    tool = tool.fuse(extra)
+holed = target.Shape.cut(tool)
+if holed is None or holed.isNull() or holed.Volume <= 0:
+    raise RuntimeError("that hole would remove the whole part")
+out = doc.addObject("Part::Feature", {self._clean(target) + "Drilled"!r})
+out.Shape = holed
+doc.removeObject(target.Name)
+doc.recompute()
+made = [out.Name]
+""")
+        self.holes.append({
+            "at": [float(v) for v in at], "axis": axis.upper(),
+            "diameter": size, "depth": float(depth) or None,
+            "through": not depth, "kind": kind, "thread": thread.upper(),
+            "counterbore": cb, "countersink": float(countersink) or None,
+            "label": callout + self._extra_callout(cb, countersink, depth),
+        })
+        self.built.append(made[0])
+        return self._measured(drilled=self.holes[-1]["label"],
+                              cut_at=size, in_part=made[0],
+                              note=("drilled at the tapping size; the drawing "
+                                    "calls it out as the thread"
+                                    if kind == "tapped" else None))
+
+    @staticmethod
+    def _hole_size(diameter: float, thread: str, clearance_for: str):
+        """What to drill, and what the drawing will call it."""
+        if thread:
+            spec = THREADS.get(thread.upper())
+            if spec is None:
+                raise ToolError(
+                    f"{thread!r} is not a thread this knows. It has: "
+                    + ", ".join(THREADS))
+            return spec["tap"], f"{thread.upper()}", "tapped"
+        if clearance_for:
+            spec = THREADS.get(clearance_for.upper())
+            if spec is None:
+                raise ToolError(
+                    f"{clearance_for!r} is not a thread this knows. It has: "
+                    + ", ".join(THREADS))
+            return spec["clear"], f"Ø{spec['clear']:g}", "clearance"
+        if diameter <= 0:
+            raise ToolError(
+                "say how big: diameter for a plain hole, thread='M8' for a "
+                "tapped one, or clearance_for='M8' for a hole an M8 passes "
+                "through")
+        return float(diameter), f"Ø{float(diameter):g}", "plain"
+
+    @staticmethod
+    def _counterbore(spec: Optional[list], hole: float) -> Optional[dict]:
+        if not spec:
+            return None
+        if len(spec) != 2:
+            raise ToolError("counterbore is [diameter, depth] in millimetres")
+        wide, deep = float(spec[0]), float(spec[1])
+        if wide <= hole:
+            raise ToolError(
+                f"a counterbore has to be wider than the hole it sits over "
+                f"- {wide:g} against {hole:g}")
+        if deep <= 0:
+            raise ToolError("a counterbore needs a depth")
+        return {"diameter": wide, "depth": deep}
+
+    @staticmethod
+    def _counterbore_script(cb: Optional[dict]) -> str:
+        if not cb:
+            return ""
+        return (f"cutters.append(Part.makeCylinder({cb['diameter'] / 2.0}, "
+                f"{cb['depth']}, at - towards * {cb['depth']}, towards))")
+
+    @staticmethod
+    def _countersink_script(angle: float, hole: float) -> str:
+        if not angle:
+            return ""
+        import math as _m
+        # The cone a countersink leaves: wide at the face, down to the hole.
+        wide = hole * 2.0
+        deep = (wide - hole) / 2.0 / _m.tan(_m.radians(angle) / 2.0)
+        return (f"cutters.append(Part.makeCone({wide / 2.0}, {hole / 2.0}, "
+                f"{deep}, at - towards * {deep}, towards))")
+
+    @staticmethod
+    def _extra_callout(cb: Optional[dict], countersink: float,
+                       depth: float) -> str:
+        # ISO 129-1 has a glyph for depth, U+21A7, and the technical fonts a
+        # drawing is lettered in do not carry it - it came out as "I8" on a
+        # sheet, which is a dimension somebody could read and act on. The
+        # counterbore and countersink symbols do render, so they stay; depth
+        # is written in the word every drawing office also accepts.
+        parts = []
+        parts.append(f" {depth:g} DEEP" if depth else " THRU")
+        if cb:
+            parts.append(f", \u2334\u00d8{cb['diameter']:g} {cb['depth']:g} DEEP")
+        if countersink:
+            parts.append(f", \u2335{countersink:g}\u00b0")
+        return "".join(parts)
 
     # -- the middle layer a real part is actually made of --------------------
 
@@ -975,6 +1150,27 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
                  "name": text, "axis": point, "degrees": number},
                  "required": ["name", "axis", "degrees"]},
              run=session.rotate),
+        Tool(name="drill",
+             description=(
+                 "Put a hole in a part, as a hole rather than as a cylinder "
+                 "you cut. Give diameter for a plain hole, thread='M8' for a "
+                 "tapped one (drilled at the tapping size and called out M8), "
+                 "or clearance_for='M8' for a hole an M8 screw passes "
+                 "through. depth 0 means through. counterbore is [diameter, "
+                 "depth]. The drawing calls it out the way it was meant, "
+                 "which a measured cylinder cannot say."),
+             parameters={"type": "object", "properties": {
+                 "target": text, "at": point,
+                 "diameter": number, "depth": number,
+                 "axis": {**text, "enum": ["X", "Y", "Z"]},
+                 "thread": {**text, "description": "M3 to M24, tapped"},
+                 "clearance_for": {**text,
+                                   "description": "M3 to M24, a hole it passes through"},
+                 "counterbore": {"type": "array", "items": {"type": "number"},
+                                 "description": "[diameter, depth] in mm"},
+                 "countersink": {**number, "description": "included angle, usually 90"}},
+                 "required": ["target", "at"]},
+             run=session.drill),
         Tool(name="combine",
              description=("Cut, union or intersect. Use 'cut' to make holes "
                           "and pockets: base is the part, tools are the "
