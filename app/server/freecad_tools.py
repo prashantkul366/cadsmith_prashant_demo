@@ -46,8 +46,12 @@ PRIMITIVES = {
     "Part::Sphere": ("Radius",),
     "Part::Cone": ("Radius1", "Radius2", "Height"),
     "Part::Torus": ("Radius1", "Radius2"),
-    "Part::Tube": ("InnerRadius", "OuterRadius", "Height"),
 }
+# Part::Tube was offered here and FreeCAD has no such object type: every
+# call to it came back "'Part::Tube' is not a document object type", which
+# reads as the model making something up when it was the list that was
+# wrong. A tube is a revolved half-section anyway - revolve_profile draws
+# one from four corners, and keeps the Angle adjustable while it does.
 
 #: The three principal planes, oriented as FreeCAD orients its own origin
 #: planes, with the direction a pad grows in. A profile drawn on XZ reads
@@ -122,7 +126,12 @@ def _rounded(points: list) -> list:
             ends.append(((bx, by), (bx, by), None))   # straight through
             continue
         reach = r / math.tan(half)
-        if reach > la - 1e-9 or reach > lc - 1e-9:
+        # Equality is allowed: an arc that eats a whole side leaves a
+        # zero-length line, which is dropped below. That is a knuckle
+        # ending in a semicircle, or a tab whose round reaches the corner
+        # it starts from - ordinary shapes, and they were being refused
+        # for needing exactly as much room as they had.
+        if reach > la + 1e-9 or reach > lc + 1e-9:
             raise ToolError(
                 "R%g will not fit on the corner at (%g, %g): it needs %.2f mm "
                 "of each side and has %.2f. Use a smaller radius."
@@ -1402,13 +1411,16 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
                  "tools": {"type": "array", "items": text}},
                  "required": ["operation", "base", "tools"]},
              run=session.combine),
+        # Said on both patterns, because reaching for one to repeat a hole
+        # is the obvious move and it silently makes N copies of the whole
+        # part instead: a drilled hole is not an object, it is an absence.
         Tool(name="pattern_circular",
              description=(
                  "Repeat a shape evenly around a circle - a bolt circle, a "
                  "ring of holes, spokes. Place one where the first should "
                  "go, then pattern it. count is how many there are in all, "
                  "including the one you placed. Use this rather than working "
-                 "out the positions yourself."),
+                 "out the positions yourself. This repeats an OBJECT. To repeat a hole, call drill once per hole - a hole is not an object to copy."),
              parameters={"type": "object", "properties": {
                  "name": text, "count": {"type": "integer"},
                  "centre": point,
@@ -1422,7 +1434,7 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
              description=(
                  "Repeat a shape along a line - a row of holes. count is "
                  "how many there are in all; spacing is the step from one "
-                 "to the next. Pattern twice for a grid."),
+                 "to the next. Pattern twice for a grid. This repeats an OBJECT. To repeat a hole, call drill once per hole - a hole is not an object to copy."),
              parameters={"type": "object", "properties": {
                  "name": text, "count": {"type": "integer"},
                  "spacing": point},

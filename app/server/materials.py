@@ -61,6 +61,13 @@ ALIASES = [
     ("ti-6al-4v", "Ti-6Al-4V"),
     ("grade 5", "Ti-6Al-4V"),
     ("titanium", "Ti-6Al-4V"),
+    # The copper alloys are named by their UNS number, so no amount of
+    # looking for the word finds them: C11000 ETP is what a busbar is
+    # made of, C23000 is red brass, C51000 phosphor bronze.
+    ("phosphor bronze", "Copper-510"),
+    ("bronze", "Copper-510"),
+    ("brass", "Copper-230"),
+    ("copper", "Copper-102"),
     ("stainless", "Steel-X5CrNi18-10"),
     ("mild steel", "Steel-1C22"),
     ("carbon steel", "Steel-1C22"),
@@ -184,6 +191,15 @@ def find(text: str, bridge: Any = None) -> Optional[dict]:
                         or guess in c["name"].lower()]
                 if near:
                     return sorted(near, key=lambda c: len(c["name"]))[0]
+
+    # Nothing aliased, but the library carries 145 cards and the request
+    # may simply have named one of them outright. Whole words only, and
+    # only where a card name begins with it, so "a steel plate" does not
+    # find a card because the word "plate" appears somewhere in one.
+    for word in re.findall(r"[a-z][a-z0-9]{3,}", lowered):
+        named = [c for c in cards if c["name"].lower().startswith(word)]
+        if named:
+            return sorted(named, key=lambda c: len(c["name"]))[0]
     return None
 
 
