@@ -233,6 +233,18 @@ def _outline(sketch, pieces):
 def _check(feature, complaint):
     shape = getattr(feature, "Shape", None)
     if shape is None or shape.isNull() or shape.Volume <= 1e-9:
+        # Take the half-made feature out before complaining. Left in, it is
+        # an object with a null shape sitting on top of the part, which
+        # makes the real part no longer a tip of the tree - and then what
+        # gets measured, exported and drawn is every intermediate cut and
+        # every cutter, because nothing is left that looks like an answer.
+        # One refused chamfer turned a 120 x 120 x 205 pedestal into eight
+        # overlapping solids.
+        try:
+            doc.removeObject(feature.Name)
+            doc.recompute()
+        except Exception:
+            pass
         raise RuntimeError(complaint)
 
 

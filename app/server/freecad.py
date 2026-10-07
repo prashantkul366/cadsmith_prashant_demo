@@ -86,9 +86,15 @@ def _tips(doc):
             continue
         out.append(obj)
     if not out:
+        # Nothing is a tip, so something on top of the part has a null
+        # shape. Falling back to every object with a shape hands back the
+        # cutters and every intermediate boolean as if they were the part.
+        # Only things somebody could see are considered.
         out = [o for o in doc.Objects
                if getattr(o, "Shape", None) is not None
-               and not o.Shape.isNull()]
+               and not o.Shape.isNull()
+               and getattr(o, "Visibility", True)
+               and o.Shape.Volume > 1e-9]
     return out
 """
 
