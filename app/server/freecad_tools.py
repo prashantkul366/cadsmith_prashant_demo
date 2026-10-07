@@ -702,21 +702,34 @@ cutters.append(Part.makeCylinder({size / 2.0}, length, start, towards))
 tool = cutters[0]
 for extra in cutters[1:]:
     tool = tool.fuse(extra)
-holed = target.Shape.cut(tool)
-if holed is None or holed.isNull() or holed.Volume <= 0:
-    raise RuntimeError("that hole would remove the whole part")
+# A parametric cut, not a baked one. Replacing the solid with a plain
+# feature and deleting what made it threw the tree away, and with it
+# every slider: a padded plate whose thickness a person could drag
+# stopped moving the moment it had a hole in it, while the panel went
+# on showing the control. Base still points at what it cut, so the pad
+# above still drives, and part.FCStd still opens with a tree an
+# engineer can carry on from - which is the whole reason to build in
+# FreeCAD rather than hand over a dead solid.
+was = target.Shape.Volume
+cutter = doc.addObject("Part::Feature", {self._clean(target) + "Cutter"!r})
+cutter.Shape = tool
+cutter.Visibility = False
+out = doc.addObject("Part::Cut", {self._clean(target) + "Drilled"!r})
+out.Base = target
+out.Tool = cutter
+doc.recompute()
+_check(out, "that hole would remove the whole part")
 # Cutting nothing is a perfectly valid boolean, so without this a cutter
 # that missed the part - pointing the wrong way, or placed off it -
 # reported a hole it had not made, and the drawing then called it out.
-if target.Shape.Volume - holed.Volume < 1e-6:
+if was - out.Shape.Volume < 1e-6:
+    doc.removeObject(out.Name)
+    doc.removeObject(cutter.Name)
+    doc.recompute()
     raise RuntimeError(
         "that hole removed no material: the cutter never met the part. "
         "Check the point it starts from and the way the axis points - a "
         "hole going into a top face is drilled -Z, not Z.")
-out = doc.addObject("Part::Feature", {self._clean(target) + "Drilled"!r})
-out.Shape = holed
-_consume(doc, target)
-doc.recompute()
 made = [out.Name]
 """)
         self.holes.append({
@@ -1120,13 +1133,54 @@ print(obj.Name)
         return self._edit_feature({"op": "remove", "select": feature_id})
 
     def add_fillet(self, radius: float, where: str = "all") -> dict:
+        if where == "all":
+            return self._break_edges("Fillet", float(radius))
         return self._edit_feature({"op": "add_fillet", "radius": float(radius),
                                    "where": where})
 
     def add_chamfer(self, size: float, where: str = "all") -> dict:
         """Break the edges flat. The last line of almost every drawing."""
+        if where == "all":
+            return self._break_edges("Chamfer", float(size))
         return self._edit_feature({"op": "add_chamfer", "size": float(size),
                                    "where": where})
+
+    def _break_edges(self, kind: str, size: float) -> dict:
+        """Chamfer or fillet every edge, as a feature rather than a bake.
+
+        Done in FreeCAD rather than in this app's own kernel because
+        Part::Chamfer and Part::Fillet keep their Base, so the tree above
+        them survives and so do the sliders. Breaking the edges is the last
+        thing almost every prompt asks for, and doing it by exporting the
+        solid, editing it here and importing a plain lump put the part back
+        with no tree at all - which undid, on the very last call, the thing
+        that makes building in FreeCAD worth doing.
+        """
+        if size <= 0:
+            raise ToolError(f"a {kind.lower()} needs a positive size")
+        if not self.built:
+            raise ToolError("there is nothing built yet to break the edges of")
+        target = self.built[-1]
+        made = self._build(f"""
+target = doc.getObject({target!r})
+if target is None:
+    raise RuntimeError("there is no object called {target} any more")
+count = len(target.Shape.Edges)
+if not count:
+    raise RuntimeError("that solid has no edges to break")
+out = doc.addObject("Part::{kind}", {self._clean(target) + kind!r})
+out.Base = target
+out.Edges = [(i + 1, {float(size)}, {float(size)}) for i in range(count)]
+target.Visibility = False
+doc.recompute()
+_check(out, "a {kind.lower()} of {size:g} will not fit on those edges - "
+            "the kernel could not build it. Try a smaller size.")
+made = [out.Name]
+""")
+        self.built.append(made[0])
+        return self._measured(broke=kind.lower(), size=size,
+                              edges=f"every edge of {target}",
+                              in_part=made[0])
 
     def _export_shape(self):
         """The finished solid, here, as a file direct.py can read."""
@@ -1162,8 +1216,16 @@ print(obj.Name)
         self.bridge.run(f"""
 import FreeCAD, Part
 doc = FreeCAD.getDocument({self.document!r})
-for obj in list(doc.Objects):
-    doc.removeObject(obj.Name)
+# Tips first. Removing a parent invalidates its children's handles, so
+# walking doc.Objects in order and deleting as you go reaches an object
+# that has already gone - "Cannot access attribute 'Name' of deleted
+# object", which only showed up once there was a real tree to delete.
+while doc.Objects:
+    loose = [o for o in doc.Objects if not o.InList]
+    if not loose:
+        break
+    for obj in loose:
+        doc.removeObject(obj.Name)
 shape = Part.Shape()
 shape.read({str(out)!r})
 obj = doc.addObject("Part::Feature", "Edited")

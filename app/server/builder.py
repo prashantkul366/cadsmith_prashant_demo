@@ -576,18 +576,70 @@ def apply_parameters(bridge: freecad.Bridge, document: str,
     tree recomputes only what depends on it.
     """
     by_name = {entry["name"]: entry for entry in mapping}
+    # What each property held, so a change that will not rebuild can be put
+    # back. A part that quietly disagrees with the control that moved it is
+    # worse than a control that refuses: the panel says 45, the solid is
+    # still 30, and nothing on screen says which one is the part.
+    before: list[tuple] = []
     changed: list[str] = []
     for name, value in values.items():
         entry = by_name.get(name)
         if entry is None:
             continue
         scale = float(entry.get("scale") or 1.0)
+        was = freecad.number(
+            ((bridge.object(document, entry["object"]) or {})
+             .get("Properties") or {}).get(entry["property"]))
+        if was is not None:
+            before.append((entry["object"], entry["property"], was))
         bridge.edit(document, entry["object"],
                     **{entry["property"]: float(value) / scale})
         changed.append(f"{entry['label']} {float(value):g}")
     if changed:
-        bridge.run(f"""
-import FreeCAD
-FreeCAD.getDocument({document!r}).recompute()
-""")
+        try:
+            _settle(bridge, document)
+        except freecad.FreeCADError as refused:
+            for obj, prop, was in before:
+                try:
+                    bridge.edit(document, obj, **{prop: was})
+                except freecad.FreeCADError:
+                    pass
+            _settle(bridge, document, repair=False)
+            raise freecad.FreeCADError(
+                f"{refused}. The part is as it was before: a value that "
+                f"leaves a feature it cannot rebuild is not applied."
+            ) from None
     return changed
+
+
+def _settle(bridge: freecad.Bridge, document: str,
+            repair: bool = True) -> None:
+    """Recompute, re-deriving any edge break, and complain if one is stale."""
+    bridge.run(f"""
+import FreeCAD
+doc = FreeCAD.getDocument({document!r})
+doc.recompute()
+# A Part::Chamfer or Part::Fillet remembers edges by INDEX, and the
+# indices move when what is underneath changes shape. So a slider drag
+# recomputed the whole cut chain correctly and then left the edge break
+# Touched,Invalid, holding its old shape - the part silently disagreeing
+# with the control that had just moved, which is worse than having no
+# control. Every one of these was made as "every edge", so the list is a
+# rule rather than a list, and it is re-derived here.
+broken = [o for o in doc.Objects
+          if o.TypeId in ("Part::Chamfer", "Part::Fillet")
+          and getattr(o, "Base", None) is not None]
+for obj in broken:
+    edges = list(obj.Edges)
+    if not edges:
+        continue
+    _, size1, size2 = edges[0]
+    obj.Edges = [(i + 1, size1, size2)
+                 for i in range(len(obj.Base.Shape.Edges))]
+if broken:
+    doc.recompute()
+dead = [o.Name for o in doc.Objects if "Invalid" in o.State]
+if dead and {bool(repair)!r}:
+    raise RuntimeError(
+        "that value leaves " + ", ".join(dead) + " unable to rebuild")
+""")
