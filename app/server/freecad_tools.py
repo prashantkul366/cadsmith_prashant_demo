@@ -108,7 +108,12 @@ def _rounded(points: list) -> list:
         prev = points[i - 1]
         here = points[i]
         nxt = points[(i + 1) % n]
-        r = float(here[2]) if len(here) > 2 else 0.0
+        # A radius marked "next" belongs to the side leaving this corner,
+        # not to the corner itself. Rounding the corner as well moved the
+        # arc's own endpoints, so the circle it was asked for no longer
+        # passed through them and the outline came apart.
+        on_the_side = len(here) > 3 and str(here[3]).lower() == "next"
+        r = float(here[2]) if len(here) > 2 and not on_the_side else 0.0
         bx, by = float(here[0]), float(here[1])
         if r <= 0:
             ends.append(((bx, by), (bx, by), None))
@@ -147,7 +152,10 @@ def _rounded(points: list) -> list:
     for i in range(n):
         _, leave, corner = ends[i]
         arrive, _, _ = ends[(i + 1) % n]
-        if corner is not None:
+        bulge = (float(points[i][2])
+                 if len(points[i]) > 3 and str(points[i][3]).lower() == "next"
+                 else 0.0)
+        if corner is not None and not bulge:
             (ccx, ccy), r = corner
             t1, t2, _ = ends[i]
             a0 = math.atan2(t1[1] - ccy, t1[0] - ccx)
@@ -158,7 +166,35 @@ def _rounded(points: list) -> list:
             if (a1 - a0) % (2.0 * math.pi) > math.pi:
                 a0, a1 = a1, a0
             out.append(("arc", (ccx, ccy), r, a0, a1))
-        if math.hypot(arrive[0] - leave[0], arrive[1] - leave[1]) > 1e-7:
+        gap = math.hypot(arrive[0] - leave[0], arrive[1] - leave[1])
+        if bulge:
+            # The side to the next corner is an arc rather than a straight
+            # line. A corner radius can only round where two sides meet;
+            # this is the other thing a drawing asks for - the tangent
+            # transition on a tensile specimen, the bottom of a stator
+            # slot, the U-turn of a cooling channel. The sign says which
+            # way it bows: positive to the left of the direction of
+            # travel, negative to the right.
+            r = abs(bulge)
+            if gap < 1e-9:
+                continue
+            if r < gap / 2.0 - 1e-9:
+                raise ToolError(
+                    "R%g cannot reach from (%g, %g) to (%g, %g): those are "
+                    "%.2f mm apart, and an arc between them needs a radius "
+                    "of at least half that." % (r, leave[0], leave[1],
+                                                arrive[0], arrive[1], gap))
+            mx, my = (leave[0] + arrive[0]) / 2.0, (leave[1] + arrive[1]) / 2.0
+            dx, dy = (arrive[0] - leave[0]) / gap, (arrive[1] - leave[1]) / gap
+            off = math.sqrt(max(0.0, r * r - (gap / 2.0) ** 2))
+            side = 1.0 if bulge > 0 else -1.0
+            ccx, ccy = mx - dy * off * side, my + dx * off * side
+            a0 = math.atan2(leave[1] - ccy, leave[0] - ccx)
+            a1 = math.atan2(arrive[1] - ccy, arrive[0] - ccx)
+            if side < 0:
+                a0, a1 = a1, a0
+            out.append(("arc", (ccx, ccy), r, a0, a1))
+        elif gap > 1e-7:
             out.append(("line", leave, arrive))
     return out
 
@@ -926,6 +962,54 @@ made = [body.Name, sketch.Name, rev.Name]
         return self._measured(added=made[0], profile=made[1], revolution=made[2],
                               adjustable=f"{made[2]}.Angle is how far round")
 
+    def loft(self, sections: list, name: str = "", solid: bool = True,
+             ruled: bool = False) -> dict:
+        """Blend one outline into another along the part.
+
+        The operation a cable lug's barrel-to-palm transition is, and a
+        turbine blade, and a venturi: two or more profiles at different
+        stations, skinned. Built out of a pad it is not approximable - a
+        round section becoming a rectangular one has no prismatic answer.
+
+        Each section is {"points": [...], "plane": "XY", "offset": 0.0},
+        drawn the way extrude_profile draws one, and they are skinned in
+        the order given.
+        """
+        if not isinstance(sections, (list, tuple)) or len(sections) < 2:
+            raise ToolError(
+                "sections is at least two outlines to blend between, each "
+                '{"points": [[x, y], ...], "plane": "XY", "offset": 0}')
+        stem = self._clean(name or "Loft")
+        drawn = []
+        for index, section in enumerate(sections):
+            if not isinstance(section, dict) or not section.get("points"):
+                raise ToolError(f"section {index} has no points")
+            plane = str(section.get("plane", "XY")).upper()
+            if plane not in PLANES:
+                raise ToolError("plane is one of " + ", ".join(PLANES))
+            drawn.append((self._profile(section["points"]), plane,
+                          float(section.get("offset", 0.0))))
+        lines = []
+        for index, (profile, plane, offset) in enumerate(drawn):
+            lines.append(
+                f"sk{index} = doc.addObject('Sketcher::SketchObject', "
+                f"{stem + 'Sec' + str(index)!r})\n"
+                f"sk{index}.Placement = _placement({plane!r}, {offset})\n"
+                f"_outline(sk{index}, {profile!r})")
+        made = self._build("\n".join(lines) + f"""
+doc.recompute()
+out = doc.addObject("Part::Loft", {stem + "Loft"!r})
+out.Sections = [{", ".join("sk%d" % i for i in range(len(drawn)))}]
+out.Solid = {bool(solid)}
+out.Ruled = {bool(ruled)}
+doc.recompute()
+_check(out, "those outlines would not blend - they may cross, or be in "
+            "the wrong order along the part")
+made = [out.Name]
+""")
+        self.built.append(made[0])
+        return self._measured(added=made[0], sections=len(drawn))
+
     def shell(self, name: str, thickness: float, open_face: str = "top") -> dict:
         """Hollow a solid out, leaving a wall and an opening.
 
@@ -944,9 +1028,20 @@ shape = target.Shape
 face = _face_towards(shape, {open_face!r})
 if face is None:
     raise RuntimeError("no face on the {open_face} of that part to open")
-hollow = shape.makeThickness([face], -abs({float(thickness)}), 1e-3)
+try:
+    hollow = shape.makeThickness([face], -abs({float(thickness)}), 1e-3)
+except Exception as why:
+    # OCCT throws here rather than returning nothing, and what came back
+    # was "BRep_API: command not done", which names no part, no wall and
+    # no way forward.
+    raise RuntimeError(
+        "a {float(thickness):g} mm wall will not stand in that part: the "
+        "kernel could not build it. It is usually thicker than the part is "
+        "somewhere - a rim as thin as the wall leaves nothing behind. "
+        "(" + type(why).__name__ + ")")
 if hollow is None or hollow.isNull() or hollow.Volume <= 0:
-    raise RuntimeError("the wall would not stand - it may be thicker than the part")
+    raise RuntimeError(
+        "a {float(thickness):g} mm wall would leave nothing of that part")
 out = doc.addObject("Part::Feature", {self._clean(name) + "Shell"!r})
 out.Shape = hollow
 target.Visibility = False
@@ -976,18 +1071,24 @@ made = [out.Name]
                 "repeat the first point at the end.")
         out = []
         for point in points:
+            tail = tuple(point[3:]) if isinstance(point, (list, tuple)) else ()
             if (not isinstance(point, (list, tuple))
-                    or len(point) not in (2, 3)
-                    or not all(isinstance(v, (int, float)) for v in point)):
+                    or len(point) not in (2, 3, 4)
+                    or not all(isinstance(v, (int, float)) for v in point[:3])
+                    or (tail and str(tail[0]).lower() != "next")):
                 raise ToolError(
                     f"{point!r} is not an [x, y] pair in millimetres, or an "
                     f"[x, y, radius] corner. A radius rounds that corner - "
                     f"it is how a plate gets R15 corners, and how a slot or "
                     f"a tab gets a full-round end (radius = half the width "
-                    f"on the two corners at that end).")
+                    f"on the two corners at that end). "
+                    f"[x, y, radius, 'next'] instead makes the SIDE from "
+                    f"here to the next corner an arc of that radius, which "
+                    f"is how a tangent transition or a U-turn is drawn; a "
+                    f"negative radius bows it the other way.")
             if len(point) == 3 and float(point[2]) < 0:
                 raise ToolError("a corner radius cannot be negative")
-            out.append([float(v) for v in point])
+            out.append([float(v) for v in point[:3]] + list(tail))
         if out[0][:2] == out[-1][:2]:
             out.pop()
         if len(out) < 3:
@@ -1191,11 +1292,42 @@ if not count:
     raise RuntimeError("that solid has no edges to break")
 out = doc.addObject("Part::{kind}", {self._clean(target) + kind!r})
 out.Base = target
-out.Edges = [(i + 1, {float(size)}, {float(size)}) for i in range(count)]
+size = {float(size)}
+every = [(i + 1, size, size) for i in range(count)]
+out.Edges = every
 target.Visibility = False
 doc.recompute()
-_check(out, "a {kind.lower()} of {size:g} will not fit on those edges - "
-            "the kernel could not build it. Try a smaller size.")
+
+
+def _ok(feature):
+    shape = getattr(feature, "Shape", None)
+    return shape is not None and not shape.isNull() and shape.Volume > 1e-9
+
+
+if not _ok(out):
+    # Every edge at once is what a drawing asks for and not always what
+    # the kernel can do: one pocket too narrow for the break refuses the
+    # whole set, and the part comes back with no broken edges at all.
+    # A person selects them all and deselects what will not take, so
+    # that is what happens here - the edges are accumulated and any that
+    # refuses is left sharp, which is the honest answer and is what the
+    # part would be made as.
+    kept = []
+    for edge in every:
+        out.Edges = kept + [edge]
+        doc.recompute()
+        if _ok(out):
+            kept.append(edge)
+    out.Edges = kept
+    doc.recompute()
+    if not kept or not _ok(out):
+        raise RuntimeError(
+            "a {kind.lower()} of %g will not fit on any edge of that part"
+            % size)
+    skipped = len(every) - len(kept)
+else:
+    skipped = 0
+print("SKIPPED " + str(skipped) + " OF " + str(count))
 made = [out.Name]
 """)
         self.built.append(made[0])
@@ -1328,6 +1460,25 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
                  "axis": {**text, "enum": ["X", "Y", "Z"]}},
                  "required": ["points"]},
              run=session.revolve_profile),
+        Tool(name="loft",
+             description=(
+                 "Blend one outline into another along the part - a cable "
+                 "lug's barrel becoming a flat palm, a venturi, a blade. "
+                 "There is no prismatic answer to a round section becoming "
+                 "a rectangular one, so this is the only tool that makes "
+                 "one. sections are outlines at stations along the part, "
+                 "in order."),
+             parameters={"type": "object", "properties": {
+                 "sections": {"type": "array", "items": {"type": "object"},
+                              "description": 'outlines to blend, each '
+                                             '{"points": [[x, y], ...], '
+                                             '"plane": "XY", "offset": 0}'},
+                 "name": text,
+                 "ruled": {"type": "boolean",
+                           "description": "straight between sections rather "
+                                          "than a smooth skin"}},
+                 "required": ["sections"]},
+             run=session.loft),
         Tool(name="shell",
              description=(
                  "Hollow a solid out, leaving a wall of the thickness given "
