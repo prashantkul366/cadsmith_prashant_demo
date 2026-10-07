@@ -145,6 +145,58 @@ def main() -> int:
                      as_step(plate(4), "vol"))
     check("a wildly wrong volume estimate does not block", vol.ok)
 
+    # -- a fully dimensioned request ---------------------------------------
+    print("\nA request written the way a drawing office writes one")
+    # These are the shape a text-to-CAD prompt library actually takes: an
+    # origin, then every feature at stated coordinates, then the finishing
+    # callouts. Three things in that style were being read as requirements
+    # the part could not possibly meet, and each one failed a correct part.
+    from app.server import stated as stated_mod
+
+    # "0.5 mm x 45 deg chamfer" is a chain with a unit in it, so the 45 was
+    # read as an overall size - and every prompt in a dimensioned library
+    # ends with a chamfer callout, so every part failed.
+    chamfered = stated_mod.requirements(
+        "Block X 0 to 60, Y 0 to 40, Z 0 to 30. "
+        "0.5 mm x 45 deg chamfer on all 12 outer edges.")
+    check("an angle is not read as a length",
+          45 not in (chamfered.get("extents") or []),
+          str(chamfered.get("extents")))
+
+    # "counterbored Dia 11 x 6.5 mm deep" is a hole, not the part.
+    bored = stated_mod.requirements(
+        "Two Dia 6.6 through holes, counterbored Dia 11 x 6.5 mm deep "
+        "from Z=30.")
+    check("a counterbore is not read as the part's size",
+          not (bored.get("extents") or []), str(bored.get("extents")))
+
+    # "M8x1.25 tapped holes" offered the reader a 25.
+    threaded = stated_mod.requirements(
+        "Four M8x1.25 tapped holes from the top face, thread depth 16.")
+    check("a thread pitch is not read as a hole count",
+          (threaded.get("hole_count") or 0) <= 4,
+          str(threaded.get("hole_count")))
+
+    # "Two Dia 8 H7 dowel holes" offered a Two and an 8, and the nearest
+    # number won. The gate blocks on a shortfall, so over-counting is the
+    # one direction that costs a correct part.
+    dowelled = stated_mod.requirements(
+        "Two vertical through holes Dia 8.5 at (0,-30) and (0,30). "
+        "Two Dia 8 H7 dowel holes, 12 mm deep, at (-35,0) and (35,0).")
+    check("a hole's diameter is not read as how many there are",
+          (dowelled.get("hole_count") or 0) <= 4,
+          str(dowelled.get("hole_count")))
+
+    # ...and none of that may cost the plain phrasing it was built for.
+    plain = stated_mod.requirements(
+        "a plate 100mm by 60mm by 8mm with four 6mm holes")
+    check("a plainly stated size is still read",
+          sorted(set(plain.get("extents") or [])) == [8.0, 60.0, 100.0],
+          str(plain.get("extents")))
+    check("and a plainly stated hole count with it",
+          plain.get("hole_count") == 4 and plain.get("bores") == [6.0] * 4,
+          f"{plain.get('hole_count')} x {plain.get('bores')}")
+
     # -- hard checks still bite --------------------------------------------
     print("\nHard checks still bite")
 

@@ -107,7 +107,21 @@ _SQUARE = re.compile(rf"{_V}{_U}\s*square\b", re.I)
 #: after the chain, which is where the qualifier is written.
 _NOT_A_SIZE = re.compile(
     r"^\s*(?:\w+\s+){0,2}?(?:pattern|pitch|grid|array|spacing|spaced|centres|"
-    r"centers|apart|pcd|bolt\s+circle)\b", re.I)
+    r"centers|apart|pcd|bolt\s+circle"
+    # A finishing callout is written as a chain and is not the part's size.
+    # "0.5 mm x 45 deg chamfer" was read as a part 45 mm across - and every
+    # prompt in a dimensioned library ends with one, so every part failed
+    # the gate for a number that was an angle.
+    r"|deg\b|degree|chamfer|countersink|counterbore|c'?bore|csk"
+    # "counterbored Dia 17.5 x 11 deep" is a hole's depth, not an extent.
+    r"|deep\b)\b", re.I)
+
+#: A chain introduced by a diameter or a radius describes one feature, not
+#: the part. "Dia 14 x 3 deep", "R12.5 x 8" - the first number is already
+#: read as a diameter by its own pattern, and neither is an overall size.
+_FEATURE_CHAIN = re.compile(
+    r"(?:\bdia\b|\bdiameter\b|\bradius\b|\bbore\b|\bthread\b|"
+    r"\bM\d|[\u00d8\u2300R])\s*[\d.]*\s*$", re.I)
 
 _WORD_COUNT = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
                "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
@@ -116,7 +130,7 @@ _WORD_COUNT = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
 #: "four 6mm holes", "six 9mm bolt holes", "4 x 6mm holes". The unit is
 #: required: without it "four 6 holes" is as likely to be a typo as a size.
 _HOLES = re.compile(
-    rf"\b(?P<count>\d{{1,3}}|{'|'.join(_WORD_COUNT)})\s*(?:x\s*)?"
+    rf"(?<![\d.])\b(?P<count>\d{{1,3}}|{'|'.join(_WORD_COUNT)})\s*(?:x\s*)?"
     rf"(?P<dia>\d+(?:\.\d+)?)\s*(?P<u>{_UNIT})\b\s*"
     rf"(?:[\w-]+\s+){{0,3}}?holes\b", re.I)
 #: "a 5mm diameter hole", "a single 8mm hole"
@@ -129,8 +143,23 @@ _BARE_HOLE = re.compile(r"\b(?:a|an|one|single)\s+(?:[\w-]+\s+){0,2}?hole\b", re
 #: own: how many holes a part carries is the claim that fails most visibly,
 #: and it is checked as a shortfall, so reading it can only tighten.
 _COUNT_HOLES = re.compile(
-    rf"\b(?P<count>\d{{1,3}}|{'|'.join(_WORD_COUNT)})\s+"
+    rf"(?<![\d.])\b(?P<count>\d{{1,3}}|{'|'.join(_WORD_COUNT)})\s+"
     rf"(?:[\w-]+\s+){{0,3}}?holes\b", re.I)
+
+
+#: What makes a number in front of "holes" a diameter rather than a count.
+#: "Two Dia 8 H7 dowel holes" offers the reader an 8 and a Two, and the
+#: nearest number wins - so a part with two holes was failed for not having
+#: eight. The gate blocks on a shortfall, so an over-count is the one
+#: direction that costs a correct part.
+_NOT_A_COUNT = re.compile(
+    r"(?:\bdia\b|\bdiameter\b|\bradius\b|\bbore\b|\bM|[\u00d8\u2300R])"
+    r"\s*$", re.I)
+
+
+def _is_a_count(text: str, start: int) -> bool:
+    """Whether the number at ``start`` is a quantity and not a size."""
+    return not _NOT_A_COUNT.search(text[max(0, start - 14):start])
 
 
 @dataclass(frozen=True)
@@ -193,7 +222,10 @@ def read(prompt: str) -> list[Stated]:
         # A chain qualified as a pattern or pitch is not the overall size.
         # It is still worth telling the Planner about, so it is kept - just
         # not as something that can block.
-        role = "pitch" if _NOT_A_SIZE.match(text[match.end():]) else "extent"
+        before = text[max(0, match.start() - 24):match.start()]
+        role = ("pitch" if (_NOT_A_SIZE.match(text[match.end():])
+                            or _FEATURE_CHAIN.search(before))
+                else "extent")
         for name in ("a", "b", "c"):
             raw = match.group(name)
             if raw is None:
@@ -228,6 +260,8 @@ def holes(prompt: str) -> tuple[Optional[int], list[float]]:
     spans: list[tuple[int, int]] = []
 
     for match in _HOLES.finditer(text):
+        if not _is_a_count(text, match.start("count")):
+            continue
         raw = match.group("count").lower()
         count = _WORD_COUNT.get(raw)
         if count is None:
@@ -257,6 +291,8 @@ def holes(prompt: str) -> tuple[Optional[int], list[float]]:
 
     for match in _COUNT_HOLES.finditer(text):
         if overlaps(match.span()):
+            continue
+        if not _is_a_count(text, match.start("count")):
             continue
         raw = match.group("count").lower()
         count = _WORD_COUNT.get(raw)
