@@ -112,9 +112,16 @@ _NOT_A_SIZE = re.compile(
     # "0.5 mm x 45 deg chamfer" was read as a part 45 mm across - and every
     # prompt in a dimensioned library ends with one, so every part failed
     # the gate for a number that was an angle.
-    r"|deg\b|degree|chamfer|countersink|counterbore|c'?bore|csk"
-    # "counterbored Dia 17.5 x 11 deep" is a hole's depth, not an extent.
-    r"|deep\b)\b", re.I)
+    r")\b", re.I)
+
+#: Words that make a chain not a dimension of this part at all - as opposed
+#: to a pitch, which is worth telling the Planner even though it cannot
+#: block. A chamfer's angle is not a size the part either has or lacks, so
+#: reporting it leaves a red row reading "stated 45 mm" beside a part with
+#: no 45 anywhere, which reads as a broken check rather than a note.
+_NOT_A_DIMENSION = re.compile(
+    r"^\s*(?:\w+\s+){0,2}?(?:deg\b|degree|chamfer|countersink|counterbore|"
+    r"c'?bore|csk|deep\b)", re.I)
 
 #: A chain introduced by a diameter or a radius describes one feature, not
 #: the part. "Dia 14 x 3 deep", "R12.5 x 8" - the first number is already
@@ -222,8 +229,11 @@ def read(prompt: str) -> list[Stated]:
         # A chain qualified as a pattern or pitch is not the overall size.
         # It is still worth telling the Planner about, so it is kept - just
         # not as something that can block.
+        after = text[match.end():]
+        if _NOT_A_DIMENSION.match(after):
+            continue
         before = text[max(0, match.start() - 24):match.start()]
-        role = ("pitch" if (_NOT_A_SIZE.match(text[match.end():])
+        role = ("pitch" if (_NOT_A_SIZE.match(after)
                             or _FEATURE_CHAIN.search(before))
                 else "extent")
         for name in ("a", "b", "c"):
@@ -313,6 +323,74 @@ def holes(prompt: str) -> tuple[Optional[int], list[float]]:
     return (total or None), diameters
 
 
+#: A thread named in a request, and whether the hole is tapped for it or
+#: clears it. The two are nothing alike: a tapped M8 hole is drilled 6.8 and
+#: a clearance M8 hole is drilled 9, so a request that says which one it
+#: wants has stated a diameter without writing a number down.
+_THREAD = re.compile(r"\bM(?P<size>3|4|5|6|8|10|12|16|20|24)\b", re.I)
+
+#: The words that make it a clearance hole rather than a tapped one, read
+#: either side of the thread: "M8 clearance", "clearance for M8", "a hole an
+#: M8 passes through".
+_CLEARS = re.compile(r"\bclear(?:ance|ing)?\b|\bpass(?:es)?\s+through\b"
+                     r"|\bfree\s+fit\b|\bthrough\s+hole\s+for\b", re.I)
+_TAPS = re.compile(r"\btapp?ed\b|\bthreaded?\b|\bscrew(?:s|ed)?\s+into\b"
+                   r"|\bfemale\s+thread\b", re.I)
+
+#: ISO 262 tapping drills and ISO 273 medium clearance, which is what the
+#: numbers above actually are. Kept here as well as in freecad_tools so that
+#: reading a request does not need FreeCAD.
+TAP_DRILL = {3: 2.5, 4: 3.3, 5: 4.2, 6: 5.0, 8: 6.8, 10: 8.5, 12: 10.2,
+             16: 14.0, 20: 17.5, 24: 21.0}
+CLEARANCE_DRILL = {3: 3.4, 4: 4.5, 5: 5.5, 6: 6.6, 8: 9.0, 10: 11.0,
+                   12: 13.5, 16: 17.5, 20: 22.0, 24: 26.0}
+
+#: "4 off", "6 off Ø8.5" - the drawing-office way of saying how many.
+_OFF = re.compile(r"\b(?P<n>\d{1,2})\s*off\b", re.I)
+
+
+def threads(prompt: str) -> list[dict]:
+    """Every thread the request names, and the hole each one means.
+
+    A request saying "two M8 tapped holes" has stated a diameter - 6.8 - and
+    written no number at all. Without this the gate has a hole count and
+    nothing to check the holes against, which is how a part came back with
+    the right number of wrong holes.
+    """
+    found: list[dict] = []
+    text = prompt or ""
+
+    def nearest(pattern, at: int) -> Optional[int]:
+        """How far the closest such word is from this thread, or None.
+
+        Distance rather than presence, because one sentence names several
+        threads - "two M8 tapped holes and an M10 clearance hole" - and
+        whichever qualifier happens to be in a fixed window would give both
+        of them the same answer, which is wrong for one of them.
+        """
+        best = None
+        for word in pattern.finditer(text):
+            gap = (at - word.end()) if word.end() <= at else (word.start() - at)
+            if gap < 0 or gap > 45:
+                continue
+            best = gap if best is None else min(best, gap)
+        return best
+
+    for match in _THREAD.finditer(text):
+        size = int(match.group("size"))
+        at = match.start()
+        clears, taps = nearest(_CLEARS, at), nearest(_TAPS, at)
+        if clears is None and taps is None:
+            continue        # an M8 screw is a fastener, not a hole
+        if taps is None or (clears is not None and clears <= taps):
+            kind, drilled = "clearance", CLEARANCE_DRILL.get(size)
+        else:
+            kind, drilled = "tapped", TAP_DRILL.get(size)
+        if drilled:
+            found.append({"spec": f"M{size}", "kind": kind, "drilled": drilled})
+    return found
+
+
 def requirements(prompt: str) -> dict:
     """Everything read from one request, in a shape the plan can carry."""
     dimensions = read(prompt)
@@ -323,6 +401,13 @@ def requirements(prompt: str) -> dict:
     # advisory check looks for extents, and would report a hole missing from
     # the outside of the part.
     bore_values = {round(d, 4) for d in bores}
+    named = threads(prompt)
+    if count is None:
+        # "4 off" is how a drawing office writes a quantity, and it is the
+        # only thing in the sentence that is one.
+        off = _OFF.search(prompt or "")
+        if off:
+            count = int(off.group("n"))
     return {
         "extents": sorted({round(s.value, 4) for s in dimensions
                            if s.role in HARD_ROLES} - bore_values),
@@ -330,6 +415,11 @@ def requirements(prompt: str) -> dict:
                             if not s.is_hard} - bore_values),
         "bores": [round(d, 4) for d in bores],
         "hole_count": count,
+        # The threads the request named, with the hole each one means.
+        # Additive: nothing that already read this dictionary sees a
+        # difference, and the gate on the FreeCAD road folds them into the
+        # bores it checks.
+        "threads": named,
         "read": [{"value": s.value, "role": s.role, "phrase": s.phrase,
                   "hard": s.is_hard} for s in dimensions],
     }
