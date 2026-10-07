@@ -53,6 +53,10 @@ const I18N = (function () {
     "export.step":      ["solid, for CAD", "ソリッド（CAD 用）"],
     "export.stl":       ["mesh, for printing", "メッシュ（造形用）"],
     "export.py":        ["the CadQuery script", "CadQuery スクリプト"],
+    /* Not a script. It is the list of operations the part was built with
+       and what FreeCAD measured after each, which is worth downloading and
+       is not worth pretending can be re-run. */
+    "export.py.record": ["the build, step by step", "構築手順の記録"],
     "export.dxf":       ["the drawing, re-measurable", "図面（再計測可）"],
     "export.png":       ["the drawing, as a picture", "図面（画像）"],
     "view.reload":      ["Reload", "再読み込み"],
@@ -138,12 +142,14 @@ const I18N = (function () {
 
     "empty.title":      ["Nothing built yet", "まだ何も生成されていません"],
     "empty.body": [
-      "Describe a part on the left. Five agents plan it, write CadQuery, run "
-      + "it through the OpenCASCADE kernel and check the result before "
-      + "anything appears here.",
-      "左側で部品を説明してください。5 つのエージェントが設計を立て、"
-      + "CadQuery を書き、OpenCASCADE カーネルで実行し、結果を検証した"
-      + "うえでここに表示されます。"],
+      "Describe a part on the left, the way you would describe it to a "
+      + "machinist. It is built feature by feature in FreeCAD - padded, "
+      + "drilled, filleted - and measured after every step before anything "
+      + "appears here.",
+      "左側で部品を説明してください。機械加工を依頼するときと同じ言い方で"
+      + "かまいません。FreeCAD 上でフィーチャーを一つずつ作り - 押し出し、"
+      + "穴あけ、フィレット - 各ステップのあとに実測したうえで、ここに"
+      + "表示されます。"],
 
     "err.title":        ["The run could not complete", "実行を完了できませんでした"],
     "err.retry":        ["Try again", "再実行"],
@@ -195,6 +201,22 @@ const I18N = (function () {
     "plan.bbox.measured": ["the kernel measured {actual}",
                            "カーネルの実測値 {actual}"],
 
+    /* ── the build record ───────────────────────────────────────────
+       A part built in FreeCAD has no script behind it: a model called CAD
+       operations against a live document and FreeCAD measured the solid
+       after each one. These name that record, not a script. */
+    "build.heading":    ["How it was built", "構築の手順"],
+    "build.stat":       ["{n} STEPS", "{n} ステップ"],
+    "build.await": [
+      "Each CAD operation appears here as FreeCAD finishes it.",
+      "FreeCAD が各操作を終えるたびに、ここに表示されます。"],
+    "build.faces":      ["{n} faces", "面 {n}"],
+    "build.notsolid":   ["NOT WATERTIGHT", "閉じたソリッドではありません"],
+    "build.refused":    ["refused: {why}", "拒否されました: {why}"],
+    "build.values":     ["[{n} values]", "[{n} 件]"],
+    "build.answer":     ["THE BUILDER'S OWN ACCOUNT",
+                         "構築エージェントの説明"],
+
     /* ── code panel ─────────────────────────────────────────────────── */
     "code.heading":     ["Generated CadQuery", "生成された CadQuery"],
     "code.stat":        ["{n} LINES", "{n} 行"],
@@ -227,6 +249,11 @@ const I18N = (function () {
     /* ── kernel facts ───────────────────────────────────────────────── */
     "facts.updated":    ["Model updated", "モデルを更新しました"],
     "opt.freecad":      ["Build in FreeCAD", "FreeCAD で構築"],
+    /* The heading over the settings that only steer the script pipeline.
+       They were sitting above the switch that decides whether they apply
+       at all. */
+    "opt.fallback":     ["If FreeCAD is not running",
+                         "FreeCAD が起動していない場合"],
     "opt.document":     ["Work in", "作業対象"],
     "opt.document.tip": [
       "Work in a document you already have open in FreeCAD, instead of a "
@@ -240,12 +267,18 @@ const I18N = (function () {
                          "{name} — オブジェクト {n} 個、{size} mm"],
     "opt.document.empty": ["{name} - empty", "{name} — 空"],
     "opt.freecad.tip":  [
-      "Build the part in a running FreeCAD instead of generating a script. "
-      + "Needs FreeCAD open with the MCP addon's RPC server started; "
-      + "without it the run falls back to the pipeline.",
-      "スクリプトを生成する代わりに、起動中の FreeCAD で部品を構築します。"
-      + "FreeCAD を開き、MCP アドオンの RPC サーバーを起動しておく必要が"
-      + "あります。起動していない場合はパイプラインで実行されます。"],
+      "Build the part in a running FreeCAD by calling CAD operations "
+      + "against a live document - pad a profile, drill a hole, fillet an "
+      + "edge - and measure the solid after each one. Needs FreeCAD open "
+      + "with the MCP addon's RPC server started; without it the run falls "
+      + "back to generating a script.",
+      "起動中の FreeCAD で、ライブのドキュメントに対して CAD 操作を直接"
+      + "呼び出して部品を構築します - 輪郭の押し出し、穴あけ、エッジの"
+      + "フィレット - 各操作のあとにソリッドを実測します。FreeCAD を開き、"
+      + "MCP アドオンの RPC サーバーを起動しておく必要があります。起動して"
+      + "いない場合はスクリプト生成で実行されます。"],
+    "holes.heading":    ["HOLES, AS MEANT", "穴の仕様"],
+    "holes.drilled":    ["drilled \u00d8{d}", "下穴 \u00d8{d}"],
     "facts.validated":  ["Validated", "検証済み"],
     "facts.unvalidated": ["Attempt not yet validated", "この試行は未検証です"],
     "facts.bbox":       ["bbox mm", "外形 mm"],
@@ -366,6 +399,10 @@ const I18N = (function () {
 
     /* ── labels beside the panels ───────────────────────────────────── */
     "label.planner":    ["PLANNER", "プランナー"],
+    /* A request that states its own dimensions is read directly - no
+       Planner is called at all - and crediting one that never ran made the
+       panel look like a model's paraphrase of what was asked. */
+    "label.fromrequest": ["FROM THE REQUEST", "依頼文から読み取り"],
     "label.judge":      ["JUDGE", "検証"],
     "label.planner.model": ["PLANNER · {model}", "プランナー · {model}"],
     "label.judge.model": ["JUDGE · {model}", "検証 · {model}"],

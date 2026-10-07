@@ -34,6 +34,9 @@ const fmt = value => {
 
 const S = {
   jobId: null,
+  //: "build" when the part was made by calling CAD operations, "code" when
+  //: a script was generated. It decides what the centre panel shows.
+  record: "code",
   versions: [],      // one entry per pipeline iteration or applied edit
   selected: -1,
   health: null,
@@ -131,6 +134,142 @@ function setCode(code, highlightKeys) {
   S.codeLines = code ? code.split("\n").length : 0;
   $("#codeStat").textContent = S.codeLines
     ? t("code.stat", { n: S.codeLines }) : t("code.empty");
+}
+
+/* ── how the part was built ──────────────────────────────────────────
+   Two roads produce a part and they leave two different records.
+
+   The script pipeline writes CadQuery, and a script is a document: you read
+   it, you can run it again, and syntax colouring is the right way to show
+   it. The FreeCAD road writes nothing. A model calls CAD operations against
+   a live document - pad, drill, fillet, pattern - and FreeCAD measures the
+   solid after every one. That record is a list of things that happened, and
+   showing it as syntax-coloured Python claimed it could be replayed. It
+   cannot: nothing in this app re-executes a transcript, and a reader who
+   tried would find the comments were the content.
+
+   So it is shown as what it is - numbered steps, each with its arguments
+   and what the kernel measured afterwards. The one place the Python
+   highlighter still earns its keep is run_python, whose argument really is
+   code. */
+
+const BUILD = { steps: [], answer: "", live: false };
+
+/* A value as short as it can be said without lying about it. Coordinate
+   lists are the common case and they are what a reader wants to see; a
+   wall of them is not, so a long one says how many it had. */
+function argValue(value, limit) {
+  const cap = limit || 44;
+  if (typeof value === "number") return fmt(value);
+  if (typeof value === "boolean" || value === null) return String(value);
+  if (typeof value === "string") {
+    return value.length > cap
+      ? JSON.stringify(value.slice(0, cap - 3) + "\u2026")
+      : JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    const inner = value.map(argValue).join(",");
+    return inner.length <= 54 ? `[${inner}]`
+                              : t("build.values", { n: value.length });
+  }
+  if (value && typeof value === "object") {
+    const inner = Object.entries(value)
+      .map(([k, v]) => `${k}:${argValue(v)}`).join(" ");
+    return inner.length <= 54 ? `{${inner}}` : t("build.values",
+      { n: Object.keys(value).length });
+  }
+  return String(value);
+}
+
+function stepHTML(step, number) {
+  const args = step.arguments || {};
+  // run_python's argument is a script, which belongs in a block of its own
+  // rather than squeezed onto an argument line.
+  const code = step.tool === "run_python" ? String(args.code || "") : "";
+  const line = Object.entries(args)
+    .filter(([key]) => key !== "code" || !code)
+    .map(([key, value]) => `<span class="sarg"><i>${esc(key)}</i>`
+         + `${esc(argValue(value))}</span>`)
+    .join("");
+
+  const solids = ((step.result || {}).part_now) || [];
+  const measured = solids.map(solid => {
+    const size = (solid.size_mm || []).map(fmt).join(" \u00d7 ");
+    const bad = solid.watertight === false;
+    return `<div class="smeas${bad ? " warn" : ""}">`
+      + `<b>${esc(solid.label || "")}</b> ${esc(size)} mm`
+      + `<span>${esc(t("build.faces", { n: solid.faces }))}</span>`
+      + (bad ? `<em>${esc(t("build.notsolid"))}</em>` : "")
+      + `</div>`;
+  }).join("");
+
+  // Everything a tool said that is not the measurement. The hole callout a
+  // drill came back with is the example that matters: "4 off M8 TAPPED" is
+  // the line that ends up on the drawing, and it is said here first.
+  const notes = Object.entries(step.result || {})
+    .filter(([key, value]) => key !== "part_now" && value !== null
+            && value !== undefined && value !== "")
+    .map(([key, value]) => `<span class="snote"><i>${esc(key)}</i>`
+         + `${esc(argValue(value, 150))}</span>`)
+    .join("");
+
+  return `<div class="step${step.ok === false ? " bad" : ""}">`
+    + `<div class="shead"><span class="snum">${number}</span>`
+    + `<b class="stool">${esc(step.tool || "")}</b>`
+    + `<span class="sms">${step.ms == null ? "" : `${fmt(step.ms)} ms`}</span>`
+    + `</div>`
+    + (line ? `<div class="sargs">${line}</div>` : "")
+    + (code ? `<pre class="scode">${highlight(code)}</pre>` : "")
+    + (step.error
+        ? `<div class="serr">${esc(t("build.refused", { why: step.error }))}</div>`
+        : measured + (notes ? `<div class="snotes">${notes}</div>` : ""))
+    + `</div>`;
+}
+
+function renderBuild() {
+  const body = $("#buildSteps");
+  if (!body) return;
+  if (!BUILD.steps.length) {
+    body.innerHTML = `<div class="await"><span>${esc(t("build.await"))}</span></div>`;
+  } else {
+    body.innerHTML = BUILD.steps.map((step, i) => stepHTML(step, i + 1)).join("")
+      + (BUILD.answer
+          ? `<div class="sanswer"><span class="eyebrow">`
+            + `${esc(t("build.answer"))}</span>`
+            + `<p>${esc(BUILD.answer)}</p></div>`
+          : "");
+  }
+  const steps = BUILD.steps.length;
+  $("#codeStat").textContent = steps ? t("build.stat", { n: steps })
+                                     : t("code.empty");
+  // Following the build means staying at the newest step, which is what a
+  // person watching it wants; a person reading back up is left alone.
+  if (BUILD.live) {
+    const wrap = $("#buildView");
+    if (wrap && wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 120) {
+      wrap.scrollTop = wrap.scrollHeight;
+    }
+  }
+}
+
+/* Which of the two records this version has, and therefore which panel the
+   centre shows and what the heading and the .py download are called. */
+function setRecord(kind) {
+  const built = kind === "build";
+  S.record = built ? "build" : "code";
+  $("#buildView").hidden = !built;
+  $("#codeView").hidden = built;
+  $("#codeHeading").textContent = t(built ? "build.heading" : "code.heading");
+  const label = $("#dlPy").querySelector("small");
+  if (label) label.textContent = t(built ? "export.py.record" : "export.py");
+  if (built) renderBuild(); else setStat();
+}
+
+function resetBuild() {
+  BUILD.steps = [];
+  BUILD.answer = "";
+  BUILD.live = false;
+  renderBuild();
 }
 
 /* A date is the one thing in this app that a browser will localise to
@@ -676,13 +815,41 @@ function handleEvent(event) {
     renderStages(stage, detail);
   }
 
+  // Each CAD operation, as FreeCAD finishes it. The point of the road is
+  // that the part arrives feature by feature, and this is where that is
+  // visible: the step list grows while the model is still working.
+  if (phase === "freecad" && data && data.step) {
+    BUILD.steps.push(data.step);
+    BUILD.live = true;
+    setRecord("build");
+    appendLog(message);
+    return;
+  }
+
   if (phase === "plan" && status === "ok") {
     S.designPlan = data.design_plan;
+    // Where the plan came from, said beside it. A request that states its
+    // own dimensions is read directly and no Planner is called, and the
+    // panel was crediting one that never ran.
+    $("#genModelLabel").textContent =
+      t(data.from_the_request ? "label.fromrequest" : "label.planner");
     renderPlan(data.design_plan);
   }
   if ((phase === "code" || phase === "refine" || phase === "error_fix")
       && status === "ok") {
     setCode(data.code);
+    // The transcript arrives with the code event on the FreeCAD road. It is
+    // the same steps the panel has been filling in live; taking them from
+    // here as well means a replayed run, which never saw the step events,
+    // still shows the build.
+    if (data.transcript) {
+      BUILD.steps = data.transcript.steps || [];
+      BUILD.answer = data.transcript.answer || "";
+      BUILD.live = false;
+      setRecord("build");
+    } else {
+      setRecord("code");
+    }
   }
   if (phase === "version" && status === "ok") {
     addVersion(data);
@@ -989,7 +1156,35 @@ function renderKernelFacts(version) {
     `<div class="tile ${tone || ""}"><b>${esc(String(value ?? "—"))}</b>`
     + `<span>${esc(label)}</span></div>`
   ).join("");
+  renderHoles(geometry.holes_as_meant);
   showCard("props", true);
+}
+
+/* ── what the holes are, as opposed to what they measure ─────────────
+   A tapped M8 hole is a 6.8 cylinder and so is a 6.8 clearance hole for
+   nothing in particular. The drawing already knows the difference, because
+   the builder says what it drilled and why; this says it where the sizes
+   are read, so the two cannot disagree. Grouped the way a hole table is:
+   one row per callout, with how many of them there are. */
+function renderHoles(holes) {
+  const box = $("#mholes");
+  if (!box) return;
+  const rows = new Map();
+  for (const hole of holes || []) {
+    const label = String(hole.label || "").trim();
+    if (!label) continue;
+    const row = rows.get(label) || { n: 0, dia: hole.diameter };
+    row.n += 1;
+    rows.set(label, row);
+  }
+  box.hidden = rows.size === 0;
+  if (!rows.size) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="eyebrow">${esc(t("holes.heading"))}</div>`
+    + [...rows.entries()].map(([label, row]) =>
+        `<div class="hrow"><b>${esc(row.n > 1 ? `${row.n}\u00d7` : "")}`
+        + `${esc(label)}</b>`
+        + `<span>${esc(t("holes.drilled", { d: fmt(row.dia) }))}</span></div>`
+      ).join("");
 }
 
 function specLabel(check) {
@@ -1183,6 +1378,8 @@ function startNewPart() {
   ["props", "tokens", "params"].forEach(name => showCard(name, false));
   paramsReset();
   setCode("");
+  resetBuild();
+  setRecord("code");
   Viewer.clear();
   showOverlay("empty");
   showView("model");
@@ -1290,6 +1487,8 @@ async function generate() {
   S.catalog = null;
   Viewer.building = true;     // slow orbit while the pipeline works
   setCode("");
+  resetBuild();
+  setRecord("code");
   paramsReset();
   // Everything on the right belongs to the run that is being replaced, so
   // clear it now rather than leaving the previous part's plan and verdict on
@@ -1920,6 +2119,8 @@ async function startReplay(sourceJobId) {
   S.catalog = null;
   Viewer.building = true;     // slow orbit while the pipeline works
   setCode("");
+  resetBuild();
+  setRecord("code");
   paramsReset();
   showOverlay("pipe");
   renderStages("plan", t("detail.replaying"));
@@ -2001,9 +2202,21 @@ function handleEditEvent(event) {
   if (phase === "version" && status === "ok") {
     addVersion(data);
   }
+  if (phase === "freecad" && data && data.step) {
+    BUILD.steps.push(data.step);
+    BUILD.live = true;
+    setRecord("build");
+    return;
+  }
   if ((phase === "code" || phase === "refine" || phase === "error_fix")
       && status === "ok") {
     setCode(data.code);
+    if (data.transcript) {
+      BUILD.steps = data.transcript.steps || [];
+      BUILD.answer = data.transcript.answer || "";
+      BUILD.live = false;
+      setRecord("build");
+    }
   }
   if (phase === "job" && status === "ok") {
     renderEditSteps("done", S.editSkipValidate);
@@ -2292,12 +2505,27 @@ async function loadParameters(iteration) {
     // Both at once, and both here: the controls patch the source, so a
     // descriptor from one version against the code of another would write
     // the right number onto the wrong line.
-    const [code, data] = await Promise.all([
+    // build.json rides along: a version built in FreeCAD has one and a
+    // generated one does not, and which it has is what decides whether the
+    // centre shows steps or source. Asked for here rather than on the way
+    // in, so clicking back to an earlier version shows that version's own
+    // build rather than whatever the last run happened to leave on screen.
+    const [code, record, data] = await Promise.all([
       fetch(API.artifact(S.jobId, iteration, "code.py"))
         .then(r => (r.ok ? r.text() : null)),
+      fetch(API.artifact(S.jobId, iteration, "build.json"))
+        .then(r => (r.ok ? r.json() : null)).catch(() => null),
       API.parameters(S.jobId, iteration),
     ]);
     if (code !== null) { S.paramCode = code; setCode(code); }
+    if (record) {
+      BUILD.steps = record.steps || [];
+      BUILD.answer = record.answer || "";
+      BUILD.live = false;
+      setRecord("build");
+    } else {
+      setRecord("code");
+    }
     S.params = (data.parameters || []).map(p => {
       const before = previous.get(p.name);
       if (before && p.value >= before.min && p.value <= before.max
@@ -2338,6 +2566,10 @@ function paramsReset() {
 function setStat() {
   const stat = $("#codeStat");
   stat.hidden = false;
+  // One line of chrome for two panels, so it has to say which it is over.
+  // It read "— — —" above a four-step build, because every caller that
+  // touches the centre ends by setting the code panel's own count.
+  if (S.record === "build") { renderBuild(); return; }
   stat.textContent = S.codeLines
     ? t("code.stat", { n: S.codeLines }) : t("code.empty");
 }
@@ -2623,7 +2855,11 @@ function relocalise() {
     setModelLabels(S.genModel, S.judgeModel);
   }
   renderParameters();
-  if (S.codeLines !== undefined) setStat();
+  // The heading, the stat and the .py label all depend on which record this
+  // version has, and data-i18n has just written the code panel's words over
+  // the heading. Re-deciding is cheaper than exempting it.
+  setRecord(S.record);
+  if (S.record !== "build" && S.codeLines !== undefined) setStat();
   if (S.stage) renderStages(S.stage.key, S.stage.detail);
   renderUsage();
   if (!S.replay) resetPill();
@@ -2648,6 +2884,8 @@ I18N.onChange(relocalise);
   await loadDocuments();
   await loadHistory();
   setCode("");
+  resetBuild();
+  setRecord("code");
   paramsReset();
   Viewer.fit(false);
 })();

@@ -55,6 +55,11 @@ ALLOWED_ARTIFACTS = {
     "model.stl",
     "model.step",
     "code.py",
+    # The build as data: the tool calls a model made and what FreeCAD
+    # measured after each one. code.py is the same thing as prose, for
+    # reading and downloading; this is what the interface shows as steps,
+    # including for a version somebody clicked back to.
+    "build.json",
     "render.png",
     "geometry.json",
     "validation.json",

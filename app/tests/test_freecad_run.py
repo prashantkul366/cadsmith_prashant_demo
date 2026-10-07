@@ -107,8 +107,9 @@ def main() -> int:
     version = freecad_run.serve(ctx, PROMPT, client, "fake", bridge=bridge)
 
     v0 = job_dir / "v0"
-    for name in ("model.step", "model.stl", "code.py", "geometry.json",
-                 "parameters.json", "validation.json", "part.FCStd"):
+    for name in ("model.step", "model.stl", "code.py", "build.json",
+                 "geometry.json", "parameters.json", "validation.json",
+                 "part.FCStd"):
         check(f"the version carries its {name}",
               (v0 / name).exists() and (v0 / name).stat().st_size > 0,
               f"{(v0 / name).stat().st_size:,} bytes"
@@ -160,6 +161,28 @@ def main() -> int:
           "part.FCStd" in code)
     check("and it carries the measurements, which is what makes it readable",
           "watertight" in code and "mm3" in code)
+
+    print("\nThe build is kept as data, not only as prose")
+    built = json.loads((v0 / "build.json").read_text(encoding="utf-8"))
+    check("it holds every step the transcript describes",
+          len(built["steps"]) == code.count("# step"),
+          f"{len(built['steps'])} steps")
+    check("each step says what was called and with what",
+          all(step.get("tool") and isinstance(step.get("arguments"), dict)
+              for step in built["steps"]),
+          ", ".join(step["tool"] for step in built["steps"][:4]))
+    # This is the half that makes a step worth showing: without it the panel
+    # is a list of calls and the reader has to take them on trust.
+    check("and carries what FreeCAD measured after it",
+          any((step.get("result") or {}).get("part_now")
+              for step in built["steps"]))
+    check("the request it was built from came with it",
+          built.get("prompt") == PROMPT, str(built.get("prompt"))[:60])
+    # A version somebody clicks back to is served this file and nothing
+    # else, so a path the browser cannot ask for is a panel that goes blank.
+    from app.server.app import ALLOWED_ARTIFACTS
+    check("and the browser is allowed to ask for it",
+          "build.json" in ALLOWED_ARTIFACTS)
 
     print("\nThe slider map survives being written down")
     record = json.loads((v0 / "parameters.json").read_text(encoding="utf-8"))

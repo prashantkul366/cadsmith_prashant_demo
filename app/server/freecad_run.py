@@ -170,6 +170,24 @@ def transcript_text(prompt: str, design: dict, transcript: Any) -> str:
     return "\n".join(lines) + "\n"
 
 
+def write_record(version_dir: Path, prompt: str, design: dict,
+                 transcript: Any) -> None:
+    """Keep the build as data as well as prose.
+
+    ``code.py`` is the readable account and it is what the .py download
+    hands over. It is also the only thing the app had, which meant the
+    interface could show a build as numbered steps while it was happening
+    and had to fall back to the prose the moment somebody clicked back to
+    an earlier version - the same build, shown two ways, because the steps
+    only ever existed on an event. This writes them down.
+    """
+    record = transcript.summary()
+    record["prompt"] = prompt
+    record["must_be_true"] = list((design or {}).get("must_be_true") or [])
+    (version_dir / "build.json").write_text(
+        json.dumps(record, indent=2, default=str), encoding="utf-8")
+
+
 def facts(step: Path) -> dict:
     """The solid's own numbers, in the shape the Model panel reads.
 
@@ -322,6 +340,7 @@ def serve(ctx: RunContext, prompt: str, client: Any, model: str,
     code = transcript_text(prompt, design, transcript)
     version_dir = ctx.version_dir()
     (version_dir / "code.py").write_text(code, encoding="utf-8")
+    write_record(version_dir, prompt, design, transcript)
     ctx.emit(PHASE_CODE, STATUS_OK,
              i18n.t("freecad.built", lang, n=len(transcript.steps)),
              code=code, lines=len(code.splitlines()),
@@ -651,6 +670,8 @@ def amend(ctx: RunContext, base_dir: Path, instruction: str, client: Any,
     (version_dir / "code.py").write_text(
         transcript_text(f"{prompt}\n\nThen: {instruction}", design or {},
                         transcript), encoding="utf-8")
+    write_record(version_dir, f"{prompt}\n\nThen: {instruction}",
+                 design or {}, transcript)
 
     version = publish(
         ctx, session, prompt, design or {}, bridge, tokens=usage,
