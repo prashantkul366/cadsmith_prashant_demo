@@ -124,11 +124,10 @@ const I18N = (function () {
     "btn.usekey":       ["Use", "適用"],
 
     "banner.nobackend": [
-      "No model backend configured, so the agents cannot run. Choose a "
+      "No model backend configured, so nothing can be built. Choose a "
       + "provider below, or replay a recorded run.",
-      "モデルのバックエンドが設定されていないため、エージェントは"
-      + "動作しません。下でプロバイダーを選ぶか、記録済みの実行を"
-      + "再生してください。"],
+      "モデルのバックエンドが設定されていないため、部品を構築できません。"
+      + "下でプロバイダーを選ぶか、記録済みの実行を再生してください。"],
 
     /* ── viewer ─────────────────────────────────────────────────────── */
     "view.iso":         ["ISO", "等角"],
@@ -670,14 +669,14 @@ const I18N = (function () {
       + "オフにすると、公開されているパイプラインそのままの動作になります。"],
 
     "banner.catalog": [
-      "No model backend configured, so the five agents cannot run. Standard "
+      "No model backend configured, so nothing can be built. Standard "
       + "parts still work — ask for a fastener, bearing, gear, pulley or "
       + "spring and it comes from the catalogue, exactly and instantly. "
       + "Anything custom needs a provider below.",
-      "モデルのバックエンドが設定されていないため、5 つのエージェントは"
-      + "動作しません。標準部品は利用できます。締結部品・軸受・歯車・"
-      + "プーリー・ばねであればカタログから正確に即座に生成されます。"
-      + "それ以外の部品には、下でプロバイダーの設定が必要です。"],
+      "モデルのバックエンドが設定されていないため、部品を構築できません。"
+      + "標準部品は利用できます。締結部品・軸受・歯車・プーリー・ばねで"
+      + "あればカタログから正確に即座に生成されます。それ以外の部品には、"
+      + "下でプロバイダーの設定が必要です。"],
 
     "detail.fromcatalog": ["Serving a standard part", "標準部品を提供中"],
     "hist.catalog":     ["CATALOGUE", "カタログ"],
