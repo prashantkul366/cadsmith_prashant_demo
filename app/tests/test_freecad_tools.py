@@ -202,6 +202,11 @@ class Modelling(StandIn):
                 "message": "Python code executed successfully.\nOutput: " + body}
 
 
+def _crosses(*points):
+    """The outline checker, reached by name so the test states what it means."""
+    return freecad_tools._crosses_itself([list(p) for p in points])  # noqa: SLF001
+
+
 def main() -> int:
     stand_in = Modelling()
     server, port = serve(stand_in)
@@ -257,6 +262,49 @@ def main() -> int:
     check("and it carries an id the next call can use",
           hole is not None and hole["id"].startswith("hole_"),
           str(hole))
+
+    print("\nThe shape of the part, not a pile of boxes")
+    # The vocabulary gap that made complex parts fail. A bracket is an L, a
+    # stepped shaft is one outline spun about an axis; built out of
+    # primitives they are four times the calls and wrong in a corner.
+    check("an outline padded into a solid is offered before the primitives",
+          names.index("extrude_profile") < names.index("add_shape"),
+          ", ".join(names[1:4]))
+    for call, args, wanted in [
+        ("extrude_profile", {"points": [[0, 0], [10, 0]], "depth": 5},
+         "at least three"),
+        ("extrude_profile", {"points": [[0, 0], [9, 0], [9, 9]], "depth": 0},
+         "more than nothing"),
+        ("extrude_profile", {"points": [[0, 0], [9, 0], [9, 9]], "depth": 5,
+                             "plane": "QQ"}, "one of XY"),
+        ("extrude_profile", {"points": [[0, 0], "x", [9, 9]], "depth": 5},
+         "[x, y] pair"),
+        ("revolve_profile", {"points": [[0, 0], [9, 0], [9, 9]], "angle": 400},
+         "0 to 360"),
+        ("shell", {"name": "Nowhere", "thickness": 2}, "no object called"),
+    ]:
+        try:
+            box.invoke(call, args)
+            check(f"{call} refuses it", False, "it accepted it")
+        except ToolError as refused:
+            check(f"{call} refuses {str(list(args.values())[0])[:18]}",
+                  wanted in str(refused), str(refused)[:60])
+
+    # The one FreeCAD does not refuse. A bow-tie pads into a solid that
+    # measures, exports and draws, and is not the part anybody asked for.
+    try:
+        box.invoke("extrude_profile",
+                   {"points": [[0, 0], [10, 10], [10, 0], [0, 10]], "depth": 5})
+        check("an outline that crosses itself is refused", False,
+              "it padded a bow-tie")
+    except ToolError as refused:
+        check("an outline that crosses itself is refused",
+              "crosses itself" in str(refused), str(refused)[:70])
+    check("and the refusal names the two sides to look at",
+          _crosses((0, 0), (10, 10), (10, 0), (0, 10)) is not None
+          and _crosses((0, 0), (80, 0), (80, 12), (12, 12),
+                       (12, 60), (0, 60)) is None,
+          "a concave L is not a crossing")
 
     print("\nRepetition is a tool, not arithmetic in a script")
     # The reason this exists: a bolt circle has no primitive, so a model

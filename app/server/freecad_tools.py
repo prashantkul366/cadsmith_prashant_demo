@@ -49,14 +49,134 @@ PRIMITIVES = {
     "Part::Tube": ("InnerRadius", "OuterRadius", "Height"),
 }
 
+#: The three principal planes, oriented as FreeCAD orients its own origin
+#: planes, with the direction a pad grows in. A profile drawn on XZ reads
+#: X across and Y up the page and comes towards you, which is what somebody
+#: sketching a side elevation means.
+PLANES = {
+    "XY": {"rotation": (0.0, 0.0, 0.0, 1.0), "reversed": False},
+    "XZ": {"rotation": (0.7071067811865476, 0.0, 0.0, 0.7071067811865476),
+           "reversed": True},
+    "YZ": {"rotation": (0.5, 0.5, 0.5, 0.5), "reversed": False},
+}
+
 #: Booleans, by the name a person uses rather than the FreeCAD class.
 BOOLEANS = {"cut": "Part::Cut", "union": "Part::MultiFuse",
             "intersect": "Part::MultiCommon"}
 
 
+def _crosses_itself(points: list) -> Optional[tuple]:
+    """The first pair of sides of a closed outline that intersect.
+
+    A crossing outline is the one mistake FreeCAD does not refuse: it pads a
+    bow-tie into a solid that measures, exports and draws, and is not the
+    part anybody asked for. Cheap to check here - a few dozen sides at
+    worst - and the refusal can say which two sides to look at.
+    """
+    count = len(points)
+
+    def sides(i):
+        return points[i], points[(i + 1) % count]
+
+    def turn(o, a, b):
+        return ((a[0] - o[0]) * (b[1] - o[1])
+                - (a[1] - o[1]) * (b[0] - o[0]))
+
+    for i in range(count):
+        a1, a2 = sides(i)
+        for j in range(i + 1, count):
+            # Sides that share a corner meet there and that is not a crossing.
+            if j == i or (j + 1) % count == i or (i + 1) % count == j:
+                continue
+            b1, b2 = sides(j)
+            d1, d2 = turn(a1, a2, b1), turn(a1, a2, b2)
+            d3, d4 = turn(b1, b2, a1), turn(b1, b2, a2)
+            if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)):
+                return (i, j)
+    return None
+
+
 def properties_of(described: dict) -> dict:
     """The properties in an object as the addon describes it."""
     return described.get("Properties") or {}
+
+
+#: The helpers every modelling script opens with. Flush left and
+#: concatenated rather than interpolated into an indented template - see
+#: freecad._TIPS for what happens otherwise.
+_PARTDESIGN = """
+import FreeCAD, Part, Sketcher, json
+
+_PLANES = {
+    "XY": ((0.0, 0.0, 0.0, 1.0), False),
+    "XZ": ((0.7071067811865476, 0.0, 0.0, 0.7071067811865476), True),
+    "YZ": ((0.5, 0.5, 0.5, 0.5), False),
+}
+
+
+def _placement(plane, offset):
+    quaternion, _ = _PLANES[plane]
+    rotation = FreeCAD.Rotation(*quaternion)
+    along = rotation.multVec(FreeCAD.Vector(0, 0, 1)) * float(offset)
+    return FreeCAD.Placement(along, rotation)
+
+
+def _reversed(plane):
+    return _PLANES[plane][1]
+
+
+def _outline(sketch, points):
+    at = [FreeCAD.Vector(p[0], p[1], 0) for p in points]
+    for i in range(len(at)):
+        sketch.addGeometry(
+            Part.LineSegment(at[i], at[(i + 1) % len(at)]), False)
+
+
+def _check(feature, complaint):
+    shape = getattr(feature, "Shape", None)
+    if shape is None or shape.isNull() or shape.Volume <= 1e-9:
+        raise RuntimeError(complaint)
+
+
+def _upright_edges(feature, radius):
+    # The corners of a padded outline are the edges running along the pad,
+    # which are the only ones a corner radius means.
+    shape = feature.Shape
+    direction = None
+    lengths = {}
+    for n, edge in enumerate(shape.Edges, start=1):
+        if not isinstance(edge.Curve, Part.Line):
+            continue
+        lengths.setdefault(round(edge.Length, 4), []).append(n)
+    if not lengths:
+        return []
+    # The pad depth is the length shared by every corner edge.
+    depth = min(lengths)
+    return lengths[depth] if len(lengths[depth]) >= 3 else []
+
+
+def _face_towards(shape, where):
+    # The outermost flat face looking the way asked. "top" is +Z, and a
+    # shell opens the face somebody would reach into.
+    wanted = {"top": (0, 0, 1), "bottom": (0, 0, -1), "front": (0, -1, 0),
+              "back": (0, 1, 0), "left": (-1, 0, 0), "right": (1, 0, 0)}
+    direction = FreeCAD.Vector(*wanted.get(str(where).lower(), (0, 0, 1)))
+    best, best_reach = None, None
+    for face in shape.Faces:
+        try:
+            surface = face.Surface
+            if not isinstance(surface, Part.Plane):
+                continue
+            normal = face.normalAt(0, 0)
+        except Exception:
+            continue
+        if normal.dot(direction) < 0.99:
+            continue
+        reach = face.CenterOfMass.dot(direction)
+        if best_reach is None or reach > best_reach:
+            best, best_reach = face, reach
+    return best
+"""
 
 
 class Session:
@@ -382,6 +502,189 @@ doc.recompute()
         self.built.extend(made)
         return made
 
+    # -- the middle layer a real part is actually made of --------------------
+
+    def extrude_profile(self, points: list, depth: float, name: str = "",
+                        plane: str = "XY", offset: float = 0.0,
+                        fillet: float = 0.0, midplane: bool = False) -> dict:
+        """Draw a closed outline and pad it into a solid.
+
+        The operation nearly every real part starts from, and the one this
+        app could not do: a bracket is an L, a lever is a shape with two
+        radiused ends, a gusset is a triangle. None of them is a box, and
+        building them out of boxes and booleans is how a simple part becomes
+        eleven tool calls and a wrong answer.
+
+        What comes back is a parametric feature, not a lump: the pad's
+        Length is a property, so set_size changes the thickness and the
+        solid recomputes - and a slider can be declared on it.
+        """
+        profile = self._profile(points)
+        if depth <= 0:
+            raise ToolError("depth is how far to pad the outline, in "
+                            "millimetres, and must be more than nothing")
+        if plane.upper() not in PLANES:
+            raise ToolError("plane is one of " + ", ".join(PLANES))
+        made = self._build(f"""
+body = doc.addObject("PartDesign::Body", {self._clean(name) + "Body"!r})
+sketch = doc.addObject("Sketcher::SketchObject", {self._clean(name) + "Profile"!r})
+body.addObject(sketch)
+sketch.Placement = _placement({plane.upper()!r}, {float(offset)})
+_outline(sketch, {profile!r})
+doc.recompute()
+pad = doc.addObject("PartDesign::Pad", {self._clean(name) + "Pad"!r})
+body.addObject(pad)
+pad.Profile = sketch
+pad.Length = {float(depth)}
+pad.Reversed = _reversed({plane.upper()!r})
+pad.Midplane = {bool(midplane)}
+doc.recompute()
+_check(pad, "the outline would not pad - it may cross itself or not close")
+made = [body.Name, sketch.Name, pad.Name]
+{self._fillet_corners("pad", fillet)}
+""")
+        self.built.append(made[0])
+        return self._measured(added=made[0], profile=made[1], pad=made[2],
+                              adjustable=f"{made[2]}.Length is the depth")
+
+    def revolve_profile(self, points: list, name: str = "", plane: str = "XZ",
+                        angle: float = 360.0, axis: str = "Z") -> dict:
+        """Draw a half-section and spin it about an axis.
+
+        Every turned part: a boss, a hub, a spigot, a pulley, a shaft with
+        steps in it. Built out of stacked cylinders instead, a stepped shaft
+        is five primitives and five placements to get wrong; as a profile it
+        is one outline.
+
+        The outline is the half-section on one side of the axis, as a
+        draughtsman draws it.
+        """
+        profile = self._profile(points)
+        if not 0 < angle <= 360:
+            raise ToolError("angle is how far round to spin it, 0 to 360 degrees")
+        if plane.upper() not in PLANES:
+            raise ToolError("plane is one of " + ", ".join(PLANES))
+        if axis.upper() not in ("X", "Y", "Z"):
+            raise ToolError("axis is X, Y or Z - the one the outline spins about")
+        made = self._build(f"""
+body = doc.addObject("PartDesign::Body", {self._clean(name) + "Body"!r})
+sketch = doc.addObject("Sketcher::SketchObject", {self._clean(name) + "Profile"!r})
+body.addObject(sketch)
+sketch.Placement = _placement({plane.upper()!r}, 0.0)
+_outline(sketch, {profile!r})
+doc.recompute()
+rev = doc.addObject("PartDesign::Revolution", {self._clean(name) + "Revolution"!r})
+body.addObject(rev)
+rev.Profile = sketch
+rev.Angle = {float(angle)}
+rev.ReferenceAxis = (doc.getObject({("Y_Axis" if axis.upper() == "Y" else
+                                      "X_Axis" if axis.upper() == "X"
+                                      else "Z_Axis")!r}), [""])
+doc.recompute()
+_check(rev, "the outline would not revolve - it may cross the axis or itself")
+made = [body.Name, sketch.Name, rev.Name]
+""")
+        self.built.append(made[0])
+        return self._measured(added=made[0], profile=made[1], revolution=made[2],
+                              adjustable=f"{made[2]}.Angle is how far round")
+
+    def shell(self, name: str, thickness: float, open_face: str = "top") -> dict:
+        """Hollow a solid out, leaving a wall and an opening.
+
+        A housing, an enclosure, a cover, a tank. There is no way to make one
+        by cutting a smaller box out of a bigger one that gets the corners
+        right, and this is the operation every CAD has for it.
+        """
+        if thickness <= 0:
+            raise ToolError("thickness is the wall left behind, in millimetres")
+        if self.bridge.object(self.document, name) is None:
+            raise ToolError(f"there is no object called {name!r}")
+        made = self._build(f"""
+import Part
+target = doc.getObject({name!r})
+shape = target.Shape
+face = _face_towards(shape, {open_face!r})
+if face is None:
+    raise RuntimeError("no face on the {open_face} of that part to open")
+hollow = shape.makeThickness([face], -abs({float(thickness)}), 1e-3)
+if hollow is None or hollow.isNull() or hollow.Volume <= 0:
+    raise RuntimeError("the wall would not stand - it may be thicker than the part")
+out = doc.addObject("Part::Feature", {self._clean(name) + "Shell"!r})
+out.Shape = hollow
+target.Visibility = False
+doc.removeObject(target.Name)
+doc.recompute()
+made = [out.Name]
+""")
+        self.built.append(made[0])
+        return self._measured(shelled=name, wall_mm=float(thickness),
+                              opened=open_face, now=made[0])
+
+    # -- building it, and the Python that does -------------------------------
+
+    @staticmethod
+    def _clean(name: str) -> str:
+        """A FreeCAD-safe stem for the objects one operation creates."""
+        kept = "".join(c for c in (name or "Part") if c.isalnum()) or "Part"
+        return kept[:24]
+
+    @staticmethod
+    def _profile(points: Any) -> list:
+        """A closed outline, checked before FreeCAD is asked to pad it."""
+        if not isinstance(points, (list, tuple)) or len(points) < 3:
+            raise ToolError(
+                "points is the outline, at least three [x, y] pairs in the "
+                "plane you are drawing on. It closes itself, so do not "
+                "repeat the first point at the end.")
+        out = []
+        for point in points:
+            if (not isinstance(point, (list, tuple)) or len(point) != 2
+                    or not all(isinstance(v, (int, float)) for v in point)):
+                raise ToolError(f"{point!r} is not an [x, y] pair in millimetres")
+            out.append([float(point[0]), float(point[1])])
+        if out[0] == out[-1]:
+            out.pop()
+        if len(out) < 3:
+            raise ToolError("an outline needs at least three distinct corners")
+        crossing = _crosses_itself(out)
+        if crossing:
+            a, b = crossing
+            raise ToolError(
+                f"that outline crosses itself - the side from {out[a]} and "
+                f"the side from {out[b]} intersect. FreeCAD will pad it into "
+                f"something, and the something is not the part. List the "
+                f"corners in order round the shape, clockwise or anti, "
+                f"without jumping across.")
+        return out
+
+    @staticmethod
+    def _fillet_corners(target: str, radius: float) -> str:
+        """Round the corners of a pad, which is what a radiused outline is."""
+        if not radius or radius <= 0:
+            return ""
+        return f"""
+corners = _upright_edges({target}, {float(radius)})
+if corners:
+    rounded = doc.addObject("PartDesign::Fillet", "Corners")
+    body.addObject(rounded)
+    rounded.Base = ({target}, corners)
+    rounded.Radius = {float(radius)}
+    doc.recompute()
+    _check(rounded, "the corner radius will not fit - it may be too big")
+    made.append(rounded.Name)
+"""
+
+    def _build(self, body: str) -> list:
+        """Run one modelling script in FreeCAD and report what it created."""
+        names = json.loads(self.bridge.value(
+            _PARTDESIGN
+            + f"\ndoc = FreeCAD.getDocument({self.document!r})\n"
+            + body
+            + freecad.marked("json.dumps(made)")))
+        if not names:
+            raise ToolError("FreeCAD built nothing from that")
+        return names
+
     def set_material(self, name: str) -> dict:
         """Say what the part is made of, and what that makes it weigh.
 
@@ -577,6 +880,64 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
                  "description": text, "position": point},
                  "required": ["description"]},
              run=session.place_standard_part),
+        Tool(name="extrude_profile",
+             description=(
+                 "Draw a closed outline and pad it into a solid. This is how "
+                 "most real parts start - a bracket is an L, a lever has two "
+                 "radiused ends, a gusset is a triangle - and it beats "
+                 "building the same shape out of boxes and cuts. points are "
+                 "[x, y] corners in the plane you draw on, in order, closing "
+                 "themselves. fillet rounds every corner. The pad's Length "
+                 "stays adjustable afterwards."),
+             parameters={"type": "object", "properties": {
+                 "points": {"type": "array",
+                            "items": {"type": "array",
+                                      "items": {"type": "number"}},
+                            "description": "the outline, [[x, y], ...]"},
+                 "depth": {**number, "description": "how far to pad it, mm"},
+                 "name": text,
+                 "plane": {**text, "enum": ["XY", "XZ", "YZ"]},
+                 "offset": {**number,
+                            "description": "move the drawing plane along its "
+                                           "own normal, mm"},
+                 "fillet": {**number, "description": "corner radius, mm"},
+                 "midplane": {"type": "boolean",
+                              "description": "pad both ways from the plane"}},
+                 "required": ["points", "depth"]},
+             run=session.extrude_profile),
+        Tool(name="revolve_profile",
+             description=(
+                 "Draw a half-section and spin it about an axis: a boss, a "
+                 "hub, a spigot, a pulley, a stepped shaft. The outline is "
+                 "the half on one side of the axis, as a drawing shows it, "
+                 "starting and ending on the axis. Far better than stacking "
+                 "cylinders, which is five placements to get wrong."),
+             parameters={"type": "object", "properties": {
+                 "points": {"type": "array",
+                            "items": {"type": "array",
+                                      "items": {"type": "number"}},
+                            "description": "the half-section, [[x, y], ...]"},
+                 "name": text,
+                 "plane": {**text, "enum": ["XY", "XZ", "YZ"]},
+                 "angle": {**number, "description": "degrees, 360 for a full turn"},
+                 "axis": {**text, "enum": ["X", "Y", "Z"]}},
+                 "required": ["points"]},
+             run=session.revolve_profile),
+        Tool(name="shell",
+             description=(
+                 "Hollow a solid out, leaving a wall of the thickness given "
+                 "and an opening on one face: a housing, an enclosure, a "
+                 "cover, a tank. There is no way to do this by cutting a "
+                 "smaller box out of a bigger one that gets the corners "
+                 "right."),
+             parameters={"type": "object", "properties": {
+                 "name": text,
+                 "thickness": {**number, "description": "the wall left, mm"},
+                 "open_face": {**text,
+                               "enum": ["top", "bottom", "front", "back",
+                                        "left", "right"]}},
+                 "required": ["name", "thickness"]},
+             run=session.shell),
         Tool(name="add_shape",
              description=(
                  "Add a primitive solid. kind is one of: "
