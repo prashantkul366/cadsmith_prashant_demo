@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.catalog import parts, standards  # noqa: E402
+from app.catalog import parts, router, standards  # noqa: E402
 from app.server import edits  # noqa: E402
 
 failures: list[str] = []
@@ -207,6 +207,62 @@ def test_selection() -> None:
               found is None, found.id if found else "")
 
 
+def test_a_drawing_office_request_is_not_hardware() -> None:
+    """The requests that broke the router's own rule.
+
+    A real request from a drawing office is a feature list, not a sentence:
+    "120 x 120 x 15 base, 50 x 50 column to Z=165, ... M6x1 clamp bolt".
+    The only phrasings the router refused were "for a" and "with a", so
+    every one of these came back as the fastener it merely cites - and the
+    job reported itself converged, which is worse than failing.
+    """
+    print("\nA feature list that cites hardware is still a part to be made")
+    misses = {
+        "120 x 120 x 15 base, 50 x 50 column to Z=165, clamp boss to Z=205, "
+        "Dia 22.2 bar bore, saw slot, M6x1 clamp bolt": "a test pedestal",
+        "M20x1.5 shank, O-ring groove, Dia 30 seal flange, Dia 36 head, "
+        "12 grip flutes R3 on a 19.5 radius, coin slot": "an oil filler cap",
+        "Dia 55 stem boss, two Dia 72 fork bosses at X +/-105 Y 30, "
+        "20 thick web, pinch slots and M8x1.25 pinch bolts": "a triple clamp",
+        "Ring OD 42 ID 31.8, pad block with two M3x0.5 holes, split gap, "
+        "clamp ears with an M4x0.7 clamp screw": "a display clamp",
+        "100 x 80 x 50 block, 90 deg V-groove with the apex at Z=30, relief "
+        "slot, two Dia 8.5 counterbored, two Dia 8 H7 dowel holes": "a V-block",
+        "Dia 63 disk 12 thick, Dia 32 hub to Z=20, Dia 20 H7 shaft bore, "
+        "clamp slit and screw, ISO 9409-1-50-4-M6 tool side": "a tool flange",
+    }
+    for text, what in misses.items():
+        found = router.select(text)
+        check(f"{what} is not served as hardware", found is None,
+              found.part.title if found else "")
+
+    # A head shape nothing here carries must be refused outright rather than
+    # answered with the nearest thing in stock. This one was coming back as
+    # a plain hex head bolt: right thread, right length, no flange.
+    flanged = router.select("M8x1.25 x 30 hex flange bolt, flange Dia 17, "
+                            "hex 10 across flats")
+    check("a flanged head nothing carries is refused, not substituted",
+          flanged is None, flanged.part.title if flanged else "")
+    check("and the refusal says which shape it could not build",
+          router._not_carried("a hex flange bolt M8") == "flange bolt",
+          str(router._not_carried("a hex flange bolt M8")))
+
+    # The other direction, which the veto must not touch: a request whose
+    # head clause names the part is still answered from the catalogue.
+    hits = {
+        "an M8x30 socket head cap screw": "Socket head cap screw M8 x 30.0",
+        "M6 hex nut": "Hex nut M6",
+        "a 20 tooth module 2 spur gear": "Spur gear, 20 teeth, module 2",
+        "20mm shaft 150mm long": "Shaft 20.0 dia x 150.0",
+        "a deep groove ball bearing 6002": "Deep groove ball bearing 6002",
+    }
+    for text, title in hits.items():
+        found = router.select(text)
+        check(f"'{text[:34]}' still routes", 
+              found is not None and found.part.title == title,
+              found.part.title if found else "no match")
+
+
 def test_the_generated_code_is_editable() -> None:
     """The whole reason for generating rather than importing a STEP."""
     print("\nThe emitted source survives the app's own parameter editor")
@@ -250,6 +306,7 @@ def main() -> int:
     test_dimensions_match_the_standard()
     test_hole_helpers()
     test_selection()
+    test_a_drawing_office_request_is_not_hardware()
     test_the_generated_code_is_editable()
 
     print("\n" + "=" * 58)

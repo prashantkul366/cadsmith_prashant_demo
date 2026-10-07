@@ -40,6 +40,125 @@ _CUSTOM_CONTEXT = parts._CUSTOM_CONTEXT + (
     "assembly", "for a gear", "gear train", "tensioner", "idler bracket",
 )
 
+#: Words that only ever name something cut into a part. A request that
+#: lists one is describing a part to be made, so no catalogue lookup can
+#: answer it: a cap screw has no slot, a dowel pin has no groove, and an
+#: O-ring has no boss. ``_CUSTOM_CONTEXT`` already refused "a groove FOR an
+#: O-ring"; a drawing-office request writes the same thing as "O-ring
+#: groove", with no preposition left to match on, and was being answered
+#: with the O-ring.
+_MACHINED_FEATURE = (
+    "hole", "slot", "groove", "boss", "pocket", "counterbore", "counterbored",
+    "spotface", "web", "rib", "slit", "flute", "recess", "relief", "cutout",
+    "cut-out", "tapped", "keyway", "spigot", "gusset", "pad block",
+)
+
+#: "deep groove" names a ball bearing, not a machined groove. Stripped
+#: before the scan rather than excluded from it, so "a deep groove bearing
+#: with a retaining groove" is still read as made to order.
+_NOT_A_FEATURE = ("deep groove",)
+
+#: Every word that can make a request route, in one place, so a request can
+#: be asked whether its *first* clause names a standard part at all.
+#: read through ``_routing_words``, which gathers it once at first use:
+#: ``_FAMILY_WORDS`` is declared further down the module.
+_EXTRA_ROUTING_WORDS = (
+    "screw", "bolt", "nut", "washer", "stud", "dowel", "pin", "o-ring",
+    "oring", "o ring", "handlebar", "handle bar", "bar", "rod", "spring",
+    "bearing", "chainring", "belt", "key",
+)
+
+
+@lru_cache(maxsize=1)
+def _routing_words() -> tuple[str, ...]:
+    return tuple(sorted(
+        {word.strip() for words in _FAMILY_WORDS.values() for word in words}
+        | set(_GEAR_WORDS) | set(_EXTRA_ROUTING_WORDS)))
+
+#: A request written as a list of features. Splitting on these gives the
+#: clause that names the deliverable.
+_CLAUSE = re.compile(r"\s*(?:[,;]|\band\b)\s*", re.I)
+
+
+def _lists_a_feature(lowered: str) -> bool:
+    """Does this request name something machined into a part?"""
+    for phrase in _NOT_A_FEATURE:
+        lowered = lowered.replace(phrase, " ")
+    return any(word in lowered for word in _MACHINED_FEATURE)
+
+
+def _names_the_part_first(text: str) -> bool:
+    """Does the head clause name a standard part at all?
+
+    A drawing-office request is a feature list: "<overall size> <noun>,
+    <feature>, <feature>". English puts the deliverable in the first clause,
+    so a standard part named in a later one is a *component* - the M6 clamp
+    bolt that goes into the pedestal, not instead of it. Only asked of a
+    request that is a list; a single-clause request is read exactly as it
+    was before.
+    """
+    head = _CLAUSE.split(text.strip(), maxsplit=1)[0].lower()
+    return any(word in head for word in _routing_words())
+
+
+#: Shapes no backend here carries, and the nouns they qualify. Answering
+#: one of these with the nearest thing in stock is how "hex flange bolt,
+#: flange Dia 17, hex 10 across flats" came back as a plain hex head bolt:
+#: right thread, right length, no flange, and reported as converged.
+#: cq_warehouse has a hex_flange *nut*, so "nut" is deliberately absent
+#: from the flange row.
+_NOT_CARRIED = (
+    ("flange", ("screw", "bolt")),
+    ("flanged", ("screw", "bolt")),
+    ("serrated", ("screw", "bolt", "nut")),
+    ("shoulder", ("screw", "bolt")),
+    ("eye", ("bolt",)),
+    ("t-slot", ("bolt", "nut")),
+    ("t slot", ("bolt", "nut")),
+    ("wing", ("nut", "screw")),
+    ("knurled", ("nut", "screw")),
+)
+
+
+def _not_carried(text: str) -> Optional[str]:
+    """The shape this request asks for that nothing here can build.
+
+    Returning the words rather than a bool so the refusal can say which
+    ones; a request declined with no reason reads as the catalogue being
+    broken.
+    """
+    lowered = text.lower()
+    for shape, nouns in _NOT_CARRIED:
+        if shape not in lowered:
+            continue
+        for noun in nouns:
+            if noun in lowered:
+                return f"{shape} {noun}"
+    return None
+
+
+def _made_to_order(text: str) -> bool:
+    """True when this request is for a part to be made, not looked up.
+
+    Three ways to tell, cheapest first, and all three only ever *remove* a
+    route: the catalogue can decline a request the pipeline then builds, but
+    nothing here can turn a custom request into a standard part.
+
+    This is the rule in this module's own docstring, finally able to see the
+    requests that broke it. "120 x 120 x 15 base, 50 x 50 column to Z=165,
+    ... M6x1 clamp bolt" is a vibration-test pedestal; it was being answered
+    with a single M6 cap screw, reported as converged, because the only
+    phrasings refused were "for a" and "with a".
+    """
+    lowered = text.lower()
+    if any(word in lowered for word in _CUSTOM_CONTEXT):
+        return True
+    if _lists_a_feature(lowered):
+        return True
+    return (_CLAUSE.search(text) is not None
+            and not _names_the_part_first(text))
+
+
 _TEETH = re.compile(r"(\d+)\s*(?:-)?\s*(?:tooth|teeth|t\b)", re.I)
 _MODULE = re.compile(r"\bmod(?:ule)?\.?\s*(\d+(?:\.\d+)?)", re.I)
 _HELIX = re.compile(r"(\d+(?:\.\d+)?)\s*(?:deg|degree)", re.I)
@@ -588,8 +707,7 @@ def _select_cached(text: str, have_gears: bool,
     """Cached: the request handler asks whether the catalogue can answer
     before accepting a job, and the worker asks again when it runs it.
     Building a sprocket twice for one request is pure waste."""
-    lowered = text.lower()
-    if any(word in lowered for word in _CUSTOM_CONTEXT):
+    if _made_to_order(text) or _not_carried(text):
         return None
 
     for finder in (_gear, _pulley, _spring, _set_screw, _threaded_rod,
@@ -658,8 +776,7 @@ def _options_cached(text: str, have_gears: bool,
     asks whether the catalogue can answer before accepting a job, and the
     worker asks again when it runs it. Four bars built twice is four bars of
     pure waste."""
-    lowered = text.lower()
-    if any(word in lowered for word in _CUSTOM_CONTEXT):
+    if _made_to_order(text):
         return Shortlist()
     try:
         candidates = parts.options(text)
