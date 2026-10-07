@@ -67,6 +67,11 @@ class FakeOpenAIServer(BaseHTTPRequestHandler):
     #: stream first because a self-hosted one is usually behind a proxy that
     #: cuts off a quiet request. Set False to stand in for one that does not.
     streams: bool = True
+    #: How many of the next requests answer 524 before one is served. A
+    #: Cloudflare quick tunnel in front of a slow model does exactly this:
+    #: it stops waiting, answers 524, and the generation behind it carries
+    #: on. Counted down, so 2 means "fail twice, then work".
+    gateway_failures: int = 0
 
     def log_message(self, *_args):
         pass
@@ -81,6 +86,11 @@ class FakeOpenAIServer(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length) or b"{}")
         FakeOpenAIServer.requests.append(body)
+
+        if FakeOpenAIServer.gateway_failures > 0:
+            FakeOpenAIServer.gateway_failures -= 1
+            self._json(524, {"error": "origin timed out"})
+            return
 
         has_image = any(
             isinstance(m.get("content"), list)
@@ -282,6 +292,51 @@ def main() -> int:
           and FakeOpenAIServer.requests[-1].get("stream") is None,
           f"{len(FakeOpenAIServer.requests) - tried} request(s)")
     FakeOpenAIServer.streams = True
+
+    print("\nA tunnel that stops waiting is asked again, not reported as failed")
+    FakeOpenAIServer.requests.clear()
+    FakeOpenAIServer.gateway_failures = 2
+    was_backoff = providers.GATEWAY_BACKOFF
+    providers.GATEWAY_BACKOFF = (0.01, 0.01, 0.01)
+    notes = []
+    tunnelled = OpenAICompatibleClient(
+        LLMConfig(provider="custom", kind="openai_compatible", base_url=base_url,
+                  api_key="test-key", generation_model="fake-small",
+                  judge_model="fake-large"),
+        on_note=notes.append)
+    try:
+        reply = tunnelled.messages.create(
+            model="ignored", max_tokens=1024, system="You are the Coder Agent.",
+            messages=[{"role": "user", "content": "Write it."}])
+        check("two 524s cost the run nothing but time",
+              reply.content[0].text == CODE,
+              reply.content[0].text[:40])
+        check("and it asked exactly as many times as it needed",
+              len(FakeOpenAIServer.requests) == 3,
+              f"{len(FakeOpenAIServer.requests)} request(s)")
+        check("each wait was said out loud",
+              sum("stopped waiting" in n for n in notes) == 2, str(notes)[:160])
+
+        # The other direction: an endpoint that is simply gone must still
+        # fail, and say what it tried, rather than retrying for ever.
+        FakeOpenAIServer.requests.clear()
+        FakeOpenAIServer.gateway_failures = 99
+        notes.clear()
+        try:
+            tunnelled.messages.create(
+                model="ignored", max_tokens=1024,
+                system="You are the Coder Agent.",
+                messages=[{"role": "user", "content": "Write it."}])
+            check("an endpoint that never answers fails", False, "it returned")
+        except RuntimeError as exc:
+            check("an endpoint that never answers fails, with the count",
+                  "3 attempts" in str(exc), str(exc)[:120])
+        check("and it stopped at the ceiling rather than hammering",
+              len(FakeOpenAIServer.requests) == providers.GATEWAY_ATTEMPTS,
+              f"{len(FakeOpenAIServer.requests)} request(s)")
+    finally:
+        providers.GATEWAY_BACKOFF = was_backoff
+        FakeOpenAIServer.gateway_failures = 0
 
     print("\nA model that refuses images falls back instead of failing")
     FakeOpenAIServer.requests.clear()
