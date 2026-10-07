@@ -438,6 +438,21 @@ def publish(ctx: RunContext, session: freecad_tools.Session, prompt: str,
     if verdict.get("mass") or geometry.get("holes_as_meant"):
         (version_dir / "geometry.json").write_text(
             json.dumps(geometry, indent=2), encoding="utf-8")
+
+    # What the sheet needs to be a drawing rather than a picture: the
+    # general tolerance, the roughness, the finish, the fits. All of it was
+    # arriving through the Planner's specification block, which this road
+    # does not fill in - so a request that said "Ra 1.6, break all sharp
+    # edges, 2768-f" got a sheet saying no tolerances were specified. It is
+    # read from the request itself here, the way the dimensions are.
+    from app.server import specification
+
+    spec_doc = specification.from_request(
+        f"{prompt}\n{instruction}" if instruction else prompt,
+        material=(card or {}).get("name", ""))
+    if spec_doc.stated:
+        (version_dir / "specification.json").write_text(
+            json.dumps(spec_doc.to_dict(), indent=2), encoding="utf-8")
     (version_dir / "validation.json").write_text(json.dumps({
         "source": source,
         "all_passed": verdict["passed"],

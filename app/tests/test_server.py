@@ -82,10 +82,17 @@ def main() -> int:
         check("empty prompt is rejected", bad.status_code == 400,
               f"status {bad.status_code}")
 
+        # This file is the script pipeline's test - a stub model, a stub
+        # Judge, and the five phases they go through - so it says which
+        # road to take rather than letting the environment decide. It did
+        # not, and whether FreeCAD happened to be listening on 9875 from
+        # some other test's stand-in silently changed which pipeline ran
+        # and which plan came back: the same checks passed or failed by
+        # what else had been run first.
         response = client.post("/api/jobs", json={
             "prompt": PROMPT,
             "options": {"max_iterations": 2, "use_vision": True,
-                        "effort": "low"},
+                        "effort": "low", "use_freecad": False},
         })
         check("job accepted", response.status_code == 201,
               f"status {response.status_code}")
@@ -108,6 +115,7 @@ def main() -> int:
               junk.status_code == 201
               and junk.json()["job"]["options"]["effort"] == "",
               f"status {junk.status_code}")
+        junk_id = junk.json()["job"]["id"]
 
         print("\nEvent stream (SSE)")
         events: list[dict] = []
@@ -136,18 +144,15 @@ def main() -> int:
         plan_event = next(e for e in events if e["phase"] == "plan"
                           and e["status"] == "ok")
         plan_shown = plan_event["data"]["design_plan"]
-        # A request that states its own dimensions skips the Planner
-        # entirely, so what the panel shows is the request and the sizes
-        # read out of it - not a model's paraphrase of either.
-        check("plan carried on the event came from the request",
-              plan_event["data"].get("from_the_request") is True,
-              str(plan_event["data"].get("from_the_request")))
-        check("plan describes what was asked for",
-              plan_shown["description"] == PROMPT,
+        check("design plan carried on the event",
+              plan_shown["description"] == "Flat washer",
               plan_shown["description"])
-        check("plan carries the bore the request stated",
-              10.5 in plan_shown["dimensions"]["key_dimensions"].values(),
-              str(plan_shown["dimensions"]["key_dimensions"]))
+        # The road is pinned above, so this says so: a plan that came from
+        # the request rather than the Planner means the run took the other
+        # road and every check below it is measuring something else.
+        check("and it came from the Planner, which is this road's job",
+              not plan_event["data"].get("from_the_request"),
+              str(plan_event["data"].get("from_the_request")))
 
         exec_event = next(e for e in events if e["phase"] == "execute"
                           and e["status"] == "ok")
@@ -268,6 +273,28 @@ def main() -> int:
                   refused.status_code == 400,
                   f"status {refused.status_code}: "
                   f"{refused.json().get('detail', '')[:60]}")
+
+        # The job created a few checks ago to see an invalid effort rejected
+        # is a job: it runs a whole pipeline in the background, on the same
+        # stub model whose calls are counted here. Left alone it lands its
+        # planner and coder calls inside the window that is meant to prove a
+        # parameter drag costs nothing - sometimes, depending on how the
+        # threads interleave, which is the worst way for a test to be wrong.
+        # It is waited out here rather than where it was made, because the
+        # queue is served in order and it cannot finish before this job has.
+        # Either terminal state will do. It is not this check's business
+        # whether that job succeeded - a second washer built from the same
+        # stub is allowed to fail - only that it has stopped spending.
+        for _ in range(900):
+            if client.get(f"/api/jobs/{junk_id}").json()["job"]["status"] \
+                    in ("done", "error"):
+                break
+            time.sleep(0.05)
+        else:
+            check("the effort-check job finished before it could be taken "
+                  "for the parameter change", False,
+                  "status " + str(client.get(f"/api/jobs/{junk_id}")
+                                  .json()["job"]["status"]))
 
         # The real thing: no model call, and the kernel measures the result.
         before_calls = len(fake.calls)

@@ -45,6 +45,9 @@ MESSAGES: dict[str, dict[str, str]] = {
     "sheet.owner": {"en": "LEGAL OWNER", "ja": "所有者"},
     "sheet.title": {"en": "TITLE", "ja": "図面名称"},
     "sheet.date": {"en": "DATE OF ISSUE", "ja": "発行日"},
+    # Every version this app publishes is a revision of the one before it,
+    # and a drawing with no revision on it cannot be filed.
+    "sheet.rev": {"en": "REV", "ja": "改訂"},
     "sheet.scale": {"en": "SCALE", "ja": "尺度"},
     "sheet.units": {"en": "UNITS", "ja": "単位"},
     "sheet.projection": {"en": "PROJECTION", "ja": "投影法"},

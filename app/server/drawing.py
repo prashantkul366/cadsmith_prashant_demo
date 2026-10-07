@@ -515,8 +515,11 @@ if _SERVING:
 #: What a drawing on disk was built by. A cached sheet outlives the code
 #: that wrote it, so it carries the number and is rebuilt when it falls
 #: behind: schema 2 is the one that calls a round R and a hole Ø, and a
-#: sheet from before it says Ø10 about a 5mm corner.
-SHEET_SCHEMA = 2
+#: sheet from before it says Ø10 about a 5mm corner. Schema 3 carries the
+#: general tolerance, the roughness and the revision - a sheet from before
+#: it says no tolerance was specified about a request that specified one,
+#: which is the difference between a drawing and a picture of a part.
+SHEET_SCHEMA = 3
 
 #: The same number inside a DXF, where there is no attribute to hang it on.
 #: A custom property's *name* carries it, so the check is a plain search.
@@ -977,12 +980,36 @@ def _hole_label(group: dict, callouts: Optional[dict] = None) -> str:
     return text
 
 
-def hole_callouts(holes: Any) -> dict:
+#: Fits that belong on a hole's own leader rather than in the notes. A
+#: bore or a shaft named in the request is a tolerance on a dimension this
+#: drawing carries; a bearing seat from a table is a statement about the
+#: part that goes in it, and that is a note.
+_ON_THE_LEADER = ("bore", "shaft")
+
+
+def fit_designations(spec: Any) -> dict:
+    """Size to ISO 286 designation, for the fits a callout can carry."""
+    found: dict = {}
+    for fit in (getattr(spec, "fits", None) or []):
+        if getattr(fit, "feature", "") not in _ON_THE_LEADER:
+            continue
+        try:
+            found[round(float(fit.size_mm), 2)] = str(fit.fit)
+        except (TypeError, ValueError):
+            continue
+    return found
+
+
+def hole_callouts(holes: Any, spec: Any = None) -> dict:
     """Drilled diameter to the callout it was meant to carry.
 
     A diameter whose holes disagree about what they are gets none: two
     different intentions behind one measured size is exactly when the
     drawing should fall back to what it can see.
+
+    A fit the request stated goes here too, because that is where a drawing
+    puts one: "25H7" is a tolerance on this hole, and a machinist reads it
+    off the leader, not out of a note at the bottom of the sheet.
     """
     meant: dict = {}
     for hole in holes or []:
@@ -997,7 +1024,20 @@ def hole_callouts(holes: Any) -> dict:
             meant[size] = None          # two meanings, so say neither
         else:
             meant.setdefault(size, label)
-    return {size: label for size, label in meant.items() if label}
+    callouts = {size: label for size, label in meant.items() if label}
+
+    for size, designation in fit_designations(spec).items():
+        label = callouts.get(size)
+        if label is None:
+            # Nothing recorded this hole's intent - a part built by the
+            # script road records none - so the fit is the whole callout.
+            callouts[size] = f"\u00d8{_num(size)} {designation}"
+        elif designation not in label:
+            # "Ø25 THRU" becomes "Ø25 H7 THRU": the designation belongs
+            # against the diameter, before whatever else the hole is.
+            head, space, tail = label.partition(" ")
+            callouts[size] = f"{head} {designation}{space}{tail}"
+    return callouts
 
 
 def _distinct_bends(bends: list[dict]) -> list[dict]:
@@ -1611,6 +1651,59 @@ def _projection_symbol(x: float, y: float) -> list[str]:
     return out
 
 
+def _revision(version: int) -> str:
+    """The version as a drawing office letters a revision.
+
+    v0 is the first issue, which is "-" on a drawing rather than "0": a
+    revision letter means somebody changed something. After that A, B, C,
+    and past Z it goes back to the number rather than inventing AA.
+    """
+    if version <= 0:
+        return "-"
+    return chr(ord("A") + version - 1) if version <= 26 else str(version)
+
+
+def _finish_symbol(x: float, y: float, ra: float) -> list[str]:
+    """The general surface-finish requirement, ISO 1302.
+
+    Drawn, not lettered. The glyphs for this live at U+23E2 and friends and
+    the technical fonts a drawing is set in do not carry them - the same
+    trap the depth symbol fell into, where U+21A7 came out as "I8" on a real
+    sheet. Three lines and a number cannot be substituted by a font.
+
+    The basic symbol is two legs meeting at 60 degrees, the right one twice
+    as long. The bar across the top is "material removal required", which is
+    what a machined part wants and what makes the symbol mean something
+    rather than decorate the sheet. The Ra figure goes to the left of the
+    long leg, which is position (a) in the standard.
+    """
+    h = 5.0                       # height of the short leg
+    import math as _m
+    run = h / _m.tan(_m.radians(60.0))
+    # The vertex sits on the baseline; the short leg goes up-left, the long
+    # leg up-right to twice the height, and the bar closes the top.
+    left_x, left_y = x - run, y - h
+    right_x, right_y = x + 2.0 * run, y - 2.0 * h
+    # The bar closes the V at the short leg's height, where the long leg
+    # has risen exactly one `run`. Taking it out to the long leg's tip
+    # instead drew it straight through and out the other side, which is a
+    # different symbol in the standard and not one that means anything.
+    #
+    # The roughness goes above the extension off the long leg - position
+    # (a) in ISO 1302 - rather than floating beside the symbol, because
+    # position is meaning here: (a) is the roughness, (b) a second one for
+    # a different process, (c) a machining allowance, (e) a lay direction.
+    tail = 12.0
+    return [
+        _line(left_x, left_y, x, y, W_THIN),
+        _line(x, y, right_x, right_y, W_THIN),
+        _line(left_x, left_y, x + run, left_y, W_THIN),
+        _line(right_x, right_y, right_x + tail, right_y, W_THIN),
+        _text(right_x + 0.8, right_y - 1.2, f"Ra {ra:g}", TEXT_SMALL,
+              anchor="start"),
+    ]
+
+
 def _title_block(prompt: str, geometry: dict, job_id: str, version: int,
                  scale: float, lang: str = "en") -> list[str]:
     """An ISO 7200 title block: who, what, which sheet, and at what scale."""
@@ -1643,8 +1736,15 @@ def _title_block(prompt: str, geometry: dict, job_id: str, version: int,
     out.append(_line(TITLE_L + 60, TITLE_T, TITLE_L + 60, edges[0], W_THIN))
     field(TITLE_L + 60, TITLE_T, TITLE_W - 60, i18n.t('sheet.title', lang), title)
 
-    # Row 2 - the drawing's own identity
-    field(TITLE_L, edges[0], 110, "DRAWING No.", f"{job_id}-{version:02d}")
+    # Row 2 - the drawing's own identity, and which issue of it this is.
+    # Every version in this app is a revision of the one before: a dragged
+    # parameter or an asked-for change publishes a new one. A drawing with
+    # no revision on it cannot be filed, and the number was buried in the
+    # drawing number where nobody reads it as an issue.
+    field(TITLE_L, edges[0], 88, "DRAWING No.", f"{job_id}-{version:02d}")
+    out.append(_line(TITLE_L + 88, edges[0], TITLE_L + 88, edges[1], W_THIN))
+    field(TITLE_L + 88, edges[0], 22, i18n.t('sheet.rev', lang),
+          _revision(version))
     out.append(_line(TITLE_L + 110, edges[0], TITLE_L + 110, edges[1], W_THIN))
     field(TITLE_L + 110, edges[0], 70, i18n.t('sheet.date', lang),
           time.strftime("%Y-%m-%d"))
@@ -1702,7 +1802,18 @@ def note_lines(geometry: dict, spec: Any = None,
     on the SVG and not on the DXF is worse than one that appears on neither.
     """
     lines = list(_NOTES)
-    lines.extend(spec.sheet_notes() if spec is not None
+    # The title block carries the material whenever the part was weighed, so
+    # the notes do not repeat it. Two MATERIAL lines on one sheet is how a
+    # drawing starts to look like something a program printed.
+    # A fit that landed on a hole's leader is not said again underneath it.
+    # The hole has to exist for that: a request can state a fit for a
+    # feature this part does not have, and then the note is the only place
+    # it appears at all.
+    drilled = {round(float(d), 2) for d in (geometry.get("holes") or [])}
+    on_leader = {size for size in fit_designations(spec) if size in drilled}
+    lines.extend(spec.sheet_notes(titled=bool(geometry.get("mass")),
+                                  shown=on_leader)
+                 if spec is not None
                  else ["DIMENSIONS ARE AS MODELLED — NO TOLERANCES "
                        "ARE SPECIFIED"])
     # Two radii are called out per view and the rest are left to the model.
@@ -1762,7 +1873,7 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
     """Compose the drawing as a standalone SVG document."""
     sheet = plan_sheet(_project(step_path, cache=projection,
                                 section=worth_sectioning(geometry)),
-                       hole_callouts(geometry.get("holes_as_meant")))
+                       hole_callouts(geometry.get("holes_as_meant"), spec))
     scale = sheet["scale"]
 
     body: list[str] = []
@@ -1770,6 +1881,13 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
         body += _render_view(view, lang)
 
     body += _title_block(prompt, geometry, job_id, version, scale, lang)
+    # The general surface-finish requirement sits immediately above the
+    # title block, which is where ISO 1302 puts it and where a machinist
+    # looks for it. Only when something asked for one: an unlettered tick
+    # would say "as machined", which is a different instruction.
+    if spec is not None and getattr(spec, "roughness", None):
+        body += _finish_symbol(TITLE_L + TITLE_W - 24.0, TITLE_T - 3.0,
+                               spec.roughness)
     body += _notes(geometry, spec, sheet)
 
     return (
@@ -1903,7 +2021,7 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
 
     sheet = plan_sheet(_project(step_path, cache=projection,
                                 section=worth_sectioning(geometry)),
-                       hole_callouts(geometry.get("holes_as_meant")))
+                       hole_callouts(geometry.get("holes_as_meant"), spec))
     scale = sheet["scale"]
 
     doc = ezdxf.new("R2010", setup=True)
@@ -1996,6 +2114,17 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
             # that gets opened in a CAM system.
             add_dim = (msp.add_radius_dim if call.get("kind") == "radius"
                        else msp.add_diameter_dim)
+            # What the leader says, not what the radius measures, whenever
+            # the two differ. "4x M8 TAPPED 20 DEEP" and "Ø25 H7 THRU" are
+            # not recoverable from a circle, and the DXF is the file that
+            # gets opened in somebody else's CAD and quoted from - so it
+            # said "Ø6.8" where the sheet beside it said M8. A plain hole
+            # keeps the computed value, which still updates if the file is
+            # rescaled.
+            label = call.get("label") or ""
+            plain = ("\u00d8" + _num(call["radius"] * 2.0 / scale)
+                     if call.get("kind") != "radius"
+                     else "R" + _num(call["radius"] / scale))
             entity = add_dim(
                 center=(cx, _dxf_y(cy)),
                 radius=call["radius"],
@@ -2003,6 +2132,7 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
                 dimstyle="ISO-129",
                 dxfattribs={"layer": "DIMENSIONS"},
                 override={"dimlfac": 1.0 / scale},
+                text=label if label and label != plain else None,
             )
             entity.render()
 
@@ -2018,10 +2148,17 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
     polyline(block, "FRAME")
 
     bbox = geometry.get("bounding_box", {})
+    # The same fields the SVG carries, in the same order. The DXF is the
+    # file that gets opened in somebody else's CAD and quoted from, so a
+    # field on one sheet and not the other is the worse of the two gaps:
+    # the material and the revision were on the drawing and not in the file
+    # anybody would actually machine from.
+    weighed = geometry.get("mass") or {}
     rows = [
         (i18n.t('sheet.owner', lang), "CADSmith"),
         (i18n.t('sheet.title', lang), " ".join(prompt.split()).rstrip(".")),
         ("DRAWING No.", f"{job_id}-{version:02d}"),
+        (i18n.t('sheet.rev', lang), _revision(version)),
         (i18n.t('sheet.date', lang), time.strftime("%Y-%m-%d")),
         (i18n.t('sheet.scale', lang), _scale_label(scale)),
         (i18n.t('sheet.units', lang), "mm"),
@@ -2030,6 +2167,10 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
         (i18n.t('sheet.overall', lang), "{:g} x {:g} x {:g}".format(
             round(bbox.get("xlen", 0), 2), round(bbox.get("ylen", 0), 2),
             round(bbox.get("zlen", 0), 2))),
+        (i18n.t('sheet.material', lang), weighed.get("material") or "\u2014"),
+        (i18n.t('sheet.mass', lang),
+         (f"{weighed['mass_kg']:.3f} kg" if weighed.get("mass_kg", 0) >= 1
+          else f"{weighed['mass_g']:.0f} g") if weighed else "\u2014"),
     ]
     row_h = TITLE_H / len(rows)
     for index, (label, value) in enumerate(rows):
@@ -2039,6 +2180,18 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
                  FRAME_R, TITLE_T + index * row_h, "FRAME")
         text(TITLE_L + 2.0, y, label, TEXT_SMALL, "MIDDLE_LEFT")
         text(TITLE_L + 52.0, y, value, TEXT_SMALL, "MIDDLE_LEFT")
+
+    # The surface-finish requirement, as the same four lines the SVG draws.
+    if spec is not None and getattr(spec, "roughness", None):
+        fx, fy = TITLE_L + TITLE_W - 24.0, TITLE_T - 3.0
+        run = 5.0 / math.tan(math.radians(60.0))
+        line(fx - run, fy - 5.0, fx, fy, "ANNOTATION")
+        line(fx, fy, fx + 2.0 * run, fy - 10.0, "ANNOTATION")
+        line(fx - run, fy - 5.0, fx + run, fy - 5.0, "ANNOTATION")
+        line(fx + 2.0 * run, fy - 10.0, fx + 2.0 * run + 12.0, fy - 10.0,
+             "ANNOTATION")
+        text(fx + 2.0 * run + 0.8, fy - 11.2, f"Ra {spec.roughness:g}",
+             TEXT_SMALL, "MIDDLE_LEFT")
 
     notes = note_lines(geometry, spec, sheet)
     for index, note in enumerate(notes):

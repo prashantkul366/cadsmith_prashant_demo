@@ -407,6 +407,68 @@ def main() -> int:
               any("NO TOLERANCES ARE SPECIFIED" in line
                   for line in drawing.note_lines({"is_valid": True}, None)))
 
+        print("\nWhat an engineer wrote into the request reaches the sheet")
+        # The road most parts come down does not call a Planner, so nothing
+        # was filling in the block these notes come from: a request naming
+        # its own tolerance, roughness and finish got a sheet saying none
+        # was specified.
+        asked = ("a 120 x 60 x 12 mounting plate, milled from 6061, four M8 "
+                 "clearance holes and a 25H7 bore, Ra 1.6, break all sharp "
+                 "edges, general tolerances ISO 2768-f")
+        read = specification.from_request(asked, material="Aluminium 6061-T6")
+        check("the class it named, not the default",
+              read.tolerance_class == "ISO 2768-f", read.tolerance_class)
+        check("the roughness it named", read.roughness == 1.6,
+              str(read.roughness))
+        check("the process it named", read.process == "milled", read.process)
+        check("and that it asked for the edges broken", read.break_edges)
+        check("the fit it wrote against a size",
+              any(f.fit == "H7" and f.size_mm == 25 for f in read.fits),
+              ", ".join(f"{f.size_mm:g}{f.fit}" for f in read.fits))
+        # "120x60x12" offers a 60 shaft to x12 - x is a real deviation
+        # letter and 12 a real IT grade - and a sheet that tolerances the
+        # middle number of an overall size is worse than one with no fits.
+        chained = specification.from_request("a plate 120x60x12 in 6061")
+        check("and a size chain is not read as one",
+              not chained.fits,
+              ", ".join(f"{f.size_mm:g}{f.fit}" for f in chained.fits))
+
+        # A request that specifies nothing still needs a sheet a shop can
+        # quote from, so a class is assumed - and saying which, and that it
+        # was assumed, is what keeps that honest.
+        bare = specification.from_request("a plate 80 x 50 x 8")
+        bare_notes = bare.sheet_notes()
+        check("an unspecified part is given a class and told so",
+              bare.tolerance_class == "ISO 2768-m" and bare.proposed
+              and any("ASSUMED" in line for line in bare_notes),
+              " | ".join(bare_notes)[:90])
+        check("and it does not blame a Planner that never ran",
+              not any("PLANNER" in line for line in bare_notes))
+
+        # A tolerance belongs on the dimension it applies to. Said in a note
+        # as well, it is said twice and read once.
+        bore_geom = {"is_valid": True, "holes": [25.0],
+                     "mass": {"material": "Aluminium 6061-T6",
+                              "mass_kg": 0.21, "mass_g": 210}}
+        callouts = drawing.hole_callouts(
+            [{"label": "\u00d825 THRU", "diameter": 25.0}], read)
+        check("a stated fit goes on the hole's own leader",
+              callouts.get(25.0) == "\u00d825 H7 THRU", str(callouts))
+        on_sheet = drawing.note_lines(bore_geom, read)
+        check("and is not repeated in the notes underneath",
+              not any(line.startswith("\u00d825 H7") for line in on_sheet),
+              " | ".join(on_sheet)[:110])
+        check("the material is not printed twice when the title block has it",
+              not any(line.startswith("MATERIAL:") for line in on_sheet),
+              " | ".join(on_sheet)[:110])
+
+        # Every version this app publishes is an issue of the drawing.
+        check("the first issue carries no revision letter",
+              drawing._revision(0) == "-")
+        check("and each one after it carries the next",
+              (drawing._revision(1), drawing._revision(2),
+               drawing._revision(26)) == ("A", "B", "Z"))
+
         print("\nA part with a bore is cut open")
         # A full section is what a drawing of a flange, a boss or a housing
         # is: the front view in outline is a featureless rectangle, and the
