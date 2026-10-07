@@ -207,6 +207,38 @@ def _crosses(*points):
     return freecad_tools._crosses_itself([list(p) for p in points])  # noqa: SLF001
 
 
+def _area(points) -> float:
+    """The area the rounded outline encloses, from its own arcs and lines.
+
+    Checked against hand arithmetic rather than against FreeCAD, so the
+    corner maths stays pinned on a machine with no FreeCAD installed.
+    """
+    import math
+    pieces = freecad_tools._rounded(points)          # noqa: SLF001
+    chord, caps = [], 0.0
+    for piece in pieces:
+        if piece[0] == "line":
+            chord.append(piece[1])
+            chord.append(piece[2])
+        else:
+            _, (cx, cy), r, a0, a1 = piece
+            chord.append((cx + r * math.cos(a0), cy + r * math.sin(a0)))
+            chord.append((cx + r * math.cos(a1), cy + r * math.sin(a1)))
+            sweep = abs((a1 - a0 + math.pi) % (2 * math.pi) - math.pi)
+            caps += 0.5 * r * r * (sweep - math.sin(sweep))
+    seen = []
+    for point in chord:
+        if (not seen or abs(point[0] - seen[-1][0]) > 1e-9
+                or abs(point[1] - seen[-1][1]) > 1e-9):
+            seen.append(point)
+    poly = 0.0
+    for i in range(len(seen)):
+        x1, y1 = seen[i]
+        x2, y2 = seen[(i + 1) % len(seen)]
+        poly += x1 * y2 - x2 * y1
+    return abs(poly) / 2.0 + caps
+
+
 def main() -> int:
     stand_in = Modelling()
     server, port = serve(stand_in)
@@ -305,6 +337,36 @@ def main() -> int:
           and _crosses((0, 0), (80, 0), (80, 12), (12, 12),
                        (12, 60), (0, 60)) is None,
           "a concave L is not a crossing")
+
+    print("\nA corner can carry its own radius")
+    import math as _math
+    # Each of these is a shape a dimensioned prompt asks for by name, and
+    # none could be drawn while an outline was line segments only: "four
+    # vertical corners R12", "top fully rounded R20", "full-round ends".
+    for label, points, expected in (
+        ("a 280 x 200 plate with R12 corners",
+         [(-140, -100, 12), (140, -100, 12), (140, 100, 12), (-140, 100, 12)],
+         280 * 200 - 4 * (144 - _math.pi * 144 / 4)),
+        ("a 30 x 20 obround, both ends full-round",
+         [(0, -10, 10), (30, -10, 10), (30, 10, 10), (0, 10, 10)],
+         10 * 20 + _math.pi * 100),
+        ("a 40 wide tab, top rounded R20",
+         [(0, 0), (40, 0), (40, 25, 20), (0, 25, 20)],
+         40 * 5 + _math.pi * 400 / 2),
+    ):
+        got = _area(points)
+        check(label, abs(got - expected) < 1e-6,
+              f"{got:.3f} mm2, arithmetic says {expected:.3f}")
+
+    # A radius bigger than the sides it sits between is refused with the
+    # number in it, not a sketch FreeCAD quietly fails to solve.
+    try:
+        freecad_tools._rounded(                                  # noqa: SLF001
+            [(0, 0, 30), (20, 0), (20, 20), (0, 20)])
+        check("a radius that cannot fit is refused", False, "it was accepted")
+    except freecad_tools.ToolError as exc:
+        check("a radius that cannot fit is refused", "R30" in str(exc),
+              str(exc)[:66])
 
     print("\nRepetition is a tool, not arithmetic in a script")
     # The reason this exists: a bolt circle has no primitive, so a model

@@ -83,6 +83,77 @@ BOOLEANS = {"cut": "Part::Cut", "union": "Part::MultiFuse",
             "intersect": "Part::MultiCommon"}
 
 
+import math
+
+
+def _rounded(points: list) -> list:
+    # A corner with a radius becomes a tangent arc between two shortened
+    # sides. Worked out here rather than asked of the Sketcher, because a
+    # sketch fillet wants constraints and a solved sketch, and what is
+    # wanted is one deterministic outline.
+    #
+    # This is also what gives a full-round end: two 90 degree corners whose
+    # radius is half the width have coincident tangent points, so the side
+    # between them vanishes and the two arcs meet as a semicircle. An
+    # obround, a radiused plate corner and a rounded tab are all the same
+    # operation at different radii.
+    n = len(points)
+    out = []                       # ("line", a, b) or ("arc", c, r, a0, a1)
+    ends = []                      # where each corner starts and finishes
+    for i in range(n):
+        prev = points[i - 1]
+        here = points[i]
+        nxt = points[(i + 1) % n]
+        r = float(here[2]) if len(here) > 2 else 0.0
+        bx, by = float(here[0]), float(here[1])
+        if r <= 0:
+            ends.append(((bx, by), (bx, by), None))
+            continue
+        ax, ay = float(prev[0]) - bx, float(prev[1]) - by
+        cx, cy = float(nxt[0]) - bx, float(nxt[1]) - by
+        la, lc = math.hypot(ax, ay), math.hypot(cx, cy)
+        if la < 1e-9 or lc < 1e-9:
+            ends.append(((bx, by), (bx, by), None))
+            continue
+        ax, ay, cx, cy = ax / la, ay / la, cx / lc, cy / lc
+        cosang = max(-1.0, min(1.0, ax * cx + ay * cy))
+        half = math.acos(cosang) / 2.0
+        if half < 1e-6 or abs(half - math.pi / 2.0) < 1e-9:
+            ends.append(((bx, by), (bx, by), None))   # straight through
+            continue
+        reach = r / math.tan(half)
+        if reach > la - 1e-9 or reach > lc - 1e-9:
+            raise ToolError(
+                "R%g will not fit on the corner at (%g, %g): it needs %.2f mm "
+                "of each side and has %.2f. Use a smaller radius."
+                % (r, bx, by, reach, min(la, lc)))
+        t1 = (bx + ax * reach, by + ay * reach)
+        t2 = (bx + cx * reach, by + cy * reach)
+        mx, my = ax + cx, ay + cy
+        ml = math.hypot(mx, my)
+        span = r / math.sin(half)
+        centre = (bx + mx / ml * span, by + my / ml * span)
+        ends.append((t1, t2, (centre, r)))
+
+    for i in range(n):
+        _, leave, corner = ends[i]
+        arrive, _, _ = ends[(i + 1) % n]
+        if corner is not None:
+            (ccx, ccy), r = corner
+            t1, t2, _ = ends[i]
+            a0 = math.atan2(t1[1] - ccy, t1[0] - ccx)
+            a1 = math.atan2(t2[1] - ccy, t2[0] - ccx)
+            # FreeCAD sweeps an arc anticlockwise from the first angle, and
+            # a corner never turns more than a half circle - so if going
+            # that way is the long way round, the ends are the other way up.
+            if (a1 - a0) % (2.0 * math.pi) > math.pi:
+                a0, a1 = a1, a0
+            out.append(("arc", (ccx, ccy), r, a0, a1))
+        if math.hypot(arrive[0] - leave[0], arrive[1] - leave[1]) > 1e-7:
+            out.append(("line", leave, arrive))
+    return out
+
+
 def _crosses_itself(points: list) -> Optional[tuple]:
     """The first pair of sides of a closed outline that intersect.
 
@@ -143,11 +214,20 @@ def _reversed(plane):
     return _PLANES[plane][1]
 
 
-def _outline(sketch, points):
-    at = [FreeCAD.Vector(p[0], p[1], 0) for p in points]
-    for i in range(len(at)):
-        sketch.addGeometry(
-            Part.LineSegment(at[i], at[(i + 1) % len(at)]), False)
+def _outline(sketch, pieces):
+    # Handed lines and arcs already worked out, so the only thing done in
+    # FreeCAD is the drawing. The corner maths lives in Python where it can
+    # be checked against arithmetic without a FreeCAD to run it.
+    for piece in pieces:
+        if piece[0] == "line":
+            (ax, ay), (bx, by) = piece[1], piece[2]
+            sketch.addGeometry(Part.LineSegment(
+                FreeCAD.Vector(ax, ay, 0), FreeCAD.Vector(bx, by, 0)), False)
+        else:
+            _, (ccx, ccy), r, a0, a1 = piece
+            sketch.addGeometry(Part.ArcOfCircle(
+                Part.Circle(FreeCAD.Vector(ccx, ccy, 0),
+                            FreeCAD.Vector(0, 0, 1), r), a0, a1), False)
 
 
 def _check(feature, complaint):
@@ -862,15 +942,23 @@ made = [out.Name]
                 "repeat the first point at the end.")
         out = []
         for point in points:
-            if (not isinstance(point, (list, tuple)) or len(point) != 2
+            if (not isinstance(point, (list, tuple))
+                    or len(point) not in (2, 3)
                     or not all(isinstance(v, (int, float)) for v in point)):
-                raise ToolError(f"{point!r} is not an [x, y] pair in millimetres")
-            out.append([float(point[0]), float(point[1])])
-        if out[0] == out[-1]:
+                raise ToolError(
+                    f"{point!r} is not an [x, y] pair in millimetres, or an "
+                    f"[x, y, radius] corner. A radius rounds that corner - "
+                    f"it is how a plate gets R15 corners, and how a slot or "
+                    f"a tab gets a full-round end (radius = half the width "
+                    f"on the two corners at that end).")
+            if len(point) == 3 and float(point[2]) < 0:
+                raise ToolError("a corner radius cannot be negative")
+            out.append([float(v) for v in point])
+        if out[0][:2] == out[-1][:2]:
             out.pop()
         if len(out) < 3:
             raise ToolError("an outline needs at least three distinct corners")
-        crossing = _crosses_itself(out)
+        crossing = _crosses_itself([p[:2] for p in out])
         if crossing:
             a, b = crossing
             raise ToolError(
@@ -879,7 +967,7 @@ made = [out.Name]
                 f"something, and the something is not the part. List the "
                 f"corners in order round the shape, clockwise or anti, "
                 f"without jumping across.")
-        return out
+        return _rounded(out)
 
     @staticmethod
     def _fillet_corners(target: str, radius: float) -> str:
@@ -1116,13 +1204,18 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
                  "radiused ends, a gusset is a triangle - and it beats "
                  "building the same shape out of boxes and cuts. points are "
                  "[x, y] corners in the plane you draw on, in order, closing "
-                 "themselves. fillet rounds every corner. The pad's Length "
-                 "stays adjustable afterwards."),
+                 "themselves. A corner can be [x, y, radius] to round just "
+                 "that one - that is how a plate gets R12 corners, and how a "
+                 "slot or a tab gets a full-round end (put radius = half the "
+                 "width on the two corners at that end). fillet rounds every "
+                 "corner instead. The pad's Length stays adjustable "
+                 "afterwards."),
              parameters={"type": "object", "properties": {
                  "points": {"type": "array",
                             "items": {"type": "array",
                                       "items": {"type": "number"}},
-                            "description": "the outline, [[x, y], ...]"},
+                            "description": "the outline, [[x, y], ...], or "
+                                           "[x, y, radius] to round a corner"},
                  "depth": {**number, "description": "how far to pad it, mm"},
                  "name": text,
                  "plane": {**text, "enum": ["XY", "XZ", "YZ"]},
