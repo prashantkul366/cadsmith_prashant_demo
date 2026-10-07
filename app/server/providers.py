@@ -41,6 +41,20 @@ import httpx
 #: Generous by design: a local model on CPU can take minutes for one reply.
 REQUEST_TIMEOUT = float(os.getenv("CADSMITH_LLM_TIMEOUT", "600"))
 
+#: What a hop in front of the model answers when it stops waiting. A
+#: Cloudflare quick tunnel - the usual shape for a vLLM on somebody's
+#: laptop - gives up on a slow generation after about a hundred seconds and
+#: answers 524; 502 and 503 come back while it reconnects. None of these is
+#: the model's answer and none of them means the request was wrong, so
+#: ending a run on one throws away a part that is half built.
+GATEWAY_STATUS = (502, 503, 504, 520, 521, 522, 523, 524, 525, 527, 530)
+
+#: Attempts in total, and the pause before each retry. Short and finite on
+#: purpose: a demo stalled behind an endpoint that is never coming back is
+#: worse than one that says so.
+GATEWAY_ATTEMPTS = max(1, int(os.getenv("CADSMITH_GATEWAY_ATTEMPTS", "3")))
+GATEWAY_BACKOFF = (6.0, 18.0, 30.0)
+
 
 @dataclass(frozen=True)
 class ProviderSpec:
@@ -837,16 +851,49 @@ class OpenAICompatibleClient:
     def _fail(self, status: int, detail: str, model: str) -> None:
         if status == 400 and _VISION_ERROR.search(detail):
             raise _VisionUnsupported(detail)
+        if status in GATEWAY_STATUS:
+            raise _GatewayBusy(
+                f"{self.config.provider} returned {status} for "
+                f"model '{model}' - the endpoint in front of the model "
+                f"stopped waiting")
         raise RuntimeError(
             f"{self.config.provider} returned {status} for "
             f"model '{model}': {detail}")
 
     def _post(self, model: str, messages: list[dict], max_tokens: int,
               role: str = "generation") -> tuple[str, _Usage]:
+        """Ask once, and ask again if the hop in front of the model gave up.
+
+        The retry wraps the whole attempt rather than just the unstreamed
+        call, because a tunnel that times out mid-stream is the same event
+        and must not be mistaken for an endpoint that cannot stream - that
+        reading turned one slow generation into a permanent downgrade.
+        """
+        last: Optional[_GatewayBusy] = None
+        for attempt in range(GATEWAY_ATTEMPTS):
+            try:
+                return self._post_once(model, messages, max_tokens, role)
+            except _GatewayBusy as exc:
+                last = exc
+                if attempt + 1 >= GATEWAY_ATTEMPTS:
+                    break
+                pause = GATEWAY_BACKOFF[min(attempt, len(GATEWAY_BACKOFF) - 1)]
+                self._note(
+                    f"{exc}. Asking again in {pause:.0f}s "
+                    f"(attempt {attempt + 2} of {GATEWAY_ATTEMPTS}).")
+                time.sleep(pause)
+        assert last is not None
+        raise RuntimeError(
+            f"{last} - and again on {GATEWAY_ATTEMPTS} attempts. A slow "
+            f"endpoint behind a tunnel needs either a faster model or a "
+            f"direct URL; CADSMITH_GATEWAY_ATTEMPTS raises the count.")
+
+    def _post_once(self, model: str, messages: list[dict], max_tokens: int,
+                   role: str = "generation") -> tuple[str, _Usage]:
         if self._stream_ok:
             try:
                 return self._post_streaming(model, messages, max_tokens, role)
-            except _VisionUnsupported:
+            except (_VisionUnsupported, _GatewayBusy):
                 raise
             except _StreamUnsupported as exc:
                 self._stream_ok = False
@@ -951,6 +998,13 @@ class OpenAICompatibleClient:
                 headers=self._headers(),
                 json=self._body(model, messages, max_tokens),
                 timeout=REQUEST_TIMEOUT)
+        except (httpx.TimeoutException, httpx.NetworkError,
+                httpx.RemoteProtocolError) as exc:
+            # The same event from this end of the wire: the connection went
+            # away mid-generation. Worth asking again for the same reason.
+            raise _GatewayBusy(
+                f"Lost the connection to {self.config.provider} at "
+                f"{self.config.base_url}: {exc}") from exc
         except httpx.HTTPError as exc:
             raise RuntimeError(
                 f"Could not reach {self.config.provider} at "
@@ -1221,6 +1275,16 @@ _THINKING_UNSUPPORTED = re.compile(
 #: first, so a deployment that has yet to catch up on effort keeps its
 #: streamed reasoning instead of losing both.
 _EFFORT_UNSUPPORTED = re.compile(r"output_config|\beffort\b", re.IGNORECASE)
+
+
+class _GatewayBusy(RuntimeError):
+    """The hop in front of the model stopped waiting; the model did not.
+
+    Told apart from every other failure because it is the only one worth
+    asking again: the request was accepted, nothing about it was rejected,
+    and the generation was very likely still running when the tunnel closed
+    the connection.
+    """
 
 
 class _VisionUnsupported(RuntimeError):
