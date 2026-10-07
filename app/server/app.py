@@ -27,6 +27,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 
 from . import catalog_run, i18n, providers, tls
+from . import drawing as drawing_mod
 from .drawing import ensure_dxf, ensure_sheet
 from .edits import Change, describe_parameters, parameters
 from . import builder as builder_mod
@@ -962,6 +963,10 @@ def _startup() -> None:
     # Paying it here means the first part somebody makes does not, and the
     # first part is the one being watched.
     threading.Thread(target=builder_mod.warm_up, daemon=True).start()
+    # ...and the projection worker, for the same reason: it costs a second
+    # and a half to start and then answers in under a tenth, and the first
+    # drawing somebody asks for should not be the one that pays.
+    threading.Thread(target=drawing_mod.warm_up, daemon=True).start()
     status = _health()
     print(f"CADSmith app ready - {restored} past run(s) restored"
           + (f", {pruned} old run(s) removed" if pruned else ""))

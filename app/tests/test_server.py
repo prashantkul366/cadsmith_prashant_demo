@@ -135,8 +135,19 @@ def main() -> int:
 
         plan_event = next(e for e in events if e["phase"] == "plan"
                           and e["status"] == "ok")
-        check("design plan carried on the event",
-              plan_event["data"]["design_plan"]["description"] == "Flat washer")
+        plan_shown = plan_event["data"]["design_plan"]
+        # A request that states its own dimensions skips the Planner
+        # entirely, so what the panel shows is the request and the sizes
+        # read out of it - not a model's paraphrase of either.
+        check("plan carried on the event came from the request",
+              plan_event["data"].get("from_the_request") is True,
+              str(plan_event["data"].get("from_the_request")))
+        check("plan describes what was asked for",
+              plan_shown["description"] == PROMPT,
+              plan_shown["description"])
+        check("plan carries the bore the request stated",
+              10.5 in plan_shown["dimensions"]["key_dimensions"].values(),
+              str(plan_shown["dimensions"]["key_dimensions"]))
 
         exec_event = next(e for e in events if e["phase"] == "execute"
                           and e["status"] == "ok")

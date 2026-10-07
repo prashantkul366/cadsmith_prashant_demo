@@ -144,7 +144,12 @@ from OCP.GProp import GProp_GProps
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 
-step_path, spec_json = sys.argv[1], sys.argv[2]
+_SERVING = len(sys.argv) > 1 and sys.argv[1] == "--serve"
+if _SERVING:
+    # Started as a worker: wait for a job before touching any geometry.
+    step_path, spec_json = "", "{}"
+else:
+    step_path, spec_json = sys.argv[1], sys.argv[2]
 spec = json.loads(spec_json)
 SCHEMA = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 # Hidden-line removal is the whole cost of this worker - 1.65 s for four
@@ -155,9 +160,12 @@ SCHEMA = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 # tube ends.
 WITH_HLR = (sys.argv[4] != "no-hlr") if len(sys.argv) > 4 else True
 
-shape = cq.importers.importStep(step_path)
-if hasattr(shape, "val"):
-    shape = shape.val()
+if _SERVING:
+    shape = None
+else:
+    shape = cq.importers.importStep(step_path)
+    if hasattr(shape, "val"):
+        shape = shape.val()
 
 
 def polylines(compounds):
@@ -454,16 +462,53 @@ def _span(points):
     return (max(us) - min(us)) * (max(vs) - min(vs))
 
 
-print("__DRAWING__")
-out = {name: project(v["dir"], v["x"]) for name, v in spec.items()
-       if "normal" not in v}
-for name, v in spec.items():
-    if "normal" in v:
-        made = section(v["dir"], v["x"], v["normal"], v["origin"])
-        if made is not None:
-            out[name] = made
-out["__schema__"] = SCHEMA
-print(json.dumps(out))
+def _everything():
+    out = {name: project(v["dir"], v["x"]) for name, v in spec.items()
+           if "normal" not in v}
+    for name, v in spec.items():
+        if "normal" in v:
+            made = section(v["dir"], v["x"], v["normal"], v["origin"])
+            if made is not None:
+                out[name] = made
+    out["__schema__"] = SCHEMA
+    return out
+
+
+if __name__ == "__main__" and not _SERVING:
+    print("__DRAWING__")
+    print(json.dumps(_everything()))
+'''
+
+
+#: The loop a warm worker runs: one job per line in, one answer per line
+#: out. Appended to the worker rather than written separately so there is
+#: one projection implementation and not two that drift.
+_SERVE = r'''
+
+def _serve():
+    import traceback
+    global step_path, spec, SCHEMA, shape
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            job = json.loads(line)
+            step_path = job["step"]
+            spec = job["spec"]
+            SCHEMA = int(job["schema"])
+            globals()["WITH_HLR"] = bool(job.get("hlr", True))
+            loaded = cq.importers.importStep(step_path)
+            shape = loaded.val() if hasattr(loaded, "val") else loaded
+            answer = {"ok": True, "body": json.dumps(_everything())}
+        except Exception:
+            answer = {"ok": False, "error": traceback.format_exc()[-1500:]}
+        sys.stdout.write(json.dumps(answer) + "\n")
+        sys.stdout.flush()
+
+
+if _SERVING:
+    _serve()
 '''
 
 
@@ -512,6 +557,93 @@ def _section_origin(step_path: Path) -> list:
 PROJECTION_SCHEMA = 6
 
 
+#: The projection runs in a separate process, and always has: hidden-line
+#: removal is OCCT, and OCCT on bad geometry can take the whole server with
+#: it rather than raising something catchable. What it should not do is pay
+#: to start one each time - measured at 1.9 s for a subprocess that imports
+#: CadQuery against 86 ms for the projection itself, so nineteen twentieths
+#: of a drawing was Python waking up.
+#:
+#: So the process is kept. A worker starts once, imports CadQuery once, and
+#: answers one request per line after that. If it dies - which is the case
+#: it exists for - the next request starts another and nothing above here
+#: notices beyond the wait.
+class _Worker:
+    """A projection process that stays warm between drawings."""
+
+    def __init__(self) -> None:
+        self._process: Optional[subprocess.Popen] = None
+        self._script: Optional[Path] = None
+        self._lock = threading.Lock()
+
+    def ask(self, job: dict, timeout: int) -> str:
+        """One projection. Returns the worker's JSON body."""
+        with self._lock:
+            for attempt in (1, 2):
+                try:
+                    return self._ask(job, timeout)
+                except (BrokenPipeError, OSError, ValueError) as broken:
+                    # A worker that has died takes its answer with it. One
+                    # restart, then the caller hears about it.
+                    self._stop()
+                    if attempt == 2:
+                        raise RuntimeError(
+                            f"the projection worker would not answer: {broken}")
+            raise RuntimeError("unreachable")
+
+    def _ask(self, job: dict, timeout: int) -> str:
+        process = self._running()
+        process.stdin.write(json.dumps(job) + "\n")
+        process.stdin.flush()
+        line = process.stdout.readline()
+        if not line:
+            raise BrokenPipeError("the worker closed its output")
+        answer = json.loads(line)
+        if not answer.get("ok"):
+            raise RuntimeError(answer.get("error", "the projection failed")[-800:])
+        return answer["body"]
+
+    def _running(self) -> subprocess.Popen:
+        if self._process is not None and self._process.poll() is None:
+            return self._process
+        if self._script is None:
+            work = Path(tempfile.mkdtemp(prefix="cadsmith_projector_"))
+            self._script = work / "serve.py"
+            self._script.write_text(_WORKER + _SERVE, encoding="utf-8")
+        self._process = subprocess.Popen(
+            [sys.executable, str(self._script), "--serve"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        return self._process
+
+    def _stop(self) -> None:
+        if self._process is None:
+            return
+        try:
+            self._process.kill()
+        except Exception:
+            pass
+        self._process = None
+
+
+_WORKER_POOL = _Worker()
+
+
+def warm_up() -> None:
+    """Start the projection worker before anybody waits on it.
+
+    It costs a second and a half to start - Python and CadQuery - and
+    answers in under a tenth afterwards. Left alone that lands on the first
+    drawing of the session, which is the one being looked at. Swallows
+    everything: a head start, not a requirement.
+    """
+    try:
+        _WORKER_POOL._running()          # noqa: SLF001
+    except Exception:
+        pass
+
+
 def _project(step_path: Path, timeout: int = 180,
              cache: Optional[Path] = None, with_hlr: bool = True,
              section: bool = False) -> dict:
@@ -536,10 +668,6 @@ def _project(step_path: Path, timeout: int = 180,
         except (json.JSONDecodeError, OSError, AttributeError):
             pass  # rebuild rather than trust a half-written or older file
 
-    work = Path(tempfile.mkdtemp(prefix="cadsmith_drawing_"))
-    script = work / "project.py"
-    script.write_text(_WORKER, encoding="utf-8")
-
     spec = {name: {"dir": list(v["dir"]), "x": list(v["x"])}
             for name, v in VIEWS.items()}
     if section:
@@ -548,17 +676,9 @@ def _project(step_path: Path, timeout: int = 180,
         spec["SECTION"] = {"dir": list(SECTION["dir"]), "x": list(SECTION["x"]),
                            "normal": list(SECTION["normal"]),
                            "origin": _section_origin(step_path)}
-    result = subprocess.run(
-        [sys.executable, str(script), str(step_path), json.dumps(spec),
-         str(PROJECTION_SCHEMA), "hlr" if with_hlr else "no-hlr"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=timeout, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-    )
-    if "__DRAWING__" not in result.stdout:
-        raise RuntimeError(
-            (result.stderr or result.stdout or "projection produced no output")[-800:])
-
-    body = result.stdout.split("__DRAWING__")[1].strip()
+    body = _WORKER_POOL.ask({"step": str(step_path), "spec": spec,
+                             "schema": PROJECTION_SCHEMA,
+                             "hlr": bool(with_hlr)}, timeout).strip()
     if cache is not None:
         try:
             cache.write_text(body, encoding="utf-8")
