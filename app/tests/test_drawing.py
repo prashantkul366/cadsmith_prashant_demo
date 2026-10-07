@@ -27,6 +27,7 @@ import cadquery as cq  # noqa: E402
 import ezdxf  # noqa: E402
 
 from app.server import drawing  # noqa: E402
+from app.server import spec as spec_mod  # noqa: E402
 
 SVG = "{http://www.w3.org/2000/svg}"
 
@@ -405,6 +406,73 @@ def main() -> int:
         check("with nothing specified it still refuses to claim a tolerance",
               any("NO TOLERANCES ARE SPECIFIED" in line
                   for line in drawing.note_lines({"is_valid": True}, None)))
+
+        print("\nA part with a bore is cut open")
+        # A full section is what a drawing of a flange, a boss or a housing
+        # is: the front view in outline is a featureless rectangle, and the
+        # bore reads as hidden detail or not at all.
+        flange = work / "flange.step"
+        cq.exporters.export(
+            (cq.Workplane("XY").circle(75).extrude(15)
+             .faces(">Z").workplane().hole(50)
+             .faces(">Z").workplane().polarArray(60, 0, 360, 6).hole(12)),
+            str(flange))
+        bored = spec_mod.measure_step(flange)
+        bored["bounding_box"] = bored["bbox"]
+        check("a part with a bore is worth sectioning",
+              drawing.worth_sectioning(bored), str(sorted(set(bored["holes"]))))
+        # ...and one whose holes are all fixings is not: cutting it says
+        # nothing the view from above does not, and costs the view that
+        # carries the overall width.
+        check("a plate with only fixing holes is not",
+              not drawing.worth_sectioning({"holes": [6.0, 6.0, 6.0, 6.0]}))
+        check("and neither is a part with no holes at all",
+              not drawing.worth_sectioning({"holes": []}))
+
+        cut_views = drawing._project(flange, section=True)
+        check("the section comes back as a view", "SECTION" in cut_views,
+              ", ".join(sorted(cut_views)))
+        section = cut_views["SECTION"]
+        check("with the cut faces the hatching needs",
+              len(section["cut"]) == 4, f"{len(section['cut'])} faces")
+        # The flange is cut through its middle, so the metal left either
+        # side of the bore and outside the bolt holes is what was sawn.
+        widths = sorted(round(max(p[0] for p in face[0])
+                              - min(p[0] for p in face[0]), 1)
+                        for face in section["cut"])
+        check("which are the webs between the bore and the bolt holes",
+              widths == [9.0, 9.0, 29.0, 29.0], str(widths))
+        check("the section is the size of the part, not of the half kept",
+              abs((section["bbox"][2] - section["bbox"][0]) - 150) < 0.1,
+              f"{section['bbox'][2] - section['bbox'][0]:.1f} mm wide")
+
+        sheet = drawing.plan_sheet(cut_views)
+        names = [v["name"] for v in sheet["views"]]
+        check("it stands where the front view was, not beside it",
+              "SECTION" in names and "FRONT" not in names, ", ".join(names))
+        cut_plan = next(v for v in sheet["views"] if v["name"] == "SECTION")
+        check("every cut face is hatched, however narrow",
+              all(drawing.hatch(face) for face in cut_plan["cut"]),
+              f"{len(cut_plan['hatch'])} lines over "
+              f"{len(cut_plan['cut'])} faces")
+        above = next(v for v in sheet["views"] if v["name"] == "TOP")
+        check("and the plane it was taken on is drawn where it shows",
+              above.get("cutting_plane", {}).get("letter") == "A",
+              str(above.get("cutting_plane")))
+
+        drawn = drawing.build_sheet(flange, bored, "a flange", "JOB-CUT", 0)
+        check("the sheet names the section", "SECTION A-A" in drawn)
+        check("and carries its hatching", drawn.count("stroke-width=\"0.25\"") > 20)
+
+        # The hatch is computed into the plan rather than by each renderer,
+        # because a drawing that changes when you download it is two
+        # drawings. This is the check that they are one.
+        cut_dxf = drawing.build_dxf(flange, bored, "a flange", "JOB-CUT", 0)
+        on_layer = [e for e in cut_dxf.modelspace()
+                    if e.dxf.layer == "SECTION"]
+        check("the DXF hatches the same cut, from the same segments",
+              len(on_layer) == len(cut_plan["hatch"]),
+              f"{len(on_layer)} in the DXF, {len(cut_plan['hatch'])} planned")
 
         print("\nThe same drawing as DXF")
         # The SVG is a picture of the drawing; the DXF is the drawing. Its

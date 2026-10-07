@@ -41,6 +41,7 @@ MESSAGES: dict[str, dict[str, str]] = {
     "sheet.view.left": {"en": "VIEW FROM LEFT", "ja": "左側面図"},
     "sheet.view.top": {"en": "VIEW FROM ABOVE", "ja": "平面図"},
     "sheet.view.iso": {"en": "ISOMETRIC", "ja": "等角図"},
+    "sheet.view.section": {"en": "SECTION A-A", "ja": "断面 A-A"},
     "sheet.owner": {"en": "LEGAL OWNER", "ja": "所有者"},
     "sheet.title": {"en": "TITLE", "ja": "図面名称"},
     "sheet.date": {"en": "DATE OF ISSUE", "ja": "発行日"},

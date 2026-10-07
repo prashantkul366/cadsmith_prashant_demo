@@ -86,6 +86,19 @@ VIEWS = {
                "label": "sheet.view.iso"},
 }
 
+#: A full section, taken where the front view would be and replacing it.
+#: The cutting plane is vertical and passes through the middle of the part,
+#: which is the section a drawing of a flange, a boss or a housing takes;
+#: the near half comes away, so the bore reads as outline instead of as
+#: hidden detail. The front view of a flange is otherwise a rectangle.
+SECTION = {"dir": (0, -1, 0), "x": (1, 0, 0), "cell": (0, 0),
+           "normal": (0, -1, 0), "label": "sheet.view.section"}
+
+#: Which view the cutting plane is drawn on. First angle puts the view from
+#: above directly below the front view, so the plane that produced the
+#: section shows there as a line across the part.
+SECTION_SHOWN_ON = "TOP"
+
 # Room a view may occupy inside its cell, leaving space for the dimensions
 # that hang off two of its sides and for the view label.
 VIEW_W, VIEW_H = CELL_W - 46.0, CELL_H - 30.0
@@ -134,6 +147,13 @@ from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 step_path, spec_json = sys.argv[1], sys.argv[2]
 spec = json.loads(spec_json)
 SCHEMA = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+# Hidden-line removal is the whole cost of this worker - 1.65 s for four
+# views of a flange, against a few milliseconds for everything else it
+# does. When FreeCAD has already projected the part, this skips it and
+# computes only what has to be read off the solid in three dimensions:
+# which circular edges face the viewer, where the bends are, where the
+# tube ends.
+WITH_HLR = (sys.argv[4] != "no-hlr") if len(sys.argv) > 4 else True
 
 shape = cq.importers.importStep(step_path)
 if hasattr(shape, "val"):
@@ -165,16 +185,19 @@ def project(direction, x_direction):
     # The basis is stated rather than left to OCCT, which chooses its own and
     # would lay the model's Z axis across the page.
     axis = gp_Ax2(gp_Pnt(), gp_Dir(*direction), gp_Dir(*x_direction))
-    hlr = HLRBRep_Algo()
-    hlr.Add(shape.wrapped)
-    hlr.Projector(HLRAlgo_Projector(axis))
-    hlr.Update()
-    hlr.Hide()
-    shapes = HLRBRep_HLRToShape(hlr)
+    if WITH_HLR:
+        hlr = HLRBRep_Algo()
+        hlr.Add(shape.wrapped)
+        hlr.Projector(HLRAlgo_Projector(axis))
+        hlr.Update()
+        hlr.Hide()
+        shapes = HLRBRep_HLRToShape(hlr)
 
-    visible = polylines([shapes.VCompound(), shapes.Rg1LineVCompound(),
-                         shapes.OutLineVCompound()])
-    hidden = polylines([shapes.HCompound(), shapes.OutLineHCompound()])
+        visible = polylines([shapes.VCompound(), shapes.Rg1LineVCompound(),
+                             shapes.OutLineVCompound()])
+        hidden = polylines([shapes.HCompound(), shapes.OutLineHCompound()])
+    else:
+        visible, hidden = [], []
 
     xd, yd = axis.XDirection(), axis.YDirection()
     ex = (xd.X(), xd.Y(), xd.Z())
@@ -288,6 +311,15 @@ def project(direction, x_direction):
 
     us = [p[0] for line in visible + hidden for p in line]
     vs = [p[1] for line in visible + hidden for p in line]
+    if not us:
+        # No lines to measure, so the solid's own corners stand in. Eight
+        # points of a bounding box projected onto the view's basis bound
+        # everything the silhouette can reach.
+        box = shape.BoundingBox()
+        corners = [(x, y, z) for x in (box.xmin, box.xmax)
+                   for y in (box.ymin, box.ymax) for z in (box.zmin, box.zmax)]
+        us = [sum(c[i] * ex[i] for i in range(3)) for c in corners]
+        vs = [sum(c[i] * ey[i] for i in range(3)) for c in corners]
     return {
         "visible": visible, "hidden": hidden, "circles": circles,
         "bends": bends, "tips": tips,
@@ -296,8 +328,111 @@ def project(direction, x_direction):
     }
 
 
+def section(direction, x_direction, normal, origin):
+    """A full section: the solid cut open, projected, with its cut faces.
+
+    The half of the part between the viewer and the cutting plane is taken
+    away, so what is left shows the bore and the holes as solid outline
+    instead of as hidden detail. The front view of a flange in outline is a
+    featureless rectangle; cut open it is the drawing.
+
+    The cut faces come back as wires in the view plane, which is what gets
+    hatched. The projection alone cannot give them - an edge on the cut
+    face looks like any other edge - so they are taken off the solid, where
+    the difference is a face lying in the cutting plane.
+    """
+    box = shape.BoundingBox()
+    reach = 10.0 * max(box.xlen, box.ylen, box.zlen, 1.0)
+    axis = gp_Ax2(gp_Pnt(), gp_Dir(*direction), gp_Dir(*x_direction))
+    xd, yd = axis.XDirection(), axis.YDirection()
+    ex = (xd.X(), xd.Y(), xd.Z())
+    ey = (yd.X(), yd.Y(), yd.Z())
+
+    def flat(p):
+        return (round(sum(p[i] * ex[i] for i in range(3)), 3),
+                round(sum(p[i] * ey[i] for i in range(3)), 3))
+
+    # Everything on the far side of the plane, which is the half that stays.
+    keep = cq.Solid.makeBox(
+        2 * reach, 2 * reach, 2 * reach,
+        cq.Vector(-reach, -reach, -reach))
+    centre = cq.Vector(*origin)
+    away = cq.Vector(*normal).normalized()
+    keep = keep.translate(away.multiply(-reach) + centre)
+    try:
+        cut = shape.intersect(keep)
+    except Exception:
+        return None
+    if cut is None or cut.Volume() < 1e-6:
+        return None
+
+    hlr = HLRBRep_Algo()
+    hlr.Add(cut.wrapped)
+    hlr.Projector(HLRAlgo_Projector(axis))
+    hlr.Update()
+    hlr.Hide()
+    shapes = HLRBRep_HLRToShape(hlr)
+    visible = polylines([shapes.VCompound(), shapes.Rg1LineVCompound(),
+                         shapes.OutLineVCompound()])
+
+    # The faces lying in the cutting plane: the metal the saw went through.
+    hatched = []
+    plane_point = cq.Vector(*origin)
+    unit = cq.Vector(*normal).normalized()
+    for face in cut.Faces():
+        try:
+            facing = face.normalAt()
+        except Exception:
+            continue
+        if abs(abs(facing.dot(unit)) - 1.0) > 1e-4:
+            continue
+        offset = (face.Center() - plane_point).dot(unit)
+        if abs(offset) > 1e-4:
+            continue
+        wires = []
+        for wire in face.Wires():
+            points = []
+            for edge in wire.Edges():
+                adaptor = BRepAdaptor_Curve(edge.wrapped)
+                walk = GCPnts_QuasiUniformDeflection(
+                    adaptor, 1e-2, adaptor.FirstParameter(),
+                    adaptor.LastParameter())
+                if not walk.IsDone():
+                    continue
+                for i in range(walk.NbPoints()):
+                    pt = walk.Value(i + 1)
+                    points.append(flat((pt.X(), pt.Y(), pt.Z())))
+            if len(points) > 2:
+                wires.append(points)
+        if wires:
+            # The outer wire first, so a renderer filling by the even-odd
+            # rule gets the holes as holes.
+            wires.sort(key=lambda w: -_span(w))
+            hatched.append(wires)
+
+    us = [p[0] for line in visible for p in line]
+    vs = [p[1] for line in visible for p in line]
+    return {
+        "visible": visible, "hidden": [], "circles": [], "bends": [],
+        "tips": [], "cut": hatched, "basis": [list(ex), list(ey)],
+        "bbox": ([min(us), min(vs), max(us), max(vs)] if us else [0, 0, 0, 0]),
+    }
+
+
+def _span(points):
+    us = [p[0] for p in points]
+    vs = [p[1] for p in points]
+    return (max(us) - min(us)) * (max(vs) - min(vs))
+
+
 print("__DRAWING__")
-out = {name: project(v["dir"], v["x"]) for name, v in spec.items()}
+out = {name: project(v["dir"], v["x"]) for name, v in spec.items()
+       if "normal" not in v}
+for name, v in spec.items():
+    if "normal" in v:
+        made = section(v["dir"], v["x"], v["normal"], v["origin"])
+        if made is not None:
+            out[name] = made
 out["__schema__"] = SCHEMA
 print(json.dumps(out))
 '''
@@ -313,6 +448,29 @@ SHEET_SCHEMA = 2
 #: A custom property's *name* carries it, so the check is a plain search.
 _DXF_MARKER = f"CADSMITH_SHEET_{SHEET_SCHEMA}"
 
+def _section_origin(step_path: Path) -> list:
+    """A point on the cutting plane: the centre of the part's extent.
+
+    Read from the STEP rather than assumed to be the origin, because a part
+    modelled away from it would otherwise be cut somewhere outside itself
+    and the section would come back empty.
+    """
+    try:
+        from app.server import spec as spec_mod
+
+        box = spec_mod.measure_step(step_path)["bbox"]
+        # measure_step reports lengths; the solid's own centre needs the
+        # bounds, so this is rebuilt from the kernel when it has to be.
+        import cadquery as cq
+
+        bounds = cq.importers.importStep(str(step_path)).val().BoundingBox()
+        return [round((bounds.xmin + bounds.xmax) / 2.0, 4),
+                round((bounds.ymin + bounds.ymax) / 2.0, 4),
+                round((bounds.zmin + bounds.zmax) / 2.0, 4)]
+    except Exception:
+        return [0.0, 0.0, 0.0]
+
+
 #: What a cached projection has to contain to be usable. Bumped when the
 #: worker starts recording something the drawing then relies on - schema 2
 #: added each circular edge's sweep, which is what tells a hole from a
@@ -322,11 +480,12 @@ _DXF_MARKER = f"CADSMITH_SHEET_{SHEET_SCHEMA}"
 #: centreline radius the projected edges only approximate. Schema 4 added
 #: where each bend starts and stops, and where the tube ends - the vertices
 #: of its path, which is what a drawing of a bent tube dimensions.
-PROJECTION_SCHEMA = 4
+PROJECTION_SCHEMA = 5
 
 
 def _project(step_path: Path, timeout: int = 180,
-             cache: Optional[Path] = None) -> dict:
+             cache: Optional[Path] = None, with_hlr: bool = True,
+             section: bool = False) -> dict:
     """Project the solid into every view. Returns {view name: view data}.
 
     The hidden-line pass is the expensive half of a drawing - seconds, in a
@@ -354,9 +513,15 @@ def _project(step_path: Path, timeout: int = 180,
 
     spec = {name: {"dir": list(v["dir"]), "x": list(v["x"])}
             for name, v in VIEWS.items()}
+    if section:
+        # The plane passes through the middle of the part, which is where a
+        # drawing takes a full section unless there is a reason not to.
+        spec["SECTION"] = {"dir": list(SECTION["dir"]), "x": list(SECTION["x"]),
+                           "normal": list(SECTION["normal"]),
+                           "origin": _section_origin(step_path)}
     result = subprocess.run(
         [sys.executable, str(script), str(step_path), json.dumps(spec),
-         str(PROJECTION_SCHEMA)],
+         str(PROJECTION_SCHEMA), "hlr" if with_hlr else "no-hlr"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=timeout, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
@@ -771,7 +936,7 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
     and what stops three views disagreeing about the same edge. All
     coordinates are in sheet millimetres, y downwards as SVG has it.
     """
-    meta = VIEWS[name]
+    meta = VIEWS.get(name) or SECTION
     cx, cy = _cell_centre(meta["cell"])
     umin, vmin, umax, vmax = view["bbox"]
     uc, vc = (umin + umax) / 2.0, (vmin + vmax) / 2.0
@@ -817,7 +982,12 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
         "visible": place(view["visible"]),
         "hidden": [] if name == "ISO" else place(view["hidden"]),
         "centre_lines": [], "dimensions": [], "callouts": [],
+        # The metal the cutting plane went through, as wires on the sheet.
+        # Outer wire first in each, so filling by the even-odd rule leaves
+        # the holes unhatched.
+        "cut": [place(face) for face in view.get("cut") or []],
     }
+    plan["hatch"] = [line for face in plan["cut"] for line in hatch(face)]
 
     # Centre lines through every hole (ISO 128-2 long-dash-dot). Rounds get
     # none: a centre mark says "there is a hole here", and a crosshair inside
@@ -1052,17 +1222,115 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
     return plan
 
 
+#: Section hatching, ISO 128-50: thin lines at 45 degrees. The spacing is a
+#: property of the sheet rather than of the part - 2 mm on the paper at any
+#: scale - so the narrow web between a bore and a bolt hole still reads as
+#: cut metal instead of as one lonely line.
+HATCH_PITCH = 2.0
+HATCH_ANGLE = 45.0
+
+
+def hatch(face: list, pitch: float = HATCH_PITCH,
+          angle: float = HATCH_ANGLE) -> list:
+    """Hatch lines for one cut face, as segments on the sheet.
+
+    Computed into the plan rather than left to each renderer, for the reason
+    everything else here is: the SVG and the DXF have to say the same thing,
+    and a pattern fill in one and nothing in the other is a drawing that
+    changes when you download it.
+
+    Even-odd against every wire, so a face's holes come out unhatched
+    without the wires needing to be wound in any particular direction.
+    """
+    points = [p for wire in face for p in wire]
+    if len(points) < 3:
+        return []
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    radians = math.radians(angle)
+    dx, dy = math.cos(radians), math.sin(radians)
+    # Across the hatch direction: how far each line is from the origin.
+    def across(x, y):
+        return -x * dy + y * dx
+
+    reach = [across(x, y) for x, y in points]
+    first = math.floor(min(reach) / pitch) * pitch
+    span = math.hypot(max(xs) - min(xs), max(ys) - min(ys)) + pitch
+    origin = (min(xs), min(ys))
+
+    segments = []
+    offset = first
+    while offset <= max(reach) + pitch:
+        # A point on this line, then walk along it looking for crossings.
+        base = (origin[0] - dy * (offset - across(*origin)),
+                origin[1] + dx * (offset - across(*origin)))
+        hits = []
+        for wire in face:
+            for i in range(len(wire)):
+                ax, ay = wire[i]
+                bx, by = wire[(i + 1) % len(wire)]
+                da = across(ax, ay) - offset
+                db = across(bx, by) - offset
+                if (da > 0) == (db > 0) or da == db:
+                    continue
+                t = da / (da - db)
+                px, py = ax + (bx - ax) * t, ay + (by - ay) * t
+                hits.append((px - base[0]) * dx + (py - base[1]) * dy)
+        hits.sort()
+        for i in range(0, len(hits) - 1, 2):
+            a, b = hits[i], hits[i + 1]
+            if b - a < 1e-6:
+                continue
+            segments.append((round(base[0] + dx * a, 3), round(base[1] + dy * a, 3),
+                             round(base[0] + dx * b, 3), round(base[1] + dy * b, 3)))
+        offset += pitch
+        if len(segments) > 4000:        # a pathological face, not a drawing
+            break
+    return segments
+
+
 def plan_sheet(views: dict) -> dict:
     """Everything the sheet says, before anything is drawn."""
     scale = _choose_scale(views)
     # Which view carries which overall dimension. Every length appears once:
     # the front view gives width and height, the view from above gives the
     # depth, and the remaining views repeat nothing.
-    carries = {"FRONT": "width height", "TOP": "height", "LEFT": "", "ISO": ""}
-    return {
-        "scale": scale,
-        "views": [plan_view(name, views[name], scale, carries[name])
-                  for name in ("FRONT", "LEFT", "TOP", "ISO") if name in views],
+    carries = {"FRONT": "width height", "TOP": "height", "LEFT": "", "ISO": "",
+               "SECTION": "width height"}
+    # A section replaces the front view rather than joining it: they are the
+    # same view of the same part, one cut open, and a sheet carrying both
+    # says everything twice and has nowhere to put the view from above.
+    order = ["SECTION" if "SECTION" in views else "FRONT", "LEFT", "TOP", "ISO"]
+    planned = [plan_view(name, views[name], scale, carries[name])
+               for name in order if name in views]
+    sheet = {"scale": scale, "views": planned}
+    _mark_cutting_plane(sheet, views)
+    return sheet
+
+
+def _mark_cutting_plane(sheet: dict, views: dict) -> None:
+    """Draw the plane the section was taken on, on the view that shows it.
+
+    A section nobody can locate is a picture. ISO 128-40 wants the plane as
+    a long-dash-dotted line across the view, thickened at its ends, with
+    arrows showing the direction of sight and a letter at each end matching
+    the section's own label.
+    """
+    if "SECTION" not in views:
+        return
+    on = next((v for v in sheet["views"]
+               if v["name"] == SECTION_SHOWN_ON), None)
+    if on is None:
+        return
+    left, top, right, bottom = on["box"]
+    # The cut is horizontal across the view from above, through its middle,
+    # looking the way the front view looks.
+    y = (top + bottom) / 2.0
+    on["cutting_plane"] = {
+        "y": y, "x1": left - 8.0, "x2": right + 8.0,
+        # Arrows point the way the section is viewed: down the sheet, which
+        # is towards the viewer of the front view in first angle.
+        "towards": -1.0, "letter": "A",
     }
 
 
@@ -1078,9 +1346,30 @@ def _render_view(plan: dict, lang: str = "en") -> list[str]:
                        f'stroke-width="{width}"{stroke} '
                        f'stroke-linecap="round" stroke-linejoin="round"/>')
 
+    # The cut metal first of all, so every line is drawn over it. ISO 128-50
+    # hatches at 45 degrees, thin and evenly spaced; one part is one angle,
+    # which is what says the hatched regions are the same piece of metal.
+    for x1, y1, x2, y2 in plan.get("hatch") or []:
+        out.append(_line(x1, y1, x2, y2, W_THIN))
+
     # Hidden first, so a visible edge over a hidden one wins.
     paths(plan["hidden"], W_THIN, "2.4,1.2")
     paths(plan["visible"], W_THICK, "")
+
+    # The plane a section was taken on, drawn on the view that shows it.
+    cut = plan.get("cutting_plane")
+    if cut:
+        y, x1, x2 = cut["y"], cut["x1"], cut["x2"]
+        out.append(_line(x1, y, x2, y, W_THIN, "12,1.5,1.5,1.5"))
+        # Thickened at each end, as ISO 128-40 asks.
+        out.append(_line(x1, y, x1 + 8.0, y, W_THICK))
+        out.append(_line(x2 - 8.0, y, x2, y, W_THICK))
+        for x, inward in ((x1, 1.0), (x2, -1.0)):
+            out.append(_arrow(x, y + cut["towards"] * 4.0,
+                              0.0, -cut["towards"]))
+            out.append(_line(x, y, x, y + cut["towards"] * 4.0, W_THICK))
+            out.append(_text(x + inward * 4.5, y + cut["towards"] * 7.5,
+                             cut["letter"], TEXT))
 
     for x1, y1, x2, y2 in plan["centre_lines"]:
         out.append(_line(x1, y1, x2, y2, W_THIN, "6,1.2,1.2,1.2"))
@@ -1253,11 +1542,32 @@ def _notes(geometry: dict, spec: Any = None,
     return out
 
 
+def worth_sectioning(geometry: dict) -> bool:
+    """Whether cutting the part open would show anything.
+
+    A section earns its place when there is internal detail the outline
+    cannot show. A bore does; four through-holes in a flat plate do not -
+    they are already round in the view from above and a rectangle in the
+    front view, and sectioning says nothing new while costing the view that
+    carries the overall width.
+
+    So: a part is cut open when it has a hole big enough to be a bore rather
+    than a fixing, or holes of several sizes, which is the counterbore and
+    bearing-seat case a drawing has to show in section.
+    """
+    holes = [h for h in (geometry.get("holes") or []) if h]
+    if not holes:
+        return False
+    sizes = {round(float(h), 2) for h in holes}
+    return max(sizes) >= 20.0 or len(sizes) >= 3
+
+
 def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
                 version: int, projection: Optional[Path] = None,
                 spec: Any = None, lang: str = "en") -> str:
     """Compose the drawing as a standalone SVG document."""
-    sheet = plan_sheet(_project(step_path, cache=projection))
+    sheet = plan_sheet(_project(step_path, cache=projection,
+                                section=worth_sectioning(geometry)))
     scale = sheet["scale"]
 
     body: list[str] = []
@@ -1364,6 +1674,7 @@ _LAYERS = [
     ("HIDDEN",          8, _LW_THIN,  "DASHED2"),
     ("CENTRE",          4, _LW_THIN,  "CENTER2"),
     ("DIMENSIONS",      3, _LW_THIN,  "Continuous"),
+    ("SECTION",         7, _LW_THIN,  "Continuous"),
     ("ANNOTATION",      7, _LW_THIN,  "Continuous"),
     ("FRAME",           7, _LW_THICK, "Continuous"),
 ]
@@ -1395,7 +1706,8 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
             "app/requirements-app.txt. The sheet shown in the app is SVG and "
             "does not need it.") from exc
 
-    sheet = plan_sheet(_project(step_path, cache=projection))
+    sheet = plan_sheet(_project(step_path, cache=projection,
+                                section=worth_sectioning(geometry)))
     scale = sheet["scale"]
 
     doc = ezdxf.new("R2010", setup=True)
@@ -1443,12 +1755,23 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
         return entity
 
     for view in sheet["views"]:
+        # Cut metal first, so every line is drawn over it - and from the
+        # same segments the SVG draws, which is what stops the two
+        # renderers disagreeing about where the section was taken.
+        for x1, y1, x2, y2 in view.get("hatch") or []:
+            line(x1, y1, x2, y2, "SECTION")
         for polygon in view["hidden"]:
             polyline(polygon, "HIDDEN")
         for polygon in view["visible"]:
             polyline(polygon, "OUTLINE")
         for x1, y1, x2, y2 in view["centre_lines"]:
             line(x1, y1, x2, y2, "CENTRE")
+        cut = view.get("cutting_plane")
+        if cut:
+            line(cut["x1"], cut["y"], cut["x2"], cut["y"], "CENTRE")
+            for x in (cut["x1"], cut["x2"]):
+                line(x, cut["y"], x, cut["y"] + cut["towards"] * 4.0, "OUTLINE")
+                text(x + 4.5, cut["y"] + cut["towards"] * 7.5, cut["letter"])
 
         for dim in view["dimensions"]:
             (x1, y1), (x2, y2) = dim["p1"], dim["p2"]

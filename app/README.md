@@ -1078,6 +1078,36 @@ leaving it to be noticed. There are two kinds of change:
   makes when synchronous technology touches an imported body, and it is why
   the two kinds are distinguished rather than treated as one verb.
 
+### Cutting the part open
+
+A drawing of a flange, a boss or a housing is a section. Its front view in
+outline is a featureless rectangle; cut through the middle it shows the bore
+and the bolt holes as solid outline, hatched where the saw went.
+
+So a part with internal detail now gets **SECTION A-A** where the front view
+would have been - they are the same view of the same part, one cut open, and
+a sheet carrying both says everything twice. The view from above carries the
+cutting plane as a long-dash-dotted line with arrows and an `A` at each end,
+which is where the plane is located for anyone reading it.
+
+A part is cut open when there is something inside to show: a hole of 20 mm
+or more, or holes of three or more sizes - the bore, the counterbore and the
+bearing-seat cases. Four fixing holes in a flat plate are not sectioned,
+because the cut says nothing the view from above does not and costs the view
+that carries the overall width.
+
+**This is our own kernel, not FreeCAD.** TechDraw was the obvious candidate
+and it lost on measurement: a full section here is 16 ms - cut with a
+half-space, project, pick the faces lying in the plane - against 58 ms for a
+TechDraw round trip that does not hand back the cut faces at all. It also
+needs FreeCAD running, which a drawing should not.
+
+The hatching is computed into the plan rather than by each renderer, at
+2 mm on the paper and 45 degrees as ISO 128-50 asks, with an even-odd fill
+so holes in a cut face stay unhatched. Both the SVG and the DXF draw the
+same segments, because a drawing that changes when you download it is two
+drawings.
+
 ### What the part weighs
 
 FreeCAD ships 145 material cards carrying density, yield strength, ultimate
