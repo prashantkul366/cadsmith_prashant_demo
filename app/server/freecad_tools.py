@@ -33,6 +33,7 @@ whose results can be trusted without reading the code.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Optional
 
 from app.server import freecad
@@ -81,6 +82,54 @@ THREADS = {
     "M20": {"tap": 17.5, "clear": 22.0, "pitch": 2.5},
     "M24": {"tap": 21.0, "clear": 26.0, "pitch": 3.0},
 }
+
+#: A thread written the way a drawing writes it: M8, M8x1.25, M8 x 1.25,
+#: M8-1.25, M8×1.25. The table above is keyed on the diameter alone, and a
+#: tool that answers only to "M8" is a tool nothing can hit: every one of
+#: the sixty-one library prompts quotes the pitch, so a model asked to tap
+#: an "M5x0.8" hole passes exactly that and is told it is not a thread.
+_THREAD_CALL = re.compile(
+    r"^\s*M\s*(\d+(?:\.\d+)?)\s*(?:[x\u00d7*\-]\s*(\d+(?:\.\d+)?))?\s*$",
+    re.I)
+
+
+def thread_drills(designation: str) -> Optional[dict]:
+    """The tapping and clearance drills for a thread, pitch and all.
+
+    The pitch is not thrown away. The tapping drill is the major diameter
+    less the pitch - which is what the ISO 262 table in ``THREADS`` is,
+    checked row by row - so reading the quoted pitch costs nothing on a
+    coarse thread and is the difference between right and wrong on a fine
+    one: M20x1.5 taps 18.5, where its coarse row would say 17.5.
+
+    Clearance is by diameter alone, because a screw's shank does not care
+    what pitch is on it.
+
+    None for anything that is not an ISO metric thread; the caller says so
+    in its own words, with the list.
+    """
+    found = _THREAD_CALL.match(designation or "")
+    if not found:
+        return None
+    major = float(found.group(1))
+    row = THREADS.get("M%g" % major)
+    if row is None:
+        return None
+    pitch = float(found.group(2)) if found.group(2) else float(row["pitch"])
+    # A pitch nothing in the standard range would be is a typo, not a
+    # thread: refuse it rather than drilling whatever it works out to.
+    if not 0.2 <= pitch <= 0.4 * major:
+        return None
+    # The standard's own row wins where the quoted pitch is the coarse one:
+    # D - P gives 6.75 for an M8 and a shop drills 6.8, which is the row.
+    # Off the coarse pitch there is no row, so D - P it is, to a tenth -
+    # which is a stock drill for every fine pitch in this range.
+    tap = (float(row["tap"]) if abs(pitch - float(row["pitch"])) < 1e-9
+           else round(major - pitch, 1))
+    return {"tap": tap, "clear": float(row["clear"]), "pitch": pitch,
+            "name": "M%g" % major if not found.group(2)
+                    else "M%gx%g" % (major, pitch)}
+
 
 #: Booleans, by the name a person uses rather than the FreeCAD class.
 BOOLEANS = {"cut": "Part::Cut", "union": "Part::MultiFuse",
@@ -812,18 +861,20 @@ made = [out.Name]
     def _hole_size(diameter: float, thread: str, clearance_for: str):
         """What to drill, and what the drawing will call it."""
         if thread:
-            spec = THREADS.get(thread.upper())
+            spec = thread_drills(thread)
             if spec is None:
                 raise ToolError(
                     f"{thread!r} is not a thread this knows. It has: "
-                    + ", ".join(THREADS))
-            return spec["tap"], f"{thread.upper()}", "tapped"
+                    + ", ".join(THREADS)
+                    + ", with or without the pitch: 'M8' or 'M8x1.25'.")
+            return spec["tap"], spec["name"], "tapped"
         if clearance_for:
-            spec = THREADS.get(clearance_for.upper())
+            spec = thread_drills(clearance_for)
             if spec is None:
                 raise ToolError(
                     f"{clearance_for!r} is not a thread this knows. It has: "
-                    + ", ".join(THREADS))
+                    + ", ".join(THREADS)
+                    + ", with or without the pitch: 'M8' or 'M8x1.25'.")
             return spec["clear"], f"Ø{spec['clear']:g}", "clearance"
         if diameter <= 0:
             raise ToolError(

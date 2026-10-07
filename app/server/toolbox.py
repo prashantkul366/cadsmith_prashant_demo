@@ -125,7 +125,13 @@ ALIASES: dict[str, tuple[str, dict]] = {
     "revolve": ("revolve_profile", {}),
     "fillet": ("add_fillet", {}),
     "round": ("add_fillet", {}),
+    "fillet_edges": ("add_fillet", {}),
+    "edge_fillet": ("add_fillet", {}),
+    "round_edges": ("add_fillet", {}),
     "chamfer": ("add_chamfer", {}),
+    "chamfer_edges": ("add_chamfer", {}),
+    "edge_chamfer": ("add_chamfer", {}),
+    "break_edges": ("add_chamfer", {}),
     "polar_pattern": ("pattern_circular", {}),
     "array_polar": ("pattern_circular", {}),
     "circular_pattern": ("pattern_circular", {}),
@@ -141,6 +147,71 @@ ALIASES: dict[str, tuple[str, dict]] = {
     "remove": ("remove_object", {}),
     "python": ("run_python", {}),
     "execute": ("run_python", {}),
+}
+
+#: Argument names from the same remembered vocabularies, per tool. Per
+#: tool because they collide: ``position`` is what add_shape and move
+#: really call it, and what drill calls ``at``. Only ever a rename onto a
+#: property that tool declares, and never over something the model already
+#: said properly - and the table is walked against the live toolbox by a
+#: test, so an entry that stops being true fails rather than silently
+#: dropping an argument.
+ARGUMENT_ALIASES: dict[str, dict[str, str]] = {
+    "drill": {"position": "at", "location": "at", "centre": "at",
+              "center": "at", "point": "at", "xyz": "at",
+              "direction": "axis", "normal": "axis", "along": "axis",
+              "name": "target", "object": "target", "solid": "target",
+              "part": "target", "base": "target",
+              "dia": "diameter", "size": "diameter",
+              "tapped": "thread", "thread_size": "thread",
+              "clearance": "clearance_for"},
+    "add_chamfer": {"edges": "where", "edge": "where", "which": "where",
+                    "target": "where", "distance": "size", "length": "size",
+                    "depth": "size", "chamfer": "size"},
+    "add_fillet": {"edges": "where", "edge": "where", "which": "where",
+                   "target": "where", "size": "radius", "r": "radius",
+                   "fillet": "radius"},
+    "combine": {"how": "operation", "op": "operation", "kind": "operation",
+                "target": "base", "tool": "tools", "others": "tools"},
+    "extrude_profile": {"profile": "points", "outline": "points",
+                        "vertices": "points", "path": "points",
+                        "height": "depth", "thickness": "depth",
+                        "length": "depth", "distance": "depth",
+                        "workplane": "plane",
+                        "corner_radius": "fillet", "radius": "fillet",
+                        "corners": "fillet"},
+    "revolve_profile": {"profile": "points", "outline": "points",
+                        "vertices": "points", "degrees": "angle",
+                        "workplane": "plane"},
+    "move": {"to": "position", "at": "position", "location": "position",
+             "translation": "position", "offset": "position",
+             "target": "name", "object": "name"},
+    "rotate": {"angle": "degrees", "about": "axis", "around": "axis",
+               "target": "name", "object": "name"},
+    "set_size": {"target": "name", "object": "name"},
+    "shell": {"target": "name", "object": "name", "wall": "thickness",
+              "wall_thickness": "thickness", "open": "open_face"},
+    "pattern_circular": {"target": "name", "object": "name",
+                         "number": "count", "copies": "count",
+                         "center": "centre", "about": "axis",
+                         "total_angle": "angle"},
+    "pattern_linear": {"target": "name", "object": "name",
+                       "number": "count", "copies": "count",
+                       "step": "spacing", "pitch": "spacing"},
+    "loft": {"profiles": "sections", "outlines": "sections"},
+    "resize_hole": {"feature": "feature_id", "id": "feature_id",
+                    "dia": "diameter", "size": "diameter"},
+    "place_standard_part": {"part": "description", "what": "description",
+                            "at": "position"},
+    "set_material": {"material": "name", "to": "name"},
+    "add_shape": {"shape": "kind", "type": "kind", "primitive": "kind",
+                  "at": "position", "location": "position",
+                  # Part.makeBox takes its sides positionally, so a model
+                  # naming them reaches for the property editor's labels.
+                  "xsize": "Length", "ysize": "Width", "zsize": "Height",
+                  "dx": "Length", "dy": "Width", "dz": "Height",
+                  "depth": "Width", "side": "Length"},
+    "run_python": {"script": "code", "source": "code", "python": "code"},
 }
 
 
@@ -286,8 +357,17 @@ class Toolbox:
         # guessing: where the two differ only in case there is exactly one
         # property it can mean.
         spelled = {key.lower(): key for key in allowed}
-        arguments = {spelled.get(str(key).lower(), key): value
-                     for key, value in arguments.items()}
+        renames = ARGUMENT_ALIASES.get(real) or {}
+        folded: dict = {}
+        for key, value in arguments.items():
+            lowered = str(key).lower()
+            if lowered in spelled:
+                folded[spelled[lowered]] = value
+            elif renames.get(lowered) in allowed:
+                folded.setdefault(renames[lowered], value)
+            else:
+                folded[key] = value
+        arguments = folded
         unknown = sorted(set(arguments) - allowed)
         if unknown and allowed:
             raise ToolError(

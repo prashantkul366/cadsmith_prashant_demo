@@ -269,19 +269,38 @@ def main() -> int:
                 wrong_args.append(f"{wrong} -> {real}.{key}={value}")
     check("and what an alias fills in is an argument that tool takes",
           not wrong_args, "; ".join(wrong_args))
+    stale_args = [f"{tool}.{wrong}" for tool, table in
+                  toolbox.ARGUMENT_ALIASES.items() for wrong, real in table.items()
+                  if tool not in box.tools
+                  or real not in (box.tools[tool].parameters.get("properties") or {})]
+    check("every argument alias renames onto a property that tool has",
+          not stale_args, "; ".join(stale_args[:6]))
+    shadowed = [f"{tool}.{wrong}" for tool, table in
+                toolbox.ARGUMENT_ALIASES.items() for wrong in table
+                if tool in box.tools
+                and wrong in (box.tools[tool].parameters.get("properties") or {})]
+    check("and none of them shadows a real argument of the same tool",
+          not shadowed, "; ".join(shadowed[:6]))
     resolved, implied = box.resolve("Part.makeBox")
     check("Part.makeBox resolves to add_shape, with the kind filled in",
           resolved is not None and resolved.name == "add_shape"
           and implied == {"kind": "Part::Box"},
           f"{resolved and resolved.name} {implied}")
 
-    print("\nA size spelled the way a model spells it")
-    lower = box.invoke("add_shape", {"kind": "Part::Box", "name": "Cased",
-                                     "length": 10, "width": 20, "height": 30})
-    check("length/width/height work as well as Length/Width/Height",
-          lower["part_now"][-1]["size_mm"] == [10, 20, 30],
-          str(lower["part_now"][-1]["size_mm"]))
-    box.invoke("remove_object", {"name": "Cased"})
+    print("\nA thread written the way a drawing writes it")
+    for designation, tap in (("M8", 6.8), ("M8x1.25", 6.8), ("M8 x 1.25", 6.8),
+                             ("M5x0.8", 4.2), ("M4x0.7", 3.3), ("M10-1.5", 8.5),
+                             ("M20x1.5", 18.5), ("M8x1", 7.0)):
+        got = freecad_tools.thread_drills(designation)
+        check(f"{designation} taps {tap}",
+              got is not None and abs(got["tap"] - tap) < 1e-9,
+              str(got and got["tap"]))
+    check("the coarse rows agree with the standard's own table exactly",
+          all(freecad_tools.thread_drills("%sx%g" % (name, row["pitch"]))["tap"]
+              == row["tap"] for name, row in freecad_tools.THREADS.items()))
+    for nonsense in ("M9", "M8x9", "banana", "1/4-20"):
+        check(f"{nonsense!r} is not read as a thread",
+              freecad_tools.thread_drills(nonsense) is None)
 
     print("\nBuilding a plate, step by step")
     made = box.invoke("add_shape", {"kind": "Part::Box", "name": "Plate",
@@ -487,6 +506,27 @@ def main() -> int:
     except ToolError as refused:
         check("and something that is not a standard part says so",
               "not a standard part" in str(refused), str(refused)[:70])
+
+    print("\nA size spelled the way a model spells it")
+    # Against add_shape's real schema, but with the call captured instead of
+    # built: what is being settled is which names arrive, and an extra solid
+    # in the document the earlier checks measure moves every number in them.
+    arrived: dict = {}
+    real = box.tools["add_shape"]
+    recorder = toolbox.Toolbox([toolbox.Tool(
+        name=real.name, description=real.description,
+        parameters=real.parameters, run=lambda **kw: arrived.update(kw))])
+    recorder.invoke("add_shape", {"kind": "Part::Box", "name": "Cased",
+                                  "length": 10, "width": 20, "height": 30})
+    check("length/width/height arrive as Length/Width/Height",
+          [arrived.get("Length"), arrived.get("Width"), arrived.get("Height")]
+          == [10, 20, 30], str(sorted(arrived)))
+    arrived.clear()
+    recorder.invoke("Part.makeBox", {"XSize": 4, "YSize": 5, "ZSize": 6})
+    check("and Part.makeBox's own labels arrive as the same three",
+          arrived.get("kind") == "Part::Box"
+          and [arrived.get("Length"), arrived.get("Width"),
+               arrived.get("Height")] == [4, 5, 6], str(sorted(arrived)))
 
     server.shutdown()
     print("\n" + "=" * 60)
