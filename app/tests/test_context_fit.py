@@ -30,6 +30,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from app.server import providers  # noqa: E402
 from app.server.providers import LLMConfig  # noqa: E402
 
+#: The FreeCAD branch carries a tool channel through every call, so its
+#: _post_once answers with a third element. One file, both shapes.
+_TOOLS = hasattr(providers, "ToolCall")
+
 
 def drive(window: int, prompt: int, admits: int, ceiling: int):
     """``(ceilings tried, "fitted" or the error)`` for one fake endpoint.
@@ -51,7 +55,10 @@ def drive(window: int, prompt: int, admits: int, ceiling: int):
         def _note(self, message: str) -> None:
             pass
 
-        def _post_once(self, model, messages, max_tokens, role="generation"):
+        # `tools` only on the branch that has a tool channel; accepted
+        # here either way so one test file serves both.
+        def _post_once(self, model, messages, max_tokens,
+                       role="generation", tools=None):
             tried.append(max_tokens)
             if prompt + max_tokens > window:
                 raise providers._ContextTooLong(
@@ -60,7 +67,7 @@ def drive(window: int, prompt: int, admits: int, ceiling: int):
                     f"tokens. However, you requested {max_tokens} output "
                     f"tokens and your prompt contains at least {admits} "
                     f"input tokens.")
-            return "ok", None
+            return ("ok", None, []) if _TOOLS else ("ok", None)
 
     try:
         Fake()._post_fitted("m", [], ceiling)
