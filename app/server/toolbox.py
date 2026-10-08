@@ -35,6 +35,7 @@ keep the road open - it is what lets this run on hardware you own.
 from __future__ import annotations
 
 import difflib
+import re
 
 import json
 import time
@@ -108,6 +109,10 @@ ALIASES: dict[str, tuple[str, dict]] = {
     "add_hole": ("drill", {}),
     "make_hole": ("drill", {}),
     "cut_hole": ("drill", {}),
+    "counterbore": ("drill", {}),
+    "countersink": ("drill", {}),
+    "tap": ("drill", {}),
+    "bore": ("drill", {}),
     "cut": ("combine", {"operation": "cut"}),
     "part.cut": ("combine", {"operation": "cut"}),
     "subtract": ("combine", {"operation": "cut"}),
@@ -172,7 +177,8 @@ ARGUMENT_ALIASES: dict[str, dict[str, str]] = {
                    "target": "where", "size": "radius", "r": "radius",
                    "fillet": "radius"},
     "combine": {"how": "operation", "op": "operation", "kind": "operation",
-                "target": "base", "tool": "tools", "others": "tools"},
+                "target": "base", "tool": "tools", "others": "tools",
+                "shapes": "tools", "objects": "tools"},
     "extrude_profile": {"profile": "points", "outline": "points",
                         "vertices": "points", "path": "points",
                         "height": "depth", "thickness": "depth",
@@ -291,6 +297,25 @@ def _short(value: Any) -> Any:
     return text[:MAX_RESULT_CHARS] + f"... ({len(text):,} characters in all)"
 
 
+#: Arguments whose presence says the model has reached for the wrong tool
+#: entirely, and what to say instead. Measured: asked for a 120 x 55 x 6
+#: plate it called extrude_profile with plate_length, plate_width and
+#: plate_thickness - it wanted a box, and "extrude_profile has no argument
+#: called ..." does not tell it that.
+REDIRECTS: dict[str, tuple[tuple[str, ...], str]] = {
+    "extrude_profile": (
+        ("width", "length", "plate_length", "plate_width", "size", "x", "y"),
+        "extrude_profile draws an outline and pads it, so the shape is in "
+        "`points`. For a plain rectangular block use add_shape with "
+        "kind='Part::Box' and Length, Width, Height."),
+    "revolve_profile": (
+        ("width", "length", "diameter", "radius"),
+        "revolve_profile spins an outline round an axis, so the shape is in "
+        "`points`. For a plain cylinder use add_shape with "
+        "kind='Part::Cylinder', Radius and Height."),
+}
+
+
 class Toolbox:
     """The tools one run may use, and the only place they are called."""
 
@@ -310,8 +335,19 @@ class Toolbox:
         tool = self.tools.get(name)
         if tool is not None:
             return tool, {}
-        aliased, extra = ALIASES.get(name.strip().lower().lstrip("."), ("", {}))
-        return self.tools.get(aliased), dict(extra)
+        # Part.makeBox, Part_Box, Part::Box and part-box are one name with
+        # four separators. Measured: the 8B wrote `Part_Box` five times in
+        # one run and was refused every time, while the table held
+        # `part.makebox`.
+        wanted = name.strip().lower().strip("._-:")
+        for spelling in (wanted,
+                         re.sub(r"[_\-]|::", ".", wanted),
+                         re.sub(r"[._\-]|::", "", wanted),
+                         re.sub(r"[._\-]|::", "", wanted).replace("make", "")):
+            aliased, extra = ALIASES.get(spelling, ("", {}))
+            if aliased:
+                return self.tools.get(aliased), dict(extra)
+        return None, {}
 
     def invoke(self, name: str, arguments: dict) -> Any:
         """Run one tool, having checked the model did not make it up.
@@ -370,9 +406,13 @@ class Toolbox:
         arguments = folded
         unknown = sorted(set(arguments) - allowed)
         if unknown and allowed:
-            raise ToolError(
-                f"{real} has no argument called {', '.join(repr(u) for u in unknown)}. "
-                f"It takes: {', '.join(sorted(allowed)) or 'nothing'}")
+            said = (f"{real} has no argument called "
+                    f"{', '.join(repr(u) for u in unknown)}. "
+                    f"It takes: {', '.join(sorted(allowed)) or 'nothing'}")
+            confused, instead = REDIRECTS.get(real, ((), ""))
+            if any(u in confused for u in unknown):
+                said += " " + instead
+            raise ToolError(said)
         missing = sorted(set(tool.parameters.get("required") or []) - set(arguments))
         if missing:
             raise ToolError(

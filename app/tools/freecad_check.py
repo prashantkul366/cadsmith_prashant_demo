@@ -156,6 +156,33 @@ def main() -> int:
     # reason a model used to write a script. Built in a second document so
     # the plate above is unaffected, and measured here rather than taken on
     # the pattern's word for it.
+    # A flat plate with rounded corners, which is the shape this library is
+    # mostly made of and the one a corner radius used to be refused on. The
+    # upright edges of a pad are the shortest group on a flat part and the
+    # longest on a tall one; picking the longest filleted the wrong edges
+    # and the kernel said "the corner radius will not fit" at a radius that
+    # fits perfectly well.
+    print("\nR5 corners on a flat plate, which is where this used to fail")
+    try:
+        from app.server import freecad_tools as _ft
+        flat = _ft.Session(bridge, bridge.new_document("RoundedPlate"))
+        flat.extrude_profile(points=[[0, 0], [120, 0], [120, 55], [0, 55]],
+                             depth=6, fillet=5, name="plate")
+        rounded = bridge.save(flat.document, out / "rounded_plate.step")
+        plate = spec.measure_step(rounded)
+        side = plate["bbox"]
+        print(f"  {side['xlen']:.0f} x {side['ylen']:.0f} x {side['zlen']:.0f}"
+              f"  {plate['volume']:,.0f} mm3 against 39,600 square")
+        if (abs(side["xlen"] - 120) > 0.01 or abs(side["ylen"] - 55) > 0.01
+                or abs(side["zlen"] - 6) > 0.01):
+            wrong.append("the rounded plate came back the wrong size")
+        elif not 39000 < plate["volume"] < 39590:
+            wrong.append("the plate's corners were not rounded: "
+                         f"{plate['volume']:,.0f} mm3, and a square one is "
+                         f"39,600")
+    except Exception as error:
+        wrong.append(f"a flat plate with R5 corners would not build: {error}")
+
     print("\nA bolt circle, by tool rather than by arithmetic")
     try:
         from app.server import freecad_tools

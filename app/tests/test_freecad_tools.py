@@ -287,6 +287,28 @@ def main() -> int:
           and implied == {"kind": "Part::Box"},
           f"{resolved and resolved.name} {implied}")
 
+    print("\nThe limit on a corner radius, worked out before FreeCAD is asked")
+    # Two corners share a side and each eats its own radius out of it, so
+    # the most any corner can take is half the shortest side. Checked here
+    # rather than by the kernel, which can only say no - and did, three
+    # times running, while the model guessed.
+    check("half the shortest side of a 120 x 55 outline",
+          freecad_tools._largest_corner_radius(
+              [[0, 0], [120, 0], [120, 55], [0, 55]]) == 27.5)
+    check("a repeated first point does not become a zero-length side",
+          freecad_tools._largest_corner_radius(
+              [[0, 0], [120, 0], [120, 55], [0, 55], [0, 0]]) == 27.5)
+    check("and an outline that is not plain points is left to the kernel",
+          freecad_tools._largest_corner_radius(["a", "b", "c"]) is None)
+    try:
+        box.invoke("extrude_profile",
+                   {"depth": 6, "fillet": 40,
+                    "points": [[0, 0], [120, 0], [120, 55], [0, 55]]})
+        check("a radius that cannot fit is refused", False, "it built")
+    except toolbox.ToolError as refused:
+        check("a radius that cannot fit is refused, naming the limit",
+              "27.50" in str(refused), str(refused)[:110])
+
     print("\nA thread written the way a drawing writes it")
     for designation, tap in (("M8", 6.8), ("M8x1.25", 6.8), ("M8 x 1.25", 6.8),
                              ("M5x0.8", 4.2), ("M4x0.7", 3.3), ("M10-1.5", 8.5),

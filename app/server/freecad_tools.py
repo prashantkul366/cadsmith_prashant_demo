@@ -139,6 +139,28 @@ BOOLEANS = {"cut": "Part::Cut", "union": "Part::MultiFuse",
 import math
 
 
+def _largest_corner_radius(points: list) -> Optional[float]:
+    """Half the shortest side, which is the most a corner fillet can take.
+
+    Two corners share a side, and each eats its own radius out of it, so a
+    radius over half the shortest side cannot be built however the kernel
+    is asked. None when the outline is not a simple polygon of points -
+    then there is nothing to measure against and the kernel decides.
+    """
+    try:
+        corners = [(float(p[0]), float(p[1])) for p in points]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if len(corners) < 3:
+        return None
+    sides = []
+    for at, (x, y) in enumerate(corners):
+        nx, ny = corners[(at + 1) % len(corners)]
+        sides.append(((nx - x) ** 2 + (ny - y) ** 2) ** 0.5)
+    shortest = min(side for side in sides if side > 1e-9)
+    return shortest / 2.0
+
+
 def _rounded(points: list) -> list:
     # A corner with a radius becomes a tangent arc between two shortened
     # sides. Worked out here rather than asked of the Sketcher, because a
@@ -342,11 +364,21 @@ def _check(feature, complaint):
         raise RuntimeError(complaint)
 
 
-def _upright_edges(feature, radius):
-    # The corners of a padded outline are the edges running along the pad,
-    # which are the only ones a corner radius means.
+def _upright_edges(feature, radius, depth=0.0):
+    # The corners of a padded outline are the edges running along the pad -
+    # the only ones a corner radius means - and they are exactly the ones
+    # whose length is the pad depth.
+    #
+    # This used to take the LONGEST group of equal-length straight edges,
+    # on the reasoning that a pad's uprights share a length. They do, but
+    # so do its in-plane sides, and which group is longest depends on the
+    # part: for a 120 x 120 x 205 column the uprights are longest and it
+    # worked, for a 120 x 55 x 6 plate they are the SHORTEST and it
+    # returned the four 120-long edges on the faces instead. Filleting
+    # those at R5 on a 6mm plate cannot be done, so every flat plate with
+    # rounded corners came back "the corner radius will not fit" - at a
+    # radius that fits the corners perfectly well.
     shape = feature.Shape
-    direction = None
     lengths = {}
     for n, edge in enumerate(shape.Edges, start=1):
         if not isinstance(edge.Curve, Part.Line):
@@ -354,8 +386,12 @@ def _upright_edges(feature, radius):
         lengths.setdefault(round(edge.Length, 4), []).append(n)
     if not lengths:
         return []
-    # The corners of a pad are the edges running along it, and they all
-    # share one length: the pad depth. FreeCAD wants their names.
+    if depth:
+        for size, found in lengths.items():
+            if abs(size - abs(float(depth))) < 1e-4 and len(found) >= 3:
+                return ["Edge%d" % n for n in found]
+    # No depth to match on, or a pad whose depth equals one of its sides:
+    # fall back to the old guess rather than rounding nothing.
     for size in sorted(lengths, reverse=True):
         found = lengths[size]
         if len(found) >= 3:
@@ -763,7 +799,8 @@ doc.recompute()
         self.built.extend(made)
         return made
 
-    def drill(self, target: str, at: list, diameter: float = 0.0,
+    def drill(self, target: str = "", at: Optional[list] = None,
+              diameter: float = 0.0,
               depth: float = 0.0, axis: str = "Z", thread: str = "",
               clearance_for: str = "", counterbore: Optional[list] = None,
               countersink: float = 0.0) -> dict:
@@ -781,9 +818,30 @@ doc.recompute()
         the measurement says what is there, and the two are checked against
         each other rather than one being trusted.
         """
+        if not target:
+            # A hole has to go in something, and a model that leaves it out
+            # is not being ambiguous when there is only one thing to drill:
+            # it means the part. Measured - `drill needs 'target'` was a
+            # whole wasted step on four of the twelve prompts. Two solids
+            # and it is ambiguous again, so it still asks.
+            solids = []
+            try:
+                solids = self.bridge.measure(self.document).get("solids", [])
+            except freecad.FreeCADError:
+                pass
+            if len(solids) == 1:
+                target = solids[0]["name"]
+            else:
+                raise ToolError(
+                    "drill needs target: the name of the solid to put the "
+                    "hole in. " + (
+                        "There is nothing built yet to drill."
+                        if not solids else
+                        "There are several: "
+                        + ", ".join(s["name"] for s in solids)))
         if self.bridge.object(self.document, target) is None:
             raise ToolError(f"there is no object called {target!r} to drill")
-        if len(at) != 3:
+        if not at or len(at) != 3:
             raise ToolError("at is [x, y, z] in millimetres, where the hole goes")
         if axis.upper().lstrip("+-") not in ("X", "Y", "Z"):
             raise ToolError(
@@ -950,6 +1008,18 @@ made = [out.Name]
         solid recomputes - and a slider can be declared on it.
         """
         profile = self._profile(points)
+        biggest = _largest_corner_radius(points)
+        if fillet and biggest is not None and fillet > biggest + 1e-9:
+            # Refused here rather than by the kernel, because the kernel can
+            # only say no. Measured: the model asked for R15 on a 55-wide
+            # plate three times running and the run ended on the repeat
+            # limit, having been told "it may be too big" each time.
+            raise ToolError(
+                f"a corner radius of {fillet:g} will not fit this outline - "
+                f"the shortest side is {biggest * 2:.2f} mm, so the most any "
+                f"corner can take is {biggest:.2f}. Round the corners that "
+                f"fit by giving each one its own radius in points, as "
+                f"[x, y, r].")
         if depth <= 0:
             raise ToolError("depth is how far to pad the outline, in "
                             "millimetres, and must be more than nothing")
@@ -971,7 +1041,7 @@ pad.Midplane = {bool(midplane)}
 doc.recompute()
 _check(pad, "the outline would not pad - it may cross itself or not close")
 made = [body.Name, sketch.Name, pad.Name]
-{self._fillet_corners("pad", fillet)}
+{self._fillet_corners("pad", fillet, depth)}
 """)
         self.built.append(made[0])
         return self._measured(added=made[0], profile=made[1], pad=made[2],
@@ -1161,12 +1231,12 @@ made = [out.Name]
         return _rounded(out)
 
     @staticmethod
-    def _fillet_corners(target: str, radius: float) -> str:
+    def _fillet_corners(target: str, radius: float, depth: float = 0.0) -> str:
         """Round the corners of a pad, which is what a radiused outline is."""
         if not radius or radius <= 0:
             return ""
         return f"""
-corners = _upright_edges({target}, {float(radius)})
+corners = _upright_edges({target}, {float(radius)}, {float(depth)})
 if corners:
     rounded = doc.addObject("PartDesign::Fillet", "Corners")
     body.addObject(rounded)
