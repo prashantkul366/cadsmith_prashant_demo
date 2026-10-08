@@ -25,6 +25,7 @@ signature instead of to human-readable text.
 from __future__ import annotations
 
 import contextvars
+import os
 import json
 import re
 import shutil
@@ -42,6 +43,7 @@ from app.catalog import grounding
 from . import budget as budget_mod
 from . import drawing
 from . import i18n
+from . import repair
 from . import spec
 from . import specification
 from . import stated
@@ -181,6 +183,10 @@ def _token_usage() -> dict:
 # Agent hooks
 # ---------------------------------------------------------------------------
 
+#: How many tokens a whole CadQuery script is allowed. A 44-hole cell
+#: holder does not fit in 4096, and the reply comes back unclosed.
+CODE_MAX_TOKENS = int(os.getenv("CADSMITH_CODE_MAX_TOKENS", "16000"))
+
 _HOOKS_INSTALLED = False
 
 
@@ -202,6 +208,19 @@ def install_agent_hooks() -> None:
     _orig_call = agents._call_claude
 
     def _call_claude(*args, **kwargs):
+        # The Coder and the two Refiners return a whole CadQuery script;
+        # the Planner and the Judge return a small JSON object. They shared
+        # one 4096-token ceiling, and the scripts were being cut off mid
+        # expression - 22 of the execution failures over one run of the
+        # library were an unclosed bracket at the end of a long reply, not
+        # a mistake in the part. The app streams, so a larger ceiling costs
+        # nothing but the tokens actually written.
+        system = args[0] if args else kwargs.get("system", "")
+        if isinstance(system, str) and ("Coder Agent" in system
+                                        or "Refiner Agent" in system):
+            asked = kwargs.get("max_tokens")
+            if asked is None or asked < CODE_MAX_TOKENS:
+                kwargs["max_tokens"] = CODE_MAX_TOKENS
         ctx = _current.get()
         if ctx is not None and ctx.budget is not None:
             # Checked before the call, not after: a request already in flight
@@ -456,12 +475,33 @@ class InstrumentedExecutor(Executor):
         if match:
             ctx.iteration = int(match.group(1))
 
+        # What arrived is sometimes not what the model meant to send: a
+        # missing import, a fence it wrapped the code in, a trailing
+        # expression it never bound. Mended here, before a subprocess is
+        # spent on it, and said out loud so the transcript shows what was
+        # changed. Geometry is never touched - see app/server/repair.py.
+        cadquery_code, mended = repair.normalise(cadquery_code)
+        for note in mended:
+            ctx.emit(PHASE_LOG, STATUS_INFO, f"The script arrived damaged: {note}.")
+
         ctx.emit(
             PHASE_EXECUTE,
             STATUS_STARTED,
             iteration=ctx.iteration,
             lines=len(cadquery_code.splitlines()),
         )
+
+        # A script that will not parse cannot be run, and a traceback from a
+        # subprocess says less about it than the parser already knows.
+        will_not_parse = repair.complaint(cadquery_code)
+        if will_not_parse:
+            result = ExecutionResult(success=False, time_ms=0.0,
+                                     error=will_not_parse,
+                                     error_type="SyntaxError")
+            ctx.emit(PHASE_EXECUTE, STATUS_FAILED, will_not_parse,
+                     iteration=ctx.iteration, error_type="SyntaxError", ms=0)
+            return result
+
         result = super().execute(cadquery_code, name=name)
 
         if result.success:
