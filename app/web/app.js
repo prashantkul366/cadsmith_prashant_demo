@@ -693,6 +693,11 @@ function handleEvent(event) {
     addVersion(data);
   }
   if (phase === "job") {
+    // Why a run did what it did. The pipeline says, in words, when a
+    // catalogue part would not build and when generation and judging are
+    // the same model - and every one of those was emitted and then dropped
+    // on the floor, so the run log showed none of it.
+    if (status === "info" && message) appendLog(message);
     if (status === "started" && data.llm) {
       setModelLabels(data.llm.generation_model, data.llm.judge_model);
     }

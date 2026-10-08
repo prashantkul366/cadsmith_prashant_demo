@@ -68,27 +68,37 @@ _TO_MM = {"mm": 1.0, "millimeter": 1.0, "millimetre": 1.0,
 _V = r"(?P<v>\d+(?:\.\d+)?)"
 _U = rf"\s*(?P<u>{_UNIT})\b"
 
+#: The same unit, written or not. A mechanical request in millimetres does
+#: not write them, and nor does the drawing it was copied off: "300 x 300 x
+#: 25 plate", "Dia 25 H7 locating bore", "508 tall". Requiring the unit
+#: meant a whole dimensioned prompt library read as stating nothing at all,
+#: so the gate had no number the request itself gave to hold the part to -
+#: only the Planner's own claim, which is the self-grading this check
+#: exists to catch. Used where the phrase names the role in words, because
+#: then the unit is not what tells a reader what the number is.
+_UO = rf"(?:\s*(?P<u>{_UNIT})\b)?"
+
 #: Each pattern carries the number, its unit and its role in one phrase, so a
 #: match cannot mean something else.
 _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("diameter", re.compile(
-        rf"{_V}{_U}\s*(?:outside\s+|outer\s+|o\.?d\.?\s+)?(?:diameter|dia)\b", re.I)),
+        rf"{_V}{_UO}\s*(?:outside\s+|outer\s+|o\.?d\.?\s+)?(?:diameter|dia)\b", re.I)),
     ("diameter", re.compile(
-        rf"(?:outside\s+|outer\s+)?(?:diameter|dia)\b\s*(?:of\s*|is\s*)?{_V}{_U}", re.I)),
+        rf"(?:outside\s+|outer\s+)?(?:diameter|dia)\b\s*(?:of\s*|is\s*)?{_V}{_UO}", re.I)),
     ("diameter", re.compile(rf"[Ø⌀]\s*{_V}(?:{_U})?", re.I)),
     ("bore", re.compile(
-        rf"{_V}{_U}\s*(?:inside\s+diameter|internal\s+diameter|i\.?d\.?\b|bore)", re.I)),
+        rf"{_V}{_UO}\s*(?:inside\s+diameter|internal\s+diameter|i\.?d\.?\b|bore)", re.I)),
     ("bore", re.compile(
-        rf"(?:inside\s+diameter|internal\s+diameter|bore)\s*(?:of\s*)?{_V}{_U}", re.I)),
-    ("length", re.compile(rf"{_V}{_U}\s*(?:long\b|in\s+length)", re.I)),
-    ("length", re.compile(rf"length\s*(?:of\s*|is\s*)?{_V}{_U}", re.I)),
-    ("width", re.compile(rf"{_V}{_U}\s*(?:wide\b|in\s+width)", re.I)),
-    ("width", re.compile(rf"width\s*(?:of\s*|is\s*)?{_V}{_U}", re.I)),
-    ("height", re.compile(rf"{_V}{_U}\s*(?:tall\b|high\b|in\s+height)", re.I)),
-    ("height", re.compile(rf"height\s*(?:of\s*|is\s*)?{_V}{_U}", re.I)),
-    ("thickness", re.compile(rf"{_V}{_U}\s*(?:thick\b|wall\b)", re.I)),
-    ("thickness", re.compile(rf"thickness\s*(?:of\s*|is\s*)?{_V}{_U}", re.I)),
-    ("across", re.compile(rf"{_V}{_U}\s*across\s+(?:the\s+)?flats", re.I)),
+        rf"(?:inside\s+diameter|internal\s+diameter|bore)\s*(?:of\s*)?{_V}{_UO}", re.I)),
+    ("length", re.compile(rf"{_V}{_UO}\s*(?:long\b|in\s+length)", re.I)),
+    ("length", re.compile(rf"length\s*(?:of\s*|is\s*)?{_V}{_UO}", re.I)),
+    ("width", re.compile(rf"{_V}{_UO}\s*(?:wide\b|in\s+width)", re.I)),
+    ("width", re.compile(rf"width\s*(?:of\s*|is\s*)?{_V}{_UO}", re.I)),
+    ("height", re.compile(rf"{_V}{_UO}\s*(?:tall\b|high\b|in\s+height)", re.I)),
+    ("height", re.compile(rf"height\s*(?:of\s*|is\s*)?{_V}{_UO}", re.I)),
+    ("thickness", re.compile(rf"{_V}{_UO}\s*(?:thick\b|wall\b)", re.I)),
+    ("thickness", re.compile(rf"thickness\s*(?:of\s*|is\s*)?{_V}{_UO}", re.I)),
+    ("across", re.compile(rf"{_V}{_UO}\s*across\s+(?:the\s+)?flats", re.I)),
 ]
 
 #: "100mm by 60mm by 8mm", "100 x 60 x 8mm". At least one unit must appear,
@@ -99,6 +109,25 @@ _CHAIN = re.compile(
     rf"(?:\s*(?:by|x|×|\*)\s*(?P<c>\d+(?:\.\d+)?)\s*(?P<uc>{_UNIT})?)?",
     re.I)
 _SQUARE = re.compile(rf"{_V}{_U}\s*square\b", re.I)
+
+#: An overall size written with no unit at all - which is how a dimensioned
+#: part library writes one: "300 x 300 x 25 plate", "120 x 120 x 15 base",
+#: "600 x 300 x 25". Millimetres are the only reading.
+#:
+#: Three terms and not two, and that is most of the guard. A bare pair has
+#: readings that are not a size - "M20x1.5" is a thread, "20 tooth x 2
+#: module" is a gear - while there is no reading of "600 x 300 x 25" that is
+#: not a size. The rest of the guard is shared with the chain that does
+#: carry a unit: a pattern or pitch, a chamfer callout, and a chain that
+#: belongs to one feature rather than to the part are all excluded the same
+#: way. Not preceded by a letter, digit or dot, so the "8x1.25 x 30" inside
+#: "M8x1.25 x 30" is not read as a part 8 mm across, and so a four-term
+#: chain is not matched three terms at a time.
+_BARE_CHAIN = re.compile(
+    r"(?<![A-Za-z0-9.])(?P<a>\d+(?:\.\d+)?)\s*(?:by|x|\u00d7)\s*"
+    r"(?P<b>\d+(?:\.\d+)?)\s*(?:by|x|\u00d7)\s*"
+    r"(?P<c>\d+(?:\.\d+)?)(?!\s*(?:by|x|\u00d7)\s*\d)(?![\d.])",
+    re.I)
 
 #: Words that turn a chain into something other than an overall size.
 #: "four 3.4mm holes in a 70mm x 50mm pattern" states a hole pitch, and the
@@ -130,6 +159,32 @@ _FEATURE_CHAIN = re.compile(
     r"(?:\bdia\b|\bdiameter\b|\bradius\b|\bbore\b|\bthread\b|"
     r"\bM\d|[\u00d8\u2300R])\s*[\d.]*\s*$", re.I)
 
+#: A number that is one side of a ratio is not a dimension. "tapered bore
+#: 1:10" states a taper, and its 1 read as a bore diameter put a 1 mm hole
+#: on the list of things the part must have - which it has not, so a part
+#: that was right failed for it.
+_RATIO = re.compile(r"^\s*[:/]\s*\d")
+
+#: A letter against the front of the number means the number is part of a
+#: designation rather than a measurement. "Dia 10 H7 bore" offers a 10 and a
+#: 7; the 7 is the fit class, and read as the bore it wanted a 7 mm hole.
+#: Same for a thread: the 8 in "M8" is not a diameter either.
+_A_CLASS = re.compile(r"[A-Za-z]$")
+
+#: A label in front of the number that names the other side of the same
+#: wall. "Ring OD 42 ID 31.8" writes each value after its own label - the
+#: outside is 42 and the inside 31.8 - but "42 ID" also reads as "42 inside
+#: diameter", and read that way the gate wanted a 42 mm hole through a part
+#: whose outside is 42. A plain "Dia 58 bore" is not this case: there both
+#: words describe the one number, so only a label naming the *opposite*
+#: side disqualifies it, and only where the number comes first.
+_OTHER_SIDE = {
+    "bore": re.compile(r"(?:\bo\.?d\.?|\boutside|\bouter)"
+                       r"\s*(?:dia\w*\s*)?$", re.I),
+    "diameter": re.compile(r"(?:\bi\.?d\.?|\binside|\binternal|\bbore)"
+                           r"\s*(?:dia\w*\s*)?$", re.I),
+}
+
 _WORD_COUNT = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
                "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
                "eleven": 11, "twelve": 12}
@@ -140,6 +195,20 @@ _HOLES = re.compile(
     rf"(?<![\d.])\b(?P<count>\d{{1,3}}|{'|'.join(_WORD_COUNT)})\s*(?:x\s*)?"
     rf"(?P<dia>\d+(?:\.\d+)?)\s*(?P<u>{_UNIT})\b\s*"
     rf"(?:[\w-]+\s+){{0,3}}?holes\b", re.I)
+#: "four Dia 13 through holes", "eight \u00d811 counterbored holes", "two Dia 8
+#: H7 dowel holes". A count, then the diameter with its role named by the
+#: word in front of it rather than by a unit after it - which is how a
+#: dimensioned request writes a hole, and the one shape _HOLES cannot read
+#: because the words sit between the count and the number. Reading only the
+#: count left the gate with a hole tally and nothing to check the holes
+#: against, which is how a part comes back with the right number of wrong
+#: holes.
+_DIA_HOLES = re.compile(
+    rf"(?<![\d.])\b(?P<count>\d{{1,3}}|{'|'.join(_WORD_COUNT)})\s+"
+    rf"(?:\bdia\b|\bdiameter\b|[\u00d8\u2300])\s*"
+    rf"(?P<dia>\d+(?:\.\d+)?){_UO}\s*"
+    rf"(?:[\w'\u2019-]+\s+){{0,3}}?holes\b", re.I)
+
 #: "a 5mm diameter hole", "a single 8mm hole"
 _ONE_HOLE = re.compile(
     rf"\b(?:a|an|one|single)\s+(?:single\s+)?{_V}{_U}\s*"
@@ -244,6 +313,24 @@ def read(prompt: str) -> list[Stated]:
             if value is not None:
                 found.append(Stated(value, role, phrase))
 
+    # The same chain with no unit written. Kept separate from the one above
+    # rather than making that unit optional, because the guard differs: this
+    # one is only ever read with three terms, and nothing that carries a
+    # unit changes meaning because of it.
+    for match in _BARE_CHAIN.finditer(text):
+        phrase = match.group(0).strip()
+        after = text[match.end():]
+        if _NOT_A_DIMENSION.match(after):
+            continue
+        before = text[max(0, match.start() - 24):match.start()]
+        role = ("pitch" if (_NOT_A_SIZE.match(after)
+                            or _FEATURE_CHAIN.search(before))
+                else "extent")
+        for name in ("a", "b", "c"):
+            value = _to_mm(match.group(name), None)
+            if value is not None:
+                found.append(Stated(value, role, phrase))
+
     for match in _SQUARE.finditer(text):
         value = _to_mm(match.group("v"), match.group("u"))
         if value is not None:
@@ -251,6 +338,17 @@ def read(prompt: str) -> list[Stated]:
 
     for role, pattern in _PATTERNS:
         for match in pattern.finditer(text):
+            # Where the number sits relative to its role word, which is what
+            # decides whether a label in front of it is this number's own.
+            number_first = match.start("v") == match.start()
+            before = text[:match.start("v")]
+            if _A_CLASS.search(before):
+                continue
+            other = _OTHER_SIDE.get(role)
+            if number_first and other is not None and other.search(before):
+                continue
+            if _RATIO.match(text[match.end():]):
+                continue
             value = _to_mm(match.group("v"), match.groupdict().get("u"))
             if value is not None:
                 found.append(Stated(value, role, match.group(0).strip()))
@@ -289,6 +387,28 @@ def holes(prompt: str) -> tuple[Optional[int], list[float]]:
 
     def overlaps(span: tuple[int, int]) -> bool:
         return any(span[0] < end and start < span[1] for start, end in spans)
+
+    # The same shape with the role named in front of the number instead of a
+    # unit behind it: "four Dia 13 through holes". Before the count-only
+    # pattern, so the holes are counted once and their diameter comes with
+    # them rather than being lost.
+    for match in _DIA_HOLES.finditer(text):
+        if overlaps(match.span()):
+            continue
+        raw = match.group("count").lower()
+        count = _WORD_COUNT.get(raw)
+        if count is None:
+            try:
+                count = int(raw)
+            except ValueError:
+                continue
+        if not 1 <= count <= 200:
+            continue
+        value = _to_mm(match.group("dia"), match.group("u"))
+        total += count
+        spans.append(match.span())
+        if value is not None:
+            diameters.extend([value] * count)
 
     for match in _ONE_HOLE.finditer(text):
         if overlaps(match.span()):
