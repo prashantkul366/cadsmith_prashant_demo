@@ -148,39 +148,49 @@ def main() -> int:
             line(False, "configuration", problem)
         return 1
 
-    try:
-        client = providers._build_sdk_client(config)
-        response = client.messages.create(
-            model=model, max_tokens=PROBE_MAX_TOKENS,
-            system="Answer in one word.", messages=PROBE)
-    except Exception as exc:                           # noqa: BLE001
-        line(False, f"call {model}", f"{type(exc).__name__}: {exc}")
-        print("\n  A validation error naming the model usually means the id "
-              "\n  is not available in this region, or the account has not "
-              "\n  been granted access to it. `aws bedrock "
-              "list-foundation-models"
-              "\n  --region " + (region or "<region>") + "` lists what you can "
-              "actually call;"
-              "\n  models needing a cross-region inference profile are listed "
-              "by"
-              "\n  `aws bedrock list-inference-profiles`.")
-        return 1
+    # Both of them. The Judge is a different model from the Coder on
+    # purpose, so it can 404 on its own - and it does so after a part has
+    # been built, which is the most expensive moment to find out.
+    wanted = [model]
+    if config.judge_model and config.judge_model != model:
+        wanted.append(config.judge_model)
 
-    text = "".join(getattr(b, "text", "") for b in response.content).strip()
-    usage = getattr(response, "usage", None)
-    line(True, f"call {model}", f"replied {text!r}")
-    if usage is not None:
-        spent = {"input_tokens": usage.input_tokens,
-                 "output_tokens": usage.output_tokens, "calls": 1}
-        line(None, "this probe spent",
-             f"{spent['input_tokens']} in, {spent['output_tokens']} out")
-        cost = budget.estimate(spent)
+    spent_all = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+    for which in wanted:
+        try:
+            client = providers._build_sdk_client(config)
+            response = client.messages.create(
+                model=which, max_tokens=PROBE_MAX_TOKENS,
+                system="Answer in one word.", messages=PROBE)
+        except Exception as exc:                       # noqa: BLE001
+            line(False, f"call {which}", f"{type(exc).__name__}: {exc}")
+            break
+        text = "".join(getattr(b, "text", "") for b in response.content).strip()
+        line(True, f"call {which}", f"replied {text!r}")
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            spent_all["input_tokens"] += usage.input_tokens
+            spent_all["output_tokens"] += usage.output_tokens
+            spent_all["calls"] += 1
+    else:
+        line(None, "these probes spent",
+             f"{spent_all['input_tokens']} in, {spent_all['output_tokens']} out")
+        cost = budget.estimate(spent_all)
         if cost is not None:
             line(None, "at your rates", f"${cost:.6f}")
+        print("\nBedrock is reachable and every model this app will ask for "
+              "answers.")
+        return 0
 
-    print("\nBedrock is reachable and the model answers. "
-          "Pick it in the app's provider list.")
-    return 0
+    # Only reached when a probe failed: the loop's `else` returns on success.
+    print("\n  A validation error naming the model usually means the id "
+          "\n  is not available in this region, or the account has not "
+          "\n  been granted access to it. `aws bedrock list-foundation-models"
+          "\n  --region " + (region or "<region>") + "` lists what you can "
+          "actually call;"
+          "\n  models needing a cross-region inference profile are listed by"
+          "\n  `aws bedrock list-inference-profiles`.")
+    return 1
 
 
 if __name__ == "__main__":
