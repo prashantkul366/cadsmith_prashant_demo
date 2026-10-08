@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.server import features
+from app.server import holes as holes_mod
 from app.server import i18n
 
 # ---------------------------------------------------------------------------
@@ -297,8 +298,65 @@ def project(direction, x_direction):
     }
 
 
+def cylinders():
+    """Every cylindrical face, with how far it runs along its own axis.
+
+    A projection shows a hole as a circle and a circle has no depth, so
+    the sheet could say O8.5 and never whether that was through twenty
+    millimetres or six, nor tell a counterbore from two holes sharing a
+    centre. The kernel knows both. Read here because the solid is already
+    open in this process and the answer caches with the projection; the
+    stacking and the callouts are holes.py's job, in the parent.
+    """
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.BRepTools import BRepTools
+    from OCP.gp import gp_Pnt
+    from OCP.TopAbs import TopAbs_OUT
+
+    solid = shape.wrapped
+
+    found = []
+    for face in shape.Faces():
+        try:
+            surface = BRepAdaptor_Surface(face.wrapped)
+            if surface.GetType() != GeomAbs_SurfaceType.GeomAbs_Cylinder:
+                continue
+            cylinder = surface.Cylinder()
+            axis = cylinder.Axis()
+            where, way = axis.Location(), axis.Direction()
+            _, _, vmin, vmax = BRepTools.UVBounds_s(face.wrapped)
+            if abs(vmax - vmin) <= 0:
+                continue
+            # Hole or boss, asked of the solid rather than inferred from
+            # the face's orientation, which a CadQuery `extrude` leaves
+            # REVERSED on an outside wall - so a 24 mm boss read as a
+            # 24 mm hole 20 deep. The axis of a hole runs through void
+            # and the axis of a boss runs through metal, so that is the
+            # question put to the classifier.
+            middle = gp_Pnt(
+                where.X() + way.X() * (vmin + vmax) / 2.0,
+                where.Y() + way.Y() * (vmin + vmax) / 2.0,
+                where.Z() + way.Z() * (vmin + vmax) / 2.0)
+            judge = BRepClass3d_SolidClassifier(solid, middle, 1e-6)
+            hollow = judge.State() == TopAbs_OUT
+            found.append({
+                "r": round(cylinder.Radius(), 4),
+                "depth": round(abs(vmax - vmin), 4),
+                "at": [round(where.X(), 4), round(where.Y(), 4),
+                       round(where.Z(), 4)],
+                "axis": [round(way.X(), 6), round(way.Y(), 6),
+                         round(way.Z(), 6)],
+                "span": [round(min(vmin, vmax), 4), round(max(vmin, vmax), 4)],
+                "inside": hollow,
+            })
+        except Exception:
+            continue
+    return found
+
+
 print("__DRAWING__")
 out = {name: project(v["dir"], v["x"]) for name, v in spec.items()}
+out["__cylinders__"] = cylinders()
 out["__schema__"] = SCHEMA
 print(json.dumps(out))
 '''
@@ -323,7 +381,7 @@ _DXF_MARKER = f"CADSMITH_SHEET_{SHEET_SCHEMA}"
 #: centreline radius the projected edges only approximate. Schema 4 added
 #: where each bend starts and stops, and where the tube ends - the vertices
 #: of its path, which is what a drawing of a bent tube dimensions.
-PROJECTION_SCHEMA = 4
+PROJECTION_SCHEMA = 5
 
 
 def _project(step_path: Path, timeout: int = 180,
@@ -336,10 +394,12 @@ def _project(step_path: Path, timeout: int = 180,
     that a prebuilt sheet also pays for the DXF download.
     """
     def views_only(data: dict) -> dict:
-        # The schema marker travels with the cache, not into the drawing:
-        # everything downstream reads this dict as {view name: view}.
+        # The schema marker travels with the cache and no further. The
+        # cylinder list does travel: it is what the sheet gets its hole
+        # depths and counterbores from, and it is read in the same pass as
+        # the projection because the solid is open there already.
         return {name: view for name, view in data.items()
-                if not name.startswith("__")}
+                if name != "__schema__"}
 
     if cache is not None and cache.exists():
         try:
@@ -459,7 +519,11 @@ def _linear_dimension(x1: float, y1: float, x2: float, y2: float,
 def _choose_scale(views: dict) -> float:
     """The largest preferred scale at which every view still fits its cell."""
     fit = None
+    # Views only. The projection travels with the cylinder list the hole
+    # depths are read from, and that is not a view with a bounding box.
     for name, view in views.items():
+        if name.startswith("__"):
+            continue
         umin, vmin, umax, vmax = view["bbox"]
         width, height = max(umax - umin, 1e-6), max(vmax - vmin, 1e-6)
         limit = min(VIEW_W / width, VIEW_H / height)
@@ -647,6 +711,36 @@ def _classify_holes(radius: float, members: list[dict]) -> dict:
     return group
 
 
+def _called(group: dict, drilled: Optional[list], view: dict) -> str:
+    """What the kernel says this hole is, if it recognises it.
+
+    The projection knows a circle's diameter and nothing else - not how
+    deep it goes, and not that the two circles sharing a centre are a
+    counterbore rather than two holes. So the leader text comes from the
+    solid where the solid has an answer, matched to the circle on screen
+    by the radius the drill makes, and falls back to the plain diameter
+    where it does not. A drawing saying Ø8.5 where the part has a
+    counterbored Ø8.5 through 12 under a Ø14 spotface is not wrong so
+    much as useless: nobody can make the feature from it.
+    """
+    if not drilled:
+        return ""
+    radius = float(group.get("radius") or 0.0)
+    for found in drilled:
+        if abs(found["radius"] - radius) <= holes_mod.SAME_R:
+            # The kernel knows the feature; the view knows the pattern.
+            # Both go on the leader: the size and depth from the solid,
+            # the count and the pitch circle from the projection - a bolt
+            # circle positioned by its PCD is the whole reason it is drawn
+            # as one, and the kernel cannot see that it is one.
+            text = holes_mod.callout(found["hole"], group["count"],
+                                     found["thread"])
+            if group.get("kind") == "bolt_circle" and group.get("pcd"):
+                text += f" ON \u00d8{_num(group['pcd'])} PCD"
+            return text
+    return ""
+
+
 def _hole_label(group: dict) -> str:
     """What the leader says: the count, the size, and the pattern if any."""
     diameter = _num(group["radius"] * 2.0)
@@ -764,7 +858,8 @@ def _path_profile(view: dict) -> dict:
     return {"level": level, "widths": widths, "datum": datum}
 
 
-def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
+def plan_view(name: str, view: dict, scale: float, dimension: str,
+              drilled: Optional[list] = None) -> dict:
     """Where everything in one view goes, without drawing any of it.
 
     Separated from the drawing so that the SVG on screen and the DXF someone
@@ -1009,6 +1104,16 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
     # Leaders, largest first and capped: a drawing that calls out every
     # circle on a gear is unreadable, and the ones that matter are the big
     # ones. One leader per group, so four identical holes are named once.
+    # A counterbore's mouth is already named by the callout on the hole
+    # beneath it - "4x O6.6 THRU (cbore) O11 x 6.5" - so giving the O11
+    # circles a leader of their own says the same feature twice and
+    # contradicts it: they are not four O11 holes.
+    mouths = {round(step.radius, 3)
+              for found in (drilled or [])
+              for step in found["hole"].steps[:-1]}
+    groups = [g for g in groups
+              if round(g["radius"], 3) not in mouths] or groups
+
     for index, group in enumerate(groups[:3]):
         # Leaders go right, because position dimensions go below and left.
         # Two things sharing the same margin is how a sheet ends up with a
@@ -1035,7 +1140,7 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
                       py - (radius + run) * sin_a),
             "shoulder": 6.0 if cos_a > 0 else -6.0,
             "measure": circle["r"] * 2.0,
-            "label": _hole_label(group)})
+            "label": _called(group, drilled, view) or _hole_label(group)})
 
     # Rounds are called out the way a radius is: the arrow lands on the arc
     # and the leader lies along the radius that made it, so the reader can
@@ -1099,18 +1204,66 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
     return plan
 
 
-def plan_sheet(views: dict) -> dict:
-    """Everything the sheet says, before anything is drawn."""
+def _threads(prompt: str) -> dict:
+    """Drilled diameter -> the thread it is drilled for, from the request.
+
+    A tapped M8x1.25 hole is drilled 6.8, and a sheet that says O6.8 is
+    asking for a hole nobody wants: 6.8 is how the thread is made, not
+    what it is. stated.py already reads the threads a request names, so
+    the drawing only has to match them to what the kernel measured.
+    """
+    try:
+        from . import stated
+        return {round(float(t["drilled"]), 2): t["spec"]
+                for t in (stated.threads(prompt) or [])
+                if t.get("drilled") and t.get("spec")}
+    except Exception:
+        return {}
+
+
+def plan_sheet(views: dict, threads: Optional[dict] = None) -> dict:
+    """Everything the sheet says, before anything is drawn.
+
+    `threads` maps a drilled diameter to the thread it is drilled for, so
+    a tapped hole is called out as M8x1.25 rather than as the 6.8 drill
+    that makes it.
+    """
     scale = _choose_scale(views)
     # Which view carries which overall dimension. Every length appears once:
     # the front view gives width and height, the view from above gives the
     # depth, and the remaining views repeat nothing.
     carries = {"FRONT": "width height", "TOP": "height", "LEFT": "", "ISO": ""}
+    # What the kernel says about every hole: its depth, and whether the
+    # circles sharing a centre are a counterbore rather than two holes.
+    # The projection cannot answer either question.
+    drilled = holes_mod.from_cylinders(
+        views.get("__cylinders__") or [], _extents(views))
+    found = holes_mod.grouped(drilled, threads)
     return {
         "scale": scale,
-        "views": [plan_view(name, views[name], scale, carries[name])
+        "views": [plan_view(name, views[name], scale, carries[name], found)
                   for name in ("FRONT", "LEFT", "TOP", "ISO") if name in views],
     }
+
+
+def _extents(views: dict) -> tuple:
+    """The part's size along X, Y and Z, read off the three views.
+
+    Each hole is then measured against its own axis, which is the only way
+    to tell through from deep on a part with holes down more than one. An
+    earlier version took the plan view's own bounding box, which for a
+    hole down Z through a 120 x 80 x 12 plate offers 80 - so a hole that
+    went straight through was called out 5.5 deep.
+    """
+    def size(name: str, axis: int) -> float:
+        box = (views.get(name) or {}).get("bbox")
+        return float(box[axis + 2] - box[axis]) if box else 0.0
+
+    # FRONT looks down -Y and shows X across, Z up; TOP looks down -Z and
+    # shows X across, Y up.
+    return (size("FRONT", 0) or size("TOP", 0),
+            size("TOP", 1) or size("LEFT", 0),
+            size("FRONT", 1) or size("LEFT", 1))
 
 
 def _render_view(plan: dict, lang: str = "en") -> list[str]:
@@ -1318,7 +1471,8 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
                 spec: Any = None, lang: str = "en",
                 parameters: Optional[list] = None) -> str:
     """Compose the drawing as a standalone SVG document."""
-    sheet = plan_sheet(_project(step_path, cache=projection))
+    sheet = plan_sheet(_project(step_path, cache=projection),
+                       _threads(prompt))
     scale = sheet["scale"]
 
     body: list[str] = []
@@ -1469,7 +1623,8 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
             "app/requirements-app.txt. The sheet shown in the app is SVG and "
             "does not need it.") from exc
 
-    sheet = plan_sheet(_project(step_path, cache=projection))
+    sheet = plan_sheet(_project(step_path, cache=projection),
+                       _threads(prompt))
     scale = sheet["scale"]
 
     doc = ezdxf.new("R2010", setup=True)

@@ -166,8 +166,10 @@ def main() -> int:
             check(f"the {axis} length is dimensioned as {value:g}",
                   f"{value:g}" in words,
                   ", ".join(w for w in words if re.fullmatch(r"[\d.]+", w)))
-        check("the hole is called out by diameter",
-              f"Ø{HOLE_D:g}" in words,
+        # The diameter, and how far it goes: a projected circle cannot
+        # know the second, so it is read off the solid's cylindrical face.
+        check("the hole is called out by diameter and depth",
+              f"Ø{HOLE_D:g} THRU" in words,
               ", ".join(w for w in words if w.startswith("Ø")) or "no Ø")
         check("the title block carries the measured size",
               any(f"{PLATE_X:g} x {PLATE_Y:g} x {PLATE_Z:g}" == w for w in words),
@@ -235,9 +237,9 @@ def main() -> int:
 
         leaders = [c.get("label") for c in top["callouts"]]
         check("four identical holes are called out once, not four times",
-              "4\u00d7 \u00d86" in leaders, str(leaders))
-        check("and the lone bore keeps a plain diameter",
-              "\u00d825" in leaders, str(leaders))
+              "4\u00d7 \u00d86 THRU" in leaders, str(leaders))
+        check("and the lone bore keeps its own callout",
+              "\u00d825 THRU" in leaders, str(leaders))
 
         # A bolt circle is the other arrangement worth recognising: its PCD
         # says everything, and positioning six holes individually would bury
@@ -326,7 +328,7 @@ def main() -> int:
         rtop = next(v for v in round_plan["views"] if v["name"] == "TOP")
         rlabels = [c.get("label") or "" for c in rtop["callouts"]]
         check("holes keep their diameter when a part also has rounds",
-              "4\u00d7 \u00d86" in rlabels, str(rlabels))
+              "4\u00d7 \u00d86 THRU" in rlabels, str(rlabels))
         check("and the corners still read as R",
               "4\u00d7 R10" in rlabels, str(rlabels))
         # Two leaders that leave a view in the same direction write their
