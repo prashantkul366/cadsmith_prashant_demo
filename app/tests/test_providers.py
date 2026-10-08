@@ -506,6 +506,74 @@ def main() -> int:
     finally:
         providers._model_list_cache.clear()
 
+    # The account that caught this one, listed exactly as its own
+    # pre-flight check printed it: three spellings of the same model, and
+    # the Messages endpoint serving only one of them. A listing is a guess
+    # about which namespace answers, so the client probes down the list
+    # rather than betting a run on the guess.
+    account = ["global.anthropic.claude-sonnet-5-5",
+               "us.anthropic.claude-sonnet-5-5",
+               "global.anthropic.claude-sonnet-5",
+               "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+               "global.anthropic.claude-opus-5-5",
+               "us.anthropic.claude-opus-5-5"]
+    ranked = providers.rank_claude(account, "sonnet")
+    check("the newest is tried first", ranked[0].endswith("sonnet-5-5"),
+          ranked[0])
+    check("and a cross-region profile before a regional one",
+          ranked[0].startswith("global.") and ranked[1].startswith("us."),
+          " then ".join(ranked[:2]))
+    check("every spelling is a candidate, not just the winner",
+          len(ranked) == 4, str(len(ranked)))
+
+    providers._model_list_cache[os.getenv("AWS_REGION") or "us-east-1"] = (
+        time.time(), tuple(account))
+    try:
+        asked = []
+        # The two this account really refused, and the one left. Picking
+        # the third rather than the first is the point: a test whose
+        # server answers the first candidate never walks the list at all.
+        served = "global.anthropic.claude-sonnet-5"
+
+        class Probe(providers.ClaudeClient):
+            def __init__(self):
+                self.config = LLMConfig(
+                    provider="bedrock", kind="bedrock", base_url="",
+                    api_key="", generation_model="anthropic.claude-sonnet-5-5",
+                    judge_model="anthropic.claude-opus-5-5")
+                self._on_note = None
+                self._thinking_ok = False
+                self._effort_ok = False
+                self._serves, self._refused = {}, set()
+
+            def _note(self, message): pass
+
+            def _stream(self, target, system, messages, max_tokens, role,
+                        tools=None):
+                asked.append(target)
+                if target != served:
+                    raise RuntimeError(
+                        f"Error code: 404 - {{'type': 'error', 'error': "
+                        f"{{'type': 'not_found_error', 'message': \"The "
+                        f"model '{target}' does not exist\"}}}}")
+                return "ok"
+
+        probe = Probe()
+        check("a 404 on the first id is not the end of the run",
+              probe.create(system="You are the Coder Agent") == "ok",
+              " -> ".join(asked))
+        check("it walked down to the one the endpoint serves",
+              asked == ["global.anthropic.claude-sonnet-5-5",
+                        "us.anthropic.claude-sonnet-5-5", served],
+              " -> ".join(asked))
+        before = len(asked)
+        probe.create(system="You are the Coder Agent")
+        check("and does not walk the dead ids again",
+              len(asked) == before + 1 and asked[-1] == served,
+              " -> ".join(asked[before:]))
+    finally:
+        providers._model_list_cache.clear()
+
     claude = providers.build_client(
         LLMConfig(provider="anthropic", kind="anthropic", base_url="",
                   api_key="x", generation_model="gen", judge_model="jud"))
