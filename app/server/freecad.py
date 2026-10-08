@@ -226,6 +226,19 @@ class Bridge:
         try:
             return bool(self._call("ping", timeout=timeout or PING_TIMEOUT))
         except FreeCADError:
+            pass
+        # `ping` goes through FreeCAD's GUI thread, so a FreeCAD that is up
+        # but busy - rebuilding, or grinding through a boolean from the last
+        # run - fails it. Answering "not running" to that is worse than
+        # waiting: the job then quietly generates a script instead of
+        # building in the FreeCAD the person is looking at, and nothing in
+        # the finished part says so. `get_rpc_status` is answered off that
+        # thread, which is the whole reason the addon has it, so it is what
+        # decides when `ping` has already said no.
+        try:
+            return bool(self._call("get_rpc_status",
+                                   timeout=timeout or PING_TIMEOUT))
+        except FreeCADError:
             return False
 
     def status(self) -> dict:

@@ -378,6 +378,14 @@ class JobManager:
                 if not freecad_run.available(bridge):
                     sink.emit(PHASE_JOB, STATUS_INFO,
                               i18n.t("freecad.offline", lang))
+                    # Also on the console the server was started from. A run
+                    # that was asked to build in FreeCAD and generated a
+                    # script instead is the one failure that leaves no trace
+                    # in the part, and the reader of that console is the
+                    # person who can do something about it.
+                    print(f"  [freecad] not reachable at {bridge.host}:"
+                          f"{bridge.port} - this run used the pipeline",
+                          flush=True)
                 else:
                     # A document the browser named is checked against what
                     # FreeCAD actually has open before a single call reaches
@@ -418,6 +426,13 @@ class JobManager:
                         sink.emit(
                             PHASE_JOB, STATUS_INFO,
                             i18n.t("freecad.unbuildable", lang, error=error))
+                        # The whole traceback on the console, because
+                        # `str(error)` is often one word and the question
+                        # this answers - why did my FreeCAD run generate a
+                        # script instead - is not answerable from one word.
+                        print(f"  [freecad] gave up on this part: "
+                              f"{type(error).__name__}: {error}", flush=True)
+                        traceback.print_exc()
                         ctx.source = "pipeline"
                         ctx.method = ""
                         ctx.iteration = 0

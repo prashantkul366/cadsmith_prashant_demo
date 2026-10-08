@@ -935,6 +935,14 @@ function handleEvent(event) {
     addVersion(data);
   }
   if (phase === "job") {
+    // Why a run did what it did. The pipeline says, in words, when FreeCAD
+    // was asked for and not reached, when a catalogue part would not build
+    // and when the two models are the same - and every one of those was
+    // emitted and then dropped on the floor, so a run that was meant to be
+    // built in FreeCAD and was quietly generated instead looked exactly
+    // like one that was not. That is the failure the health panel's own
+    // comment calls the one nobody can see by looking at the part.
+    if (status === "info" && message) appendLog(message);
     if (status === "started" && data.llm) {
       setModelLabels(data.llm.generation_model, data.llm.judge_model);
     }
