@@ -72,13 +72,27 @@ def _unfenced(code: str) -> str:
     return best if _parses(best) is None else code
 
 
-def _with_import(code: str) -> tuple[str, str]:
+def _with_import(code: str) -> tuple[str, list[str]]:
+    """Declare every name the script reaches for, not just the first one.
+
+    ``import cadquery as cq`` binds ``cq`` and nothing else, and
+    ``import cadquery`` binds ``cadquery`` and nothing else. A model that
+    writes both names - measured, it does - needs both lines, and the first
+    version of this returned after the first match: the log said the import
+    had been added and the script still died on ``name 'cadquery' is not
+    defined``.
+    """
+    lines: list[str] = []
+    notes: list[str] = []
     if _USES_CQ.search(code) and not _IMPORTS_AS_CQ.search(code):
-        return "import cadquery as cq\n" + code, "added the missing `import cadquery as cq`"
-    if _USES_CADQUERY.search(code) and not (_IMPORTS_CADQUERY.search(code)
-                                            or _IMPORTS_AS_CQ.search(code)):
-        return "import cadquery\n" + code, "added the missing `import cadquery`"
-    return code, ""
+        lines.append("import cadquery as cq")
+        notes.append("added the missing `import cadquery as cq`")
+    if _USES_CADQUERY.search(code) and not _IMPORTS_CADQUERY.search(code):
+        lines.append("import cadquery")
+        notes.append("added the missing `import cadquery`")
+    if not lines:
+        return code, []
+    return "\n".join(lines) + "\n" + code, notes
 
 
 def _assigns_result(tree: ast.AST) -> bool:
@@ -152,9 +166,8 @@ def normalise(code: str) -> tuple[str, list[str]]:
             out = inner.strip()
             notes.append("took the code out of its markdown fence")
 
-    out, note = _with_import(out)
-    if note:
-        notes.append(note)
+    out, added = _with_import(out)
+    notes.extend(added)
 
     out, note = _with_result(out)
     if note:
@@ -182,3 +195,85 @@ def complaint(code: str) -> str:
                  "a loop or a list comprehension instead of writing every "
                  "coordinate out, and keep comments short.")
     return said
+
+
+# ---------------------------------------------------------------------------
+# Advice for the mistakes a model makes over and over
+# ---------------------------------------------------------------------------
+
+#: Matched against an execution error, and appended to what the Error
+#: Refiner is told. KB2 already covers the kernel's own complaints -
+#: fillets too large, no pending wires, unclosed wires. These are the
+#: *API* mistakes measured over the library, where the traceback names a
+#: Python attribute and says nothing about what to write instead.
+#:
+#: Each entry is (what appears in the error, what to do about it). Kept
+#: here rather than in autofab/rag_kb2.py so the research pipeline stays
+#: the published one.
+_ADVICE: tuple[tuple[str, str], ...] = (
+    ("object has no attribute 'wrapped'",
+     "`.wrapped` is on a Shape, not on a Workplane. Use `.val().wrapped` "
+     "if you need the OCCT object, or stay in the Workplane API."),
+    ("moveTo() takes from 1 to 3 positional arguments",
+     "`moveTo` takes two coordinates in the plane - moveTo(x, y). It is a "
+     "2D move on the current workplane, so there is no third argument. To "
+     "work at a height, select the face and call .workplane() there."),
+    ("move() takes from 1 to 3 positional arguments",
+     "`move` takes two coordinates in the plane - move(x, y), relative to "
+     "where you are. There is no third argument."),
+    ("'Solid' object has no attribute",
+     "You are holding a Solid, not a Workplane - `.val()` and `.findSolid()` "
+     "return one. Booleans and selectors live on the Workplane: keep the "
+     "Workplane in your variable and call .cut(), .union(), .faces() on "
+     "that."),
+    ("'Vector' object has no attribute 'rotate'",
+     "A Vector does not rotate itself. Rotate the shape instead - "
+     ".rotate(axisStart, axisEnd, angleDegrees) on the Workplane - or "
+     "compute the rotated coordinates arithmetically."),
+    ("object has no attribute 'roundedRect'",
+     "There is no roundedRect. Draw `.rect(w, h)` and then round the "
+     "upright edges with `.edges('|Z').fillet(r)`, which is how a plate "
+     "gets its corner radius."),
+    ("object has no attribute 'slot'",
+     "There is no slot. A slot is two circles and a rectangle: "
+     "`.moveTo(-a, 0).circle(r).moveTo(a, 0).circle(r).rect(2*a, 2*r)` "
+     "unioned, or a rectangle with its short ends filleted to half the "
+     "width."),
+    ("If multiple objects selected, they all must be planar faces",
+     "`.workplane()` needs exactly one planar face. Your selector matched "
+     "several faces or a curved one - narrow it, e.g. `.faces('>Z')` for "
+     "the topmost rather than `.faces('|Z')` for every one facing that "
+     "way."),
+    ("must have at least one solid on the stack to union",
+     "There is nothing to union with yet. Build the first solid into a "
+     "variable, then union the second into it - `result = base.union(other)` "
+     "- rather than chaining a union onto an empty Workplane."),
+    ("Cannot find a solid on the stack or in the parent chain",
+     "The chain lost its solid, usually because a selector matched nothing "
+     "and the Workplane became empty. Assign intermediate results to "
+     "variables so you can see which step emptied it."),
+    ("ChFi3d_Builder", 
+     "The kernel could not build that fillet or chamfer on the edges "
+     "selected - usually because the radius is as large as the face it "
+     "has to run across, or the selection includes edges that meet at a "
+     "point. Select fewer edges, or use a smaller radius."),
+    ("GC_MakeArcOfCircle",
+     "That arc is degenerate - three points on a line, or a radius too "
+     "small for the distance between its ends. Check the geometry of the "
+     "points before the arc, or use a straight line there."),
+)
+
+
+def advice(error: str) -> str:
+    """What to do about this error, where the traceback does not say.
+
+    Returns an empty string for anything unrecognised, so the Error
+    Refiner's own reading - and KB2's patterns - are left to it.
+    """
+    if not error:
+        return ""
+    found = [what for marker, what in _ADVICE if marker in error]
+    if not found:
+        return ""
+    return ("\n\nWhat this error means in the CadQuery API:\n"
+            + "\n".join("  - " + line for line in found))

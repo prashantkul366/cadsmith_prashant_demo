@@ -66,6 +66,25 @@ def main() -> int:
     check("a script that cuts one hole still cuts one hole",
           out.count("hole(") == 1 and "5.5" in out, out[-60:])
 
+    print("\nA script that mixes both names needs both imports")
+    # Measured: the repair added `import cadquery as cq`, said so, and the
+    # script still died on `name 'cadquery' is not defined`. `as cq` binds
+    # cq and nothing else.
+    mixed = ('result = cq.Workplane("XY").box(10, 10, 10)\n'
+             'sphere = cadquery.Workplane("XY").sphere(5)\n'
+             'result = result.cut(sphere)\n')
+    out, notes = repair.normalise(mixed)
+    check("both imports are added", "import cadquery as cq" in out
+          and "import cadquery\n" in out, str(out.splitlines()[:2]))
+    check("and both are reported", len(notes) == 2, str(notes))
+    ns: dict = {}
+    try:
+        compile(out, "<repaired>", "exec")
+        compiled = True
+    except SyntaxError as bad:
+        compiled = False
+    check("what comes out compiles", compiled)
+
     print("\nA fence the model wrapped the code in")
     fenced = "Here is the part:\n```python\n" + GOOD + "```\nHope that helps!"
     out, notes = repair.normalise(fenced)
@@ -98,6 +117,22 @@ def main() -> int:
     out, notes = repair.normalise(assembly)
     check("an assembly that already assigns result is left alone",
           notes == [], str(notes))
+
+    print("\nAdvice for the mistakes a model makes over and over")
+    cases = {
+        "AttributeError: 'Workplane' object has no attribute 'wrapped'": ".val()",
+        "TypeError: Workplane.moveTo() takes from 1 to 3 positional arguments but 4 were given": "moveTo(x, y)",
+        "AttributeError: 'Workplane' object has no attribute 'roundedRect'": "edges('|Z').fillet",
+        "ValueError: Workplane object must have at least one solid on the stack to union!": "union(other)",
+        "ValueError: If multiple objects selected, they all must be planar faces.": ">Z",
+    }
+    for error, wanted in cases.items():
+        said = repair.advice(error)
+        check(f"{error.split(':')[1].strip()[:44]}", wanted in said,
+              said.splitlines()[-1][:70] if said else "nothing said")
+    check("an error it does not know gets no invented advice",
+          repair.advice("ZeroDivisionError: division by zero") == "")
+    check("and an empty error says nothing", repair.advice("") == "")
 
     print("\n" + "=" * 58)
     if failures:

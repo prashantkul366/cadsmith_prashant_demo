@@ -514,6 +514,12 @@ class InstrumentedExecutor(Executor):
             )
             self._file_artifacts(ctx, name, cadquery_code, result)
         else:
+            # The traceback says what broke; it rarely says what to write
+            # instead. Where the mistake is a known one, the advice rides
+            # with the error so the Error Refiner reads both.
+            guidance = repair.advice(result.error or "")
+            if guidance:
+                result.error = (result.error or "") + guidance
             ctx.emit(
                 PHASE_EXECUTE,
                 STATUS_FAILED,
