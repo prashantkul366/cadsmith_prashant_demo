@@ -24,6 +24,7 @@ it shows is all there is.
 from __future__ import annotations
 
 import math
+import re
 from typing import Iterable, Optional
 
 #: Two endpoints are the same point within this, in millimetres. The
@@ -201,9 +202,31 @@ def printed(sheet: dict) -> list[float]:
     for view in sheet.get("views", []):
         for dimension in view.get("dimensions", []):
             out.append(float(dimension["measure"]))
+            out.extend(_in_text(dimension.get("label")))
         for call in view.get("callouts", []):
             out.append(float(call["measure"]))
+            # And every number inside the leader's own text. A hole's
+            # callout reads "4x O6.6 THRU (cbore) O11 x 6.5", and its
+            # `measure` is only the 6.6 - so the depth and the counterbore
+            # it also prints were invisible to this. Which is how adding
+            # both to the sheet made the coverage figure go *down*: the
+            # Ø11 leader they replaced had been counted and the richer
+            # callout that replaced it was not.
+            out.extend(_in_text(call.get("label")))
     return out
+
+
+#: A number in a callout, which is where a depth or a counterbore is
+#: written. Not preceded by a digit, so the 25 of M8x1.25 is one number
+#: rather than two, and not the count in "4x".
+_NUMBER = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)(?!\s*\u00d7)")
+
+
+def _in_text(label) -> list[float]:
+    """Every number a piece of annotation prints."""
+    if not isinstance(label, str) or not label:
+        return []
+    return [float(found) for found in _NUMBER.findall(label)]
 
 
 def undimensioned(sheet: dict, parameters: Iterable[dict],
