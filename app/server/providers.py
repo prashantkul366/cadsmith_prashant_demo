@@ -877,26 +877,8 @@ class OpenAICompatibleClient:
         last: Optional[_GatewayBusy] = None
         for attempt in range(GATEWAY_ATTEMPTS):
             try:
-                try:
-                    return self._post_once(model, messages, max_tokens, role)
-                except _ContextTooLong as full:
-                    # Asked for more than the window had left. The endpoint
-                    # reported both numbers, so there is nothing to guess:
-                    # ask for what remains. Once - if that is still refused
-                    # the prompt itself does not fit and no ceiling helps.
-                    room = full.room_for_reply()
-                    if room < 256 or room >= max_tokens:
-                        raise RuntimeError(
-                            f"{full} - the prompt alone is "
-                            f"{full.prompt_tokens} tokens against a "
-                            f"{full.window}-token window, so no reply fits. "
-                            f"Serve the model with a longer context, or send "
-                            f"less.") from full
-                    self._note(
-                        f"{max_tokens} output tokens would not fit beside a "
-                        f"{full.prompt_tokens}-token prompt in a "
-                        f"{full.window}-token window; asking for {room}.")
-                    return self._post_once(model, messages, room, role)
+                return self._post_fitted(model, messages, max_tokens,
+                                         role)
             except _GatewayBusy as exc:
                 last = exc
                 if attempt + 1 >= GATEWAY_ATTEMPTS:
@@ -911,6 +893,47 @@ class OpenAICompatibleClient:
             f"{last} - and again on {GATEWAY_ATTEMPTS} attempts. A slow "
             f"endpoint behind a tunnel needs either a faster model or a "
             f"direct URL; CADSMITH_GATEWAY_ATTEMPTS raises the count.")
+
+    def _post_fitted(self, model: str, messages: list[dict], max_tokens: int,
+                     role: str = "generation"
+                     ) -> tuple[str, _Usage]:
+        """Ask, shrinking the ceiling until it fits the window.
+
+        The endpoint reports the window and the prompt, so the first refit
+        is arithmetic rather than a guess. It is not the last word, though:
+        vLLM says the prompt "contains **at least** N input tokens", so a
+        ceiling computed from N can be refused again - and the first
+        version of this retried inside its own `except`, where a second
+        refusal escaped uncaught and took the run with it. Measured: two of
+        the sixty-one died that way, and two that had been producing a
+        solid stopped.
+
+        So it loops, taking the endpoint's newest numbers each time and
+        giving away a little more, and gives up with a sentence that says
+        which part does not fit.
+        """
+        asked = max_tokens
+        for _ in range(_CONTEXT_REFITS):
+            try:
+                return self._post_once(model, messages, asked, role)
+            except _ContextTooLong as full:
+                room = min(full.room_for_reply(), asked - 1)
+                if room < _CONTEXT_FLOOR:
+                    raise RuntimeError(
+                        f"{full} - the prompt alone is "
+                        f"{full.prompt_tokens} tokens against a "
+                        f"{full.window}-token window, so no useful reply "
+                        f"fits. Serve the model with a longer context, or "
+                        f"send less.") from full
+                self._note(
+                    f"{asked} output tokens would not fit beside a "
+                    f"{full.prompt_tokens}-token prompt in a "
+                    f"{full.window}-token window; asking for {room}.")
+                asked = room
+        raise RuntimeError(
+            f"{self.config.base_url} refused {_CONTEXT_REFITS} ceilings in "
+            f"a row as too large for its window. The prompt is near the "
+            f"window on its own; serve the model with a longer context.")
 
     def _post_once(self, model: str, messages: list[dict], max_tokens: int,
                    role: str = "generation") -> tuple[str, _Usage]:
@@ -1324,6 +1347,16 @@ _CONTEXT_FULL = re.compile(
 #: Left free for the reply after the clamp, so a prompt that grows by a few
 #: tokens between the refusal and the retry does not refuse again.
 _CONTEXT_MARGIN = 64
+
+#: How many times to shrink the ceiling before giving up. The endpoint's
+#: own "at least N input tokens" is a lower bound, so one refit is not
+#: always enough.
+_CONTEXT_REFITS = 3
+
+#: Below this a reply is not worth having, so say so instead of shrinking
+#: towards nothing.
+_CONTEXT_FLOOR = 256
+
 
 
 class _ContextTooLong(RuntimeError):
