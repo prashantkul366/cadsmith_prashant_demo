@@ -73,6 +73,9 @@ class FakeOpenAIServer(BaseHTTPRequestHandler):
     #: it stops waiting, answers 524, and the generation behind it carries
     #: on. Counted down, so 2 means "fail twice, then work".
     gateway_failures: int = 0
+    #: Non-zero makes the endpoint refuse a request whose prompt and
+    #: requested ceiling will not fit together, the way vLLM does.
+    context_window: int = 0
 
     def log_message(self, *_args):
         pass
@@ -87,6 +90,18 @@ class FakeOpenAIServer(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length) or b"{}")
         FakeOpenAIServer.requests.append(body)
+
+        if FakeOpenAIServer.context_window:
+            asked = int(body.get("max_tokens") or 0)
+            prompt = 16769          # as a real refusal reports it
+            if asked + prompt > FakeOpenAIServer.context_window:
+                self._json(400, {"error": {"message":
+                    f"This model's maximum context length is "
+                    f"{FakeOpenAIServer.context_window} tokens. However, you "
+                    f"requested {asked} output tokens and your prompt "
+                    f"contains at least {prompt} input tokens, for a total "
+                    f"of at least {asked + prompt} tokens."}})
+                return
 
         if FakeOpenAIServer.gateway_failures > 0:
             FakeOpenAIServer.gateway_failures -= 1
@@ -320,6 +335,33 @@ def main() -> int:
           and FakeOpenAIServer.requests[-1].get("stream") is None,
           f"{len(FakeOpenAIServer.requests) - tried} request(s)")
     FakeOpenAIServer.streams = True
+
+    print("\nA ceiling that will not fit the window is refitted, not guessed")
+    FakeOpenAIServer.requests.clear()
+    FakeOpenAIServer.context_window = 32768
+    fitted_notes: list = []
+    fitted = OpenAICompatibleClient(
+        LLMConfig(provider="custom", kind="openai_compatible", base_url=base_url,
+                  api_key="test-key", generation_model="fake-small",
+                  judge_model="fake-large"),
+        on_note=fitted_notes.append)
+    try:
+        reply = fitted.messages.create(
+            model="ignored", max_tokens=16000,
+            system="You are the Coder Agent.",
+            messages=[{"role": "user", "content": "Write it."}])
+        check("the reply comes back on the second ask",
+              reply.content[0].text == CODE, reply.content[0].text[:40])
+        asked = [b.get("max_tokens") for b in FakeOpenAIServer.requests]
+        check("the ceiling was cut to what the window had left",
+              len(asked) == 2 and asked[0] == 16000 and 256 < asked[-1] < 16000,
+              str(asked))
+        check("and streaming was not switched off over it",
+              any("would not fit beside" in n for n in fitted_notes)
+              and not any("would not stream" in n for n in fitted_notes),
+              str(fitted_notes)[:140])
+    finally:
+        FakeOpenAIServer.context_window = 0
 
     print("\nA tunnel that stops waiting is asked again, not reported as failed")
     FakeOpenAIServer.requests.clear()
