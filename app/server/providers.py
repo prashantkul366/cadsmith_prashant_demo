@@ -446,6 +446,10 @@ _NO_SUCH_MODEL = re.compile(
     r"not_found_error|does not exist|could not be found|invalid model",
     re.IGNORECASE)
 
+#: The region a listing puts in front of a model, which the Messages
+#: endpoint does not use. See rank_claude.
+_BARE_PREFIX = re.compile(r"^(?:global|us|eu|apac)\.anthropic\.")
+
 _CLAUDE_ID = re.compile(r"claude-(opus|sonnet|haiku)-(\d+)(?:[-.](\d+))?",
                         re.IGNORECASE)
 
@@ -493,22 +497,42 @@ def rank_claude(ids, family: str) -> list[str]:
     worth making once, and `resolve` probes down it rather than betting
     the run on the guess being right.
 
-    Newest first, by version rather than by listing position. Then
-    `global.` ahead of `us.` ahead of a bare prefix: a cross-region
-    inference profile is what a recent Claude is served through, and it is
-    the spelling that was left when the other two had been refused. Then
-    undated ahead of dated, since a dated id pins a snapshot that ages out.
+    Newest version first, by version rather than by listing position, then
+    the bare `anthropic.` spelling ahead of the regional profiles.
+
+    That order is measured rather than reasoned. The two catalogues do not
+    agree: the control plane lists `global.` and `us.` inference profiles,
+    which is the InvokeModel path, while the Messages endpoint this app
+    calls answers to the bare prefix - and the proof is a sibling branch
+    that has run on `anthropic.claude-sonnet-5` throughout while every
+    regional spelling of the same model 404s on the same account. An
+    earlier version of this guessed the opposite way round.
+
+    So a listed `global.anthropic.claude-sonnet-5` also yields the bare
+    `anthropic.claude-sonnet-5`, which is not in the listing at all and is
+    the one that answers. Within a version, undated before dated, since a
+    dated id pins a snapshot that ages out.
     """
-    out = []
+    out, seen = [], set()
+
+    def offer(identifier: str, major: int, minor: int) -> None:
+        if identifier in seen:
+            return
+        seen.add(identifier)
+        prefix = 0 if identifier.startswith("anthropic.") else (
+            -1 if identifier.startswith("global.") else -2)
+        out.append(((major, minor, prefix, -len(identifier)), identifier))
+
     for identifier in ids:
         found = _CLAUDE_ID.search(identifier)
         if not found or found.group(1).lower() != family:
             continue
         major = int(found.group(2))
         minor = int(found.group(3) or 0)
-        prefix = 2 if identifier.startswith("global.") else (
-            1 if identifier.startswith("us.") else 0)
-        out.append(((major, minor, prefix, -len(identifier)), identifier))
+        offer(identifier, major, minor)
+        bare = _BARE_PREFIX.sub("anthropic.", identifier, count=1)
+        if bare != identifier:
+            offer(bare, major, minor)
     out.sort(reverse=True)
     return [identifier for _, identifier in out]
 

@@ -417,40 +417,42 @@ def main() -> int:
           f"{default.generation_model} / {default.judge_model}")
 
     # The account that caught this one, listed exactly as its own
-    # pre-flight check printed it: three spellings of the same model, and
-    # the Messages endpoint serving only one of them. A listing is a guess
-    # about which namespace answers, so the client probes down the list
-    # rather than betting a run on the guess.
+    # pre-flight check printed it. Two catalogues that do not agree: the
+    # control plane lists `global.` and `us.` inference profiles, and the
+    # Messages endpoint this app calls answers to the bare prefix. The
+    # proof is a sibling branch that has run on `anthropic.claude-sonnet-5`
+    # throughout while every regional spelling of it 404s on the same
+    # account - and the bare spelling is in no listing anywhere.
     account = ["global.anthropic.claude-sonnet-5-5",
                "us.anthropic.claude-sonnet-5-5",
                "global.anthropic.claude-sonnet-5",
-               "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-               "global.anthropic.claude-opus-5-5",
-               "us.anthropic.claude-opus-5-5"]
+               "us.anthropic.claude-sonnet-5",
+               "global.anthropic.claude-opus-5",
+               "us.anthropic.claude-opus-5"]
     ranked = providers.rank_claude(account, "sonnet")
-    check("the newest is tried first", ranked[0].endswith("sonnet-5-5"),
-          ranked[0])
-    check("and a cross-region profile before a regional one",
-          ranked[0].startswith("global.") and ranked[1].startswith("us."),
-          " then ".join(ranked[:2]))
-    check("every spelling is a candidate, not just the winner",
-          len(ranked) == 4, str(len(ranked)))
+    check("the bare spelling is offered, though nothing listed it",
+          "anthropic.claude-sonnet-5" in ranked, str(ranked[:4]))
+    check("and it is tried before the regional ones of its own version",
+          ranked.index("anthropic.claude-sonnet-5")
+          < ranked.index("global.anthropic.claude-sonnet-5"),
+          " then ".join(ranked[:4]))
+    check("while a newer version still goes first",
+          ranked[0] == "anthropic.claude-sonnet-5-5", ranked[0])
 
     providers._model_list_cache[os.getenv("AWS_REGION") or "us-east-1"] = (
         time.time(), tuple(account))
     try:
         asked = []
-        # The two this account really refused, and the one left. Picking
-        # the third rather than the first is the point: a test whose
-        # server answers the first candidate never walks the list at all.
-        served = "global.anthropic.claude-sonnet-5"
+        # What this account really does: only the bare, version-5 id is
+        # served. Every spelling of -5-5 and every regional spelling 404s.
+        served = "anthropic.claude-sonnet-5"
 
         class Probe(providers.ClaudeClient):
             def __init__(self):
                 self.config = LLMConfig(
                     provider="bedrock", kind="bedrock", base_url="",
-                    api_key="", generation_model="anthropic.claude-sonnet-5-5",
-                    judge_model="anthropic.claude-opus-5-5")
+                    api_key="", generation_model="anthropic.claude-sonnet-5",
+                    judge_model="anthropic.claude-opus-5")
                 self._on_note = None
                 self._thinking_ok = False
                 self._effort_ok = False
@@ -463,9 +465,9 @@ def main() -> int:
                 asked.append(target)
                 if target != served:
                     raise RuntimeError(
-                        f"Error code: 404 - {{'type': 'error', 'error': "
-                        f"{{'type': 'not_found_error', 'message': \"The "
-                        f"model '{target}' does not exist\"}}}}")
+                        f"Error code: 404 - {{'type': 'not_found_error', "
+                        f"'message': \"The model '{target}' does not "
+                        f"exist\"}}")
                 return "ok"
 
         probe = Probe()
@@ -473,9 +475,7 @@ def main() -> int:
               probe.create(system="You are the Coder Agent") == "ok",
               " -> ".join(asked))
         check("it walked down to the one the endpoint serves",
-              asked == ["global.anthropic.claude-sonnet-5-5",
-                        "us.anthropic.claude-sonnet-5-5", served],
-              " -> ".join(asked))
+              asked[-1] == served and len(asked) > 1, " -> ".join(asked))
         before = len(asked)
         probe.create(system="You are the Coder Agent")
         check("and does not walk the dead ids again",
@@ -483,6 +483,17 @@ def main() -> int:
               " -> ".join(asked[before:]))
     finally:
         providers._model_list_cache.clear()
+
+    # And with no listing at all, the compiled-in default has to be an id
+    # that works rather than the newest one that exists: this account was
+    # given `anthropic.claude-sonnet-5-5` by a well-meaning bump and spent
+    # three days answering 404 to every run.
+    bedrock_default = providers.resolve("bedrock")
+    check("the Bedrock default is the pair the sibling branch runs on",
+          bedrock_default.generation_model == "anthropic.claude-sonnet-5"
+          and bedrock_default.judge_model == "anthropic.claude-opus-5",
+          f"{bedrock_default.generation_model} / "
+          f"{bedrock_default.judge_model}")
 
     claude = providers.build_client(
         LLMConfig(provider="anthropic", kind="anthropic", base_url="",
@@ -527,11 +538,11 @@ def main() -> int:
                "anthropic.claude-3-5-sonnet-20240620-v1:0"]
     check("the newest Sonnet the account has is chosen",
           providers.best_claude(offered, "sonnet")
-          == "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+          == "anthropic.claude-sonnet-4-5-20250929-v1:0",
           providers.best_claude(offered, "sonnet"))
     check("and the newest Opus, by version rather than by listing order",
           providers.best_claude(offered, "opus")
-          == "global.anthropic.claude-opus-4-6",
+          == "anthropic.claude-opus-4-6",
           providers.best_claude(offered, "opus"))
     check("an undated id wins a tie, because a dated one pins a snapshot",
           providers.best_claude(["x.claude-opus-5-5-20260401-v1:0",
@@ -550,11 +561,11 @@ def main() -> int:
     providers._model_list_cache[os.getenv("AWS_REGION") or "us-east-1"] = (
         time.time(), tuple(no_sonnet))
     try:
-        chosen = providers.bedrock_default("sonnet", "anthropic.claude-sonnet-5-5")
+        chosen = providers.bedrock_default("sonnet", "anthropic.claude-sonnet-5")
         check("an account with no Sonnet gets its best other Claude",
-              chosen in no_sonnet, chosen)
+              "opus" in chosen, chosen)
         check("the best one, not merely any one",
-              chosen == "global.anthropic.claude-opus-4-6", chosen)
+              chosen == "anthropic.claude-opus-4-6", chosen)
         check("and the picker offers exactly the list it was picked from",
               providers._list_bedrock_models() == no_sonnet)
         providers._model_list_cache.clear()
