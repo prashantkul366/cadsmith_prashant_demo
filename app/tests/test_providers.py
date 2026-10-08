@@ -399,9 +399,19 @@ def main() -> int:
     providers.clear_session_keys()
     default = providers.resolve("anthropic")
     check("a weaker coder paired with a stronger judge",
-          default.generation_model == "claude-sonnet-5"
-          and default.judge_model == "claude-opus-5",
+          default.generation_model == "claude-sonnet-5-5"
+          and default.judge_model == "claude-opus-5-5",
           f"{default.generation_model} / {default.judge_model}")
+
+    # Bedrock spells the same pairing with the vendor in front, and the
+    # region stands in for a base URL.
+    bedrock = providers.resolve("bedrock")
+    check("and Bedrock names the same pair, vendor-prefixed",
+          bedrock.generation_model == "anthropic.claude-sonnet-5-5"
+          and bedrock.judge_model == "anthropic.claude-opus-5-5",
+          f"{bedrock.generation_model} / {bedrock.judge_model}")
+    check("Bedrock needs no key, because it uses the AWS credential chain",
+          providers.BUILTIN["bedrock"].needs_key is False)
 
     claude = providers.build_client(
         LLMConfig(provider="anthropic", kind="anthropic", base_url="",

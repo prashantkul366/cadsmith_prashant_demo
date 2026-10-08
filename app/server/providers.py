@@ -87,8 +87,8 @@ BUILTIN: dict[str, ProviderSpec] = {
         env_key="ANTHROPIC_API_KEY",
         # A weaker coder with a stronger judge, as the pipeline intends, so
         # the Judge is not grading its own homework.
-        default_generation_model="claude-sonnet-5",
-        default_judge_model="claude-opus-5",
+        default_generation_model="claude-sonnet-5-5",
+        default_judge_model="claude-opus-5-5",
         hint="Set ANTHROPIC_API_KEY in .env",
     ),
     "bedrock": ProviderSpec(
@@ -99,8 +99,9 @@ BUILTIN: dict[str, ProviderSpec] = {
         # chain - an SSO profile, an instance role, or AWS_* env vars.
         needs_key=False,
         env_base_url="AWS_REGION",
-        default_generation_model="anthropic.claude-sonnet-5",
-        default_judge_model="anthropic.claude-opus-5",
+        # Bedrock spells a model id with the vendor in front of it.
+        default_generation_model="anthropic.claude-sonnet-5-5",
+        default_judge_model="anthropic.claude-opus-5-5",
         hint="Sign in with `aws sso login`, or set AWS_ACCESS_KEY_ID / "
              "AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN and AWS_REGION",
     ),
