@@ -438,6 +438,18 @@ def _aws_identity(timeout: float = 4.0) -> str:
 
 #: A Claude id, whatever the platform puts in front of it:
 #: anthropic.claude-sonnet-5-5, global.anthropic.claude-haiku-4-5-20251001-v1:0.
+#: The provider saying it has never heard of this model id. Worth trying
+#: the next candidate for, and nothing else is - a 403 is permission and a
+#: 400 is the request. The wording is Bedrock's; the SDK raises NotFound
+#: for it, which is checked as well so a reworded message still counts.
+_NO_SUCH_MODEL = re.compile(
+    r"not_found_error|does not exist|could not be found|invalid model",
+    re.IGNORECASE)
+
+#: The region a listing puts in front of a model, which the Messages
+#: endpoint does not use. See rank_claude.
+_BARE_PREFIX = re.compile(r"^(?:global|us|eu|apac)\.anthropic\.")
+
 _CLAUDE_ID = re.compile(r"claude-(opus|sonnet|haiku)-(\d+)(?:[-.](\d+))?",
                         re.IGNORECASE)
 
@@ -472,25 +484,63 @@ def _invokable(timeout: float = 6.0) -> tuple[str, ...]:
     return found
 
 
-def best_claude(ids, family: str) -> str:
-    """The newest Claude of this family among ids, or "" if there is none.
+def rank_claude(ids, family: str) -> list[str]:
+    """Every Claude of this family among ids, best first.
 
-    Ranked by version rather than by position, because a provider lists in
-    no useful order, and an undated id wins a tie - `claude-sonnet-5-5`
-    over `claude-sonnet-5-5-20260401-v1:0` - since the dated one pins a
-    snapshot that will age out.
+    A list rather than a winner, because the winner cannot be known from
+    here. What a Bedrock account lists and what its Messages endpoint will
+    serve are two different namespaces, and the difference is not
+    documented anywhere this code can read: one account served
+    `anthropic.claude-sonnet-5-5` while listing only `global.*`, and
+    another listed `anthropic.`, `us.` and `global.` spellings of the same
+    model and answered 404 to the first two. So the order here is a guess
+    worth making once, and `resolve` probes down it rather than betting
+    the run on the guess being right.
+
+    Newest version first, by version rather than by listing position, then
+    the bare `anthropic.` spelling ahead of the regional profiles.
+
+    That order is measured rather than reasoned. The two catalogues do not
+    agree: the control plane lists `global.` and `us.` inference profiles,
+    which is the InvokeModel path, while the Messages endpoint this app
+    calls answers to the bare prefix - and the proof is a sibling branch
+    that has run on `anthropic.claude-sonnet-5` throughout while every
+    regional spelling of the same model 404s on the same account. An
+    earlier version of this guessed the opposite way round.
+
+    So a listed `global.anthropic.claude-sonnet-5` also yields the bare
+    `anthropic.claude-sonnet-5`, which is not in the listing at all and is
+    the one that answers. Within a version, undated before dated, since a
+    dated id pins a snapshot that ages out.
     """
-    best, rank = "", ()
+    out, seen = [], set()
+
+    def offer(identifier: str, major: int, minor: int) -> None:
+        if identifier in seen:
+            return
+        seen.add(identifier)
+        prefix = 0 if identifier.startswith("anthropic.") else (
+            -1 if identifier.startswith("global.") else -2)
+        out.append(((major, minor, prefix, -len(identifier)), identifier))
+
     for identifier in ids:
         found = _CLAUDE_ID.search(identifier)
         if not found or found.group(1).lower() != family:
             continue
         major = int(found.group(2))
         minor = int(found.group(3) or 0)
-        here = (major, minor, -len(identifier))
-        if here > rank:
-            best, rank = identifier, here
-    return best
+        offer(identifier, major, minor)
+        bare = _BARE_PREFIX.sub("anthropic.", identifier, count=1)
+        if bare != identifier:
+            offer(bare, major, minor)
+    out.sort(reverse=True)
+    return [identifier for _, identifier in out]
+
+
+def best_claude(ids, family: str) -> str:
+    """The best-ranked Claude of this family, or "" if there is none."""
+    ranked = rank_claude(ids, family)
+    return ranked[0] if ranked else ""
 
 
 #: Which family to try when the account does not carry the one a role asked
@@ -500,30 +550,39 @@ def best_claude(ids, family: str) -> str:
 _FAMILY_ORDER = ("opus", "sonnet", "haiku")
 
 
-def bedrock_default(family: str, fallback: str) -> str:
-    """The id to use for this role, preferring what the account really has.
+def bedrock_candidates(family: str, fallback: str) -> list[str]:
+    """Ids to try for this role, best first.
 
-    A compiled-in default is a guess about somebody else's AWS account.
-    Measured the hard way: `anthropic.claude-sonnet-5-5` is right for one
-    account and a 404 for the next, whose models are all served as
-    `global.anthropic.*` cross-region inference profiles.
+    A compiled-in default is a guess about somebody else's AWS account, and
+    the account's own listing is a guess about which namespace its Messages
+    endpoint answers in. Neither is knowable from here, so both go on the
+    list and the first one that answers wins - see `_serving` in
+    ClaudeClient, which is what turns a 404 into the next candidate instead
+    of the end of the run.
 
-    So while the list is empty the constant is all there is, and the moment
-    it is not, the constant is the worst answer available - a guess we are
-    holding evidence against. An account that carries Claude but not this
-    family gets the best other family it does carry, because a run that
-    answers in 404 is worse than one answered by a different model. The
-    second time this bit, the id in the request was not in the 33 the same
-    server had just listed in the model box beside it.
+    Measured the hard way, twice on the same account: `anthropic.claude-
+    sonnet-5-5` 404s and so does `us.anthropic.claude-sonnet-5-5`, while
+    both are what a reasonable reading of the listing suggests.
     """
     ids = _invokable()
-    if not ids:
-        return fallback
-    for wanted in (family,) + _FAMILY_ORDER:
-        found = best_claude(ids, wanted)
-        if found:
-            return found
-    return fallback
+    out: list[str] = []
+    if ids:
+        out.extend(rank_claude(ids, family))
+        # An account that carries Claude but not this family still gets the
+        # best other family it does carry: a run answered by a different
+        # model beats one answered by a 404.
+        for other in _FAMILY_ORDER:
+            if other != family:
+                out.extend(rank_claude(ids, other))
+    if fallback and fallback not in out:
+        out.append(fallback)
+    return out
+
+
+def bedrock_default(family: str, fallback: str) -> str:
+    """The first id to try for this role."""
+    found = bedrock_candidates(family, fallback)
+    return found[0] if found else fallback
 
 
 def bedrock_models(timeout: float = 6.0) -> tuple[list[str], str]:
@@ -1328,6 +1387,10 @@ class ClaudeClient:
         self._on_note = on_note
         self._client = _build_sdk_client(config)
         self._thinking_ok = True   # cleared if the model rejects the parameter
+        #: Which id each role is actually being served by, once one has
+        #: answered, and the ids this endpoint has said it does not have.
+        self._serves: dict[str, str] = {}
+        self._refused: set[str] = set()
         self._effort_ok = True     # cleared if it rejects the effort instead
         self._coalescer = _Coalescer(
             lambda kind, text: on_delta and on_delta(kind, text))
@@ -1336,12 +1399,46 @@ class ClaudeClient:
     def messages(self) -> "ClaudeClient":
         return self
 
+    def _candidates(self, role: str) -> list[str]:
+        """Ids to try for this role, best first.
+
+        A configured model is the only one tried: somebody who typed an id
+        meant that id, and quietly answering with a different model is
+        worse than saying the one they asked for is not served.
+        """
+        asked = (self.config.judge_model if role == "judge"
+                 else self.config.generation_model)
+        if self.config.kind != "bedrock":
+            return [asked]
+        return bedrock_candidates("opus" if role == "judge" else "sonnet",
+                                  asked) or [asked]
+
+    def _serving(self, role: str) -> str:
+        """The id to use for this role now - the last one that answered."""
+        found = self._serves.get(role)
+        if found:
+            return found
+        candidates = self._candidates(role)
+        return candidates[0] if candidates else ""
+
+    def _next_candidate(self, role: str, after: str) -> str:
+        """The id to try when `after` came back unknown, or "".
+
+        Each refusal is remembered, so a session does not walk the same
+        dead id twice and a model that answers is used from then on.
+        """
+        self._refused.add(after)
+        for candidate in self._candidates(role):
+            if candidate not in self._refused:
+                self._serves[role] = candidate
+                return candidate
+        return ""
+
     def create(self, *, model: str = "", max_tokens: int = 4096,
                system: str = "", messages: Optional[list] = None,
                **_: Any) -> _Response:
         role = OpenAICompatibleClient._role_for(system)
-        target = (self.config.judge_model if role == "judge"
-                  else self.config.generation_model)
+        target = self._serving(role)
         payload = list(messages or [])
         if role == "judge" and not self.config.judge_vision:
             payload = _strip_anthropic_images(payload)
@@ -1353,6 +1450,23 @@ class ClaudeClient:
         try:
             return self._stream(target, system, payload, budget, role)
         except Exception as exc:
+            if _NO_SUCH_MODEL.search(str(exc)) or \
+                    type(exc).__name__ == "NotFoundError":
+                # What a Bedrock account lists and what its Messages
+                # endpoint serves are two different namespaces, and nothing
+                # readable from here says which spelling of a model this
+                # account answers to. Measured twice on one account:
+                # `anthropic.claude-sonnet-5-5` 404s, and so does
+                # `us.anthropic.claude-sonnet-5-5`. Guessing a third time
+                # is not a plan, so the next candidate is tried and the one
+                # that answers is remembered for the rest of the session.
+                other = self._next_candidate(role, target)
+                if other:
+                    self._note(f"{target} is not served here; trying "
+                               f"{other}.")
+                    return self.create(model=other, max_tokens=max_tokens,
+                                       system=system, messages=messages)
+                raise
             if (self._effort_ok and self.config.effort
                     and _EFFORT_UNSUPPORTED.search(str(exc))):
                 # A model that thinks but takes no effort setting: keep the

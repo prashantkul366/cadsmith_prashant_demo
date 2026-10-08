@@ -151,38 +151,58 @@ def main() -> int:
     # Both of them. The Judge is a different model from the Coder on
     # purpose, so it can 404 on its own - and it does so after a part has
     # been built, which is the most expensive moment to find out.
-    wanted = [model]
+    # The same walk the app does, per role. Printing one id and calling
+    # it a day was what let two wrong guesses through: the account lists
+    # `anthropic.`, `us.` and `global.` spellings of one model and serves
+    # exactly one of them, and which one is not knowable from the listing.
+    roles = [("generation", model, "sonnet")]
     if config.judge_model and config.judge_model != model:
-        wanted.append(config.judge_model)
+        roles.append(("judge", config.judge_model, "opus"))
 
-    spent_all = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
-    for which in wanted:
-        try:
-            client = providers._build_sdk_client(config)
-            response = client.messages.create(
-                model=which, max_tokens=PROBE_MAX_TOKENS,
-                system="Answer in one word.", messages=PROBE)
-        except Exception as exc:                       # noqa: BLE001
-            line(False, f"call {which}", f"{type(exc).__name__}: {exc}")
+    spent = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+    answered: dict[str, str] = {}
+    client = providers._build_sdk_client(config)
+
+    for role, asked, family in roles:
+        tries = ([asked] if args.model
+                 else providers.bedrock_candidates(family, asked))
+        for which in tries:
+            try:
+                response = client.messages.create(
+                    model=which, max_tokens=PROBE_MAX_TOKENS,
+                    system="Answer in one word.", messages=PROBE)
+            except Exception as exc:                   # noqa: BLE001
+                unknown = (type(exc).__name__ == "NotFoundError"
+                           or providers._NO_SUCH_MODEL.search(str(exc)))
+                line(None if unknown else False, f"{role}: {which}",
+                     "not served here - trying the next" if unknown
+                     else f"{type(exc).__name__}: {exc}")
+                if unknown:
+                    continue        # exactly what the app does
+                break
+            text = "".join(getattr(b, "text", "")
+                           for b in response.content).strip()
+            line(True, f"{role}: {which}", f"replied {text!r}")
+            answered[role] = which
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                spent["input_tokens"] += usage.input_tokens
+                spent["output_tokens"] += usage.output_tokens
+                spent["calls"] += 1
             break
-        text = "".join(getattr(b, "text", "") for b in response.content).strip()
-        line(True, f"call {which}", f"replied {text!r}")
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            spent_all["input_tokens"] += usage.input_tokens
-            spent_all["output_tokens"] += usage.output_tokens
-            spent_all["calls"] += 1
-    else:
+
+    if len(answered) == len(roles):
         line(None, "these probes spent",
-             f"{spent_all['input_tokens']} in, {spent_all['output_tokens']} out")
-        cost = budget.estimate(spent_all)
+             f"{spent['input_tokens']} in, {spent['output_tokens']} out")
+        cost = budget.estimate(spent)
         if cost is not None:
             line(None, "at your rates", f"${cost:.6f}")
-        print("\nBedrock is reachable and every model this app will ask for "
-              "answers.")
+        print("\nBedrock is reachable. The app will use:")
+        for role, which in answered.items():
+            print(f"  {role:<11s} {which}")
         return 0
 
-    # Only reached when a probe failed: the loop's `else` returns on success.
+    # Only reached when a role had no id that answered.
     print("\n  A validation error naming the model usually means the id "
           "\n  is not available in this region, or the account has not "
           "\n  been granted access to it. `aws bedrock list-foundation-models"
