@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 from typing import Optional
 
 #: A fenced block, however the model labelled it.
@@ -51,10 +52,30 @@ _IMPORTS_CADQUERY = re.compile(r"^\s*import\s+cadquery(?!\s+as)", re.MULTILINE)
 
 
 def _parses(code: str) -> Optional[SyntaxError]:
+    """The syntax error in this code, or None if there is none to find.
+
+    A generated script is one enormous chained expression - 350 lines of
+    ``.faces().workplane().pushPoints([...]).hole()`` is a very deep tree -
+    and ``ast.parse`` recurses per node. Measured: it raised
+    ``RecursionError: maximum recursion depth exceeded during ast
+    construction`` and, because this module treated that as a failure, took
+    runs with it that had been producing a solid.
+
+    So the limit is lifted for the parse and anything that still goes wrong
+    is read as "cannot tell" - which means leave the script alone and let
+    the kernel have it. This layer is only ever allowed to be neutral or
+    better than doing nothing.
+    """
+    was = sys.getrecursionlimit()
     try:
+        sys.setrecursionlimit(max(was, 20000))
         ast.parse(code)
     except SyntaxError as bad:
         return bad
+    except Exception:            # RecursionError, MemoryError, anything
+        return None
+    finally:
+        sys.setrecursionlimit(was)
     return None
 
 
@@ -151,7 +172,7 @@ def looks_truncated(code: str) -> bool:
     return bool(tail) and tail[-1] in "([{,=+-*/" or opens - closes > 1
 
 
-def normalise(code: str) -> tuple[str, list[str]]:
+def _normalise(code: str) -> tuple[str, list[str]]:
     """The script as it should have arrived, and what had to be mended.
 
     Returns the code unchanged and an empty list when nothing was wrong,
@@ -176,7 +197,7 @@ def normalise(code: str) -> tuple[str, list[str]]:
     return out, notes
 
 
-def complaint(code: str) -> str:
+def _complaint(code: str) -> str:
     """What to tell the Error Refiner when the script will not parse.
 
     Names the line and the column, and says plainly when the reply looks
@@ -264,7 +285,7 @@ _ADVICE: tuple[tuple[str, str], ...] = (
 )
 
 
-def advice(error: str) -> str:
+def _advice(error: str) -> str:
     """What to do about this error, where the traceback does not say.
 
     Returns an empty string for anything unrecognised, so the Error
@@ -277,3 +298,34 @@ def advice(error: str) -> str:
         return ""
     return ("\n\nWhat this error means in the CadQuery API:\n"
             + "\n".join("  - " + line for line in found))
+
+
+# ---------------------------------------------------------------------------
+# Nothing here may raise
+# ---------------------------------------------------------------------------
+#
+# A repair layer that throws is worse than no repair layer: it turns a
+# script the kernel might have built into a run that never started. Every
+# entry point is wrapped, and on any surprise the caller gets the input
+# back unchanged.
+
+
+def normalise(code: str) -> tuple[str, list[str]]:
+    try:
+        return _normalise(code)
+    except Exception:
+        return code, []
+
+
+def complaint(code: str) -> str:
+    try:
+        return _complaint(code)
+    except Exception:
+        return ""
+
+
+def advice(error: str) -> str:
+    try:
+        return _advice(error)
+    except Exception:
+        return ""

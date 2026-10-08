@@ -917,7 +917,14 @@ class OpenAICompatibleClient:
             try:
                 return self._post_once(model, messages, asked, role)
             except _ContextTooLong as full:
-                room = min(full.room_for_reply(), asked - 1)
+                # The endpoint's arithmetic first - it is usually right. If
+                # it is refused again the reported prompt size was a lower
+                # bound ("at least N"), and shaving a token off achieves
+                # nothing: measured, three refits went 16000 -> 15935 ->
+                # 15934 -> 15933 and gave up. So after the first, halve.
+                reported = full.room_for_reply()
+                room = min(reported, asked - 1) if asked > reported \
+                    else asked // 2
                 if room < _CONTEXT_FLOOR:
                     raise RuntimeError(
                         f"{full} - the prompt alone is "
@@ -1351,7 +1358,7 @@ _CONTEXT_MARGIN = 64
 #: How many times to shrink the ceiling before giving up. The endpoint's
 #: own "at least N input tokens" is a lower bound, so one refit is not
 #: always enough.
-_CONTEXT_REFITS = 3
+_CONTEXT_REFITS = 4
 
 #: Below this a reply is not worth having, so say so instead of shrinking
 #: towards nothing.

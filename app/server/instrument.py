@@ -480,7 +480,14 @@ class InstrumentedExecutor(Executor):
         # expression it never bound. Mended here, before a subprocess is
         # spent on it, and said out loud so the transcript shows what was
         # changed. Geometry is never touched - see app/server/repair.py.
-        cadquery_code, mended = repair.normalise(cadquery_code)
+        # Belt and braces: repair.normalise does not raise, and if it ever
+        # did the script must still reach the kernel. A repair layer that
+        # throws is worse than none - it turns a part the kernel might have
+        # built into a run that never started.
+        try:
+            cadquery_code, mended = repair.normalise(cadquery_code)
+        except Exception:
+            mended = []
         for note in mended:
             ctx.emit(PHASE_LOG, STATUS_INFO, f"The script arrived damaged: {note}.")
 
@@ -493,7 +500,10 @@ class InstrumentedExecutor(Executor):
 
         # A script that will not parse cannot be run, and a traceback from a
         # subprocess says less about it than the parser already knows.
-        will_not_parse = repair.complaint(cadquery_code)
+        try:
+            will_not_parse = repair.complaint(cadquery_code)
+        except Exception:
+            will_not_parse = ""
         if will_not_parse:
             result = ExecutionResult(success=False, time_ms=0.0,
                                      error=will_not_parse,
