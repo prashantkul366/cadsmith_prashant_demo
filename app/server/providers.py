@@ -851,6 +851,11 @@ class OpenAICompatibleClient:
     def _fail(self, status: int, detail: str, model: str) -> None:
         if status == 400 and _VISION_ERROR.search(detail):
             raise _VisionUnsupported(detail)
+        if status == 400:
+            found = _CONTEXT_FULL.search(detail)
+            if found:
+                raise _ContextTooLong(int(found.group(1)), int(found.group(2)),
+                                      detail)
         if status in GATEWAY_STATUS:
             raise _GatewayBusy(
                 f"{self.config.provider} returned {status} for "
@@ -872,7 +877,26 @@ class OpenAICompatibleClient:
         last: Optional[_GatewayBusy] = None
         for attempt in range(GATEWAY_ATTEMPTS):
             try:
-                return self._post_once(model, messages, max_tokens, role)
+                try:
+                    return self._post_once(model, messages, max_tokens, role)
+                except _ContextTooLong as full:
+                    # Asked for more than the window had left. The endpoint
+                    # reported both numbers, so there is nothing to guess:
+                    # ask for what remains. Once - if that is still refused
+                    # the prompt itself does not fit and no ceiling helps.
+                    room = full.room_for_reply()
+                    if room < 256 or room >= max_tokens:
+                        raise RuntimeError(
+                            f"{full} - the prompt alone is "
+                            f"{full.prompt_tokens} tokens against a "
+                            f"{full.window}-token window, so no reply fits. "
+                            f"Serve the model with a longer context, or send "
+                            f"less.") from full
+                    self._note(
+                        f"{max_tokens} output tokens would not fit beside a "
+                        f"{full.prompt_tokens}-token prompt in a "
+                        f"{full.window}-token window; asking for {room}.")
+                    return self._post_once(model, messages, room, role)
             except _GatewayBusy as exc:
                 last = exc
                 if attempt + 1 >= GATEWAY_ATTEMPTS:
@@ -939,6 +963,16 @@ class OpenAICompatibleClient:
                         # without streaming before giving up on the call.
                         if _VISION_ERROR.search(detail):
                             raise _VisionUnsupported(detail)
+                        # A window that will not hold the prompt and the
+                        # ceiling together has nothing to do with
+                        # streaming. Read as "cannot stream" it cost a
+                        # wasted request AND switched streaming off for the
+                        # rest of the session - losing the one thing that
+                        # keeps a tunnel from timing out.
+                        full = _CONTEXT_FULL.search(detail)
+                        if full:
+                            raise _ContextTooLong(int(full.group(1)),
+                                                  int(full.group(2)), detail)
                         raise _StreamUnsupported(f"{response.status_code}")
                     self._fail(response.status_code, detail, model)
                 for line in response.iter_lines():
@@ -1275,6 +1309,38 @@ _THINKING_UNSUPPORTED = re.compile(
 #: first, so a deployment that has yet to catch up on effort keeps its
 #: streamed reasoning instead of losing both.
 _EFFORT_UNSUPPORTED = re.compile(r"output_config|\beffort\b", re.IGNORECASE)
+
+
+#: An endpoint refusing a request because the window will not hold the
+#: prompt *and* the ceiling asked for. Every one of them says so with both
+#: numbers in it, which is enough to work out what to ask for instead.
+#: vLLM's wording is the first; the hosted services phrase it differently
+#: but all name the window and the input.
+_CONTEXT_FULL = re.compile(
+    r"maximum context length is (\d+) tokens.*?"
+    r"(?:prompt contains at least |input (?:length|tokens)[^0-9]{0,20})(\d+)",
+    re.IGNORECASE | re.DOTALL)
+
+#: Left free for the reply after the clamp, so a prompt that grows by a few
+#: tokens between the refusal and the retry does not refuse again.
+_CONTEXT_MARGIN = 64
+
+
+class _ContextTooLong(RuntimeError):
+    """The window will not hold the prompt and the ceiling together.
+
+    Carries what the endpoint said about itself, because the only useful
+    response is to ask for exactly what is left rather than to guess a
+    smaller number.
+    """
+
+    def __init__(self, window: int, prompt_tokens: int, detail: str) -> None:
+        super().__init__(detail)
+        self.window = window
+        self.prompt_tokens = prompt_tokens
+
+    def room_for_reply(self) -> int:
+        return self.window - self.prompt_tokens - _CONTEXT_MARGIN
 
 
 class _GatewayBusy(RuntimeError):
