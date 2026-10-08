@@ -1138,3 +1138,35 @@ html[lang="ja"] .speclabel,html[lang="ja"] .specwant{letter-spacing:0}
    answers. */
 .params-body.busy .prow input,.params-body.busy .prow-num{
   opacity:.55;pointer-events:none}
+
+/* ── what the part costs to make ──────────────────────────────────────
+   Three numbers and how they were arrived at. The total leads because it
+   is the answer; the operations are under it because they are the
+   working, and an estimate whose working is hidden is a number nobody can
+   argue with. */
+.costtop{display:flex;align-items:baseline;gap:8px;padding:2px 0 10px}
+.costtop b{font-family:var(--mono);font-size:21px;color:var(--ink);
+  letter-spacing:-.02em}
+.costtop span{font-size:10.5px;color:var(--ink-dim)}
+.costrow{display:flex;align-items:baseline;justify-content:space-between;
+  gap:10px;padding:4px 0;border-bottom:1px solid var(--line-soft)}
+.costrow:last-of-type{border-bottom:none}
+.costrow span{font-size:11.5px;color:var(--ink-2)}
+.costrow b{font-family:var(--mono);font-size:12px;color:var(--ink);
+  display:flex;align-items:baseline;gap:6px}
+.costrow b u{font-family:var(--sans);font-size:9.5px;color:var(--ink-dim);
+  text-decoration:none;font-weight:400}
+.costhead{margin:11px 0 5px}
+.costop{display:grid;grid-template-columns:1fr auto auto;gap:3px 8px;
+  padding:3px 0;align-items:baseline}
+.costop span{font-size:11px;color:var(--ink-2)}
+.costop i{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);
+  font-style:normal}
+.costop b{font-family:var(--mono);font-size:11px;color:var(--ink)}
+.costop u{grid-column:1/-1;font-size:9.5px;color:var(--ink-dim);
+  text-decoration:none;line-height:1.35}
+.costnote{margin-top:11px;font-size:9.5px;color:var(--ink-dim);
+  line-height:1.45}
+.costwhy{margin:0;padding-left:14px;font-size:9.5px;color:var(--ink-dim);
+  line-height:1.5}
+.costwhy li{margin-bottom:2px}

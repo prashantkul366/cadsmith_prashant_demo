@@ -67,6 +67,16 @@ const API = (() => {
     /* The numbers a version's script declares, described well enough to put
        a control on each. Read from the code by the server, so the browser
        never has to decide for itself what counts as a parameter. */
+    /* What this version would cost to make. Separate from the version
+       record because it is worked out on demand rather than stored: the
+       rate table is a file somebody edits, and an estimate baked into the
+       run at the time it finished would be a number from an old table. */
+    cost(jobId, version) {
+      const at = version === undefined || version === null
+        ? "" : `?version=${encodeURIComponent(version)}`;
+      return json(`/api/jobs/${encodeURIComponent(jobId)}/cost${at}`);
+    },
+
     parameters(jobId, version) {
       const at = version === undefined || version === null
         ? "" : `?version=${encodeURIComponent(version)}`;

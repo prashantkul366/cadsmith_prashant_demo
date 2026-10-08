@@ -47,12 +47,30 @@ UNPRICED_PROCESSES = ("cast", "moulded", "printed", "extruded")
 
 
 @dataclass
+class Said:
+    """A sentence, kept as what it says rather than as the words.
+
+    The card is read in Japanese as readily as in English, and a sentence
+    built here would be built in one of them. So the key and its numbers
+    travel and the browser writes it, with the English text riding along
+    as the fallback for a key nobody has translated yet - the same shape
+    the validation checks and the drawing notes already use.
+    """
+    code: str
+    data: dict = field(default_factory=dict)
+    text: str = ""
+
+    def to_dict(self) -> dict:
+        return {"code": self.code, "data": self.data, "text": self.text}
+
+
+@dataclass
 class Operation:
     """One thing a shop does to the part, and what it costs."""
     name: str
     machine: str
     minutes: float
-    detail: str = ""
+    detail: Optional["Said"] = None
 
     def cost(self, rates: dict) -> float:
         hourly = _machine(rates, self.machine)["rate"]
@@ -60,7 +78,8 @@ class Operation:
 
     def to_dict(self, rates: dict) -> dict:
         return {"name": self.name, "machine": self.machine,
-                "minutes": round(self.minutes, 2), "detail": self.detail,
+                "minutes": round(self.minutes, 2),
+                "detail": self.detail.to_dict() if self.detail else None,
                 "cost": round(self.cost(rates), 1)}
 
 
@@ -80,7 +99,7 @@ class Estimate:
     setup_minutes: float = 0.0
     setup_cost: float = 0.0
     quantity: int = 1
-    assumptions: list[str] = field(default_factory=list)
+    assumptions: list = field(default_factory=list)
 
     @property
     def total(self) -> float:
@@ -105,7 +124,9 @@ class Estimate:
             "setup_cost": round(self.setup_cost, 1),
             "quantity": self.quantity,
             "total": round(self.total, 1),
-            "assumptions": list(self.assumptions),
+            "assumptions": [a.to_dict() if isinstance(a, Said)
+                            else {"code": "", "data": {}, "text": str(a)}
+                            for a in self.assumptions],
         }
 
 
@@ -236,8 +257,11 @@ def operations(geometry: dict, views: dict, spec: Any, rates: dict,
         footprint = (xlen * ylen * zlen) / thickness if thickness else 0.0
         stock_mm3 = footprint * thickness * (1.0 + waste)
         stock_kind = "sheet"
-        notes.append(f"sheet {thickness:g} mm thick, nested with "
-                     f"{waste * 100:.0f}% waste")
+        notes.append(Said(
+            "cost.a.sheet", {"mm": f"{thickness:g}",
+                             "pct": f"{waste * 100:.0f}"},
+            f"sheet {thickness:g} mm thick, nested with "
+            f"{waste * 100:.0f}% waste"))
         # The laser cuts the holes on the same pass it cuts the outline.
         # Sending a laser-cut part to a mill to be drilled is both a
         # machine it never visits and a setup it never pays for, and it
@@ -248,10 +272,14 @@ def operations(geometry: dict, views: dict, spec: Any, rates: dict,
             ops.append(Operation(
                 "profile cut", "laser",
                 (metres + bored) * _time(rates, "laser_per_m", 1.5),
-                f"{metres * 1000:.0f} mm of outline"
-                + (f" and {bored * 1000:.0f} mm around "
-                   f"{sum(h['count'] for h in holes)} hole(s)" if bored
-                   else "")))
+                Said("cost.d.cutholes" if bored else "cost.d.cut",
+                     {"mm": f"{metres * 1000:.0f}",
+                      "holes": sum(h["count"] for h in holes),
+                      "around": f"{bored * 1000:.0f}"},
+                     f"{metres * 1000:.0f} mm of outline"
+                     + (f" and {bored * 1000:.0f} mm around "
+                        f"{sum(h['count'] for h in holes)} hole(s)"
+                        if bored else ""))))
         holes = []          # cut, not drilled
         edge_m = metres + bored
     else:
@@ -261,28 +289,39 @@ def operations(geometry: dict, views: dict, spec: Any, rates: dict,
             length = zlen + allowance
             stock_mm3 = math.pi * (diameter / 2.0) ** 2 * length
             stock_kind = "bar"
-            notes.append(f"bar ø{diameter:g} x {length:g} mm, "
-                         f"{allowance:g} mm allowance")
+            notes.append(Said(
+                "cost.a.bar", {"dia": f"{diameter:g}", "len": f"{length:g}",
+                               "mm": f"{allowance:g}"},
+                f"bar ø{diameter:g} x {length:g} mm, "
+                f"{allowance:g} mm allowance"))
             machine = "lathe"
         else:
             stock_mm3 = ((xlen + allowance) * (ylen + allowance)
                          * (zlen + allowance))
             stock_kind = "billet"
-            notes.append(f"billet {xlen + allowance:g} x {ylen + allowance:g}"
-                         f" x {zlen + allowance:g} mm, {allowance:g} mm "
-                         f"allowance on each face")
+            notes.append(Said(
+                "cost.a.billet",
+                {"size": f"{xlen + allowance:g} x {ylen + allowance:g} x "
+                         f"{zlen + allowance:g}", "mm": f"{allowance:g}"},
+                f"billet {xlen + allowance:g} x {ylen + allowance:g} x "
+                f"{zlen + allowance:g} mm, {allowance:g} mm allowance on "
+                f"each face"))
             machine = "mill"
             face_area = (xlen + allowance) * (ylen + allowance)
             ops.append(Operation(
                 "face the stock", machine,
                 2 * face_area / 10000.0 * _time(rates, "facing_per_area", 1.2),
-                f"two faces, {face_area / 100:.0f} cm2 each"))
+                Said("cost.d.faces", {"cm2": f"{face_area / 100:.0f}"},
+                     f"two faces, {face_area / 100:.0f} cm2 each")))
 
         removed = max(0.0, stock_mm3 - part_mm3) / 1000.0      # cm3
         if removed > 0:
             ops.append(Operation(
                 "rough out", machine, removed / max(metal["removal"], 0.1),
-                f"{removed:.1f} cm3 at {metal['removal']:g} cm3/min"))
+                Said("cost.d.rough",
+                     {"cm3": f"{removed:.1f}",
+                      "rate": f"{metal['removal']:g}"},
+                     f"{removed:.1f} cm3 at {metal['removal']:g} cm3/min")))
             # The walls that leaves have to be finished, and a finishing
             # pass is slower than roughing by the area it covers rather
             # than the metal it takes.
@@ -290,7 +329,8 @@ def operations(geometry: dict, views: dict, spec: Any, rates: dict,
             ops.append(Operation(
                 "finish", machine,
                 walls * _time(rates, "finish_per_area", 2.5),
-                f"{walls * 100:.0f} cm2 of wall"))
+                Said("cost.d.wall", {"cm2": f"{walls * 100:.0f}"},
+                     f"{walls * 100:.0f} cm2 of wall")))
         edge_m = 2 * (xlen + ylen) / 1000.0
 
     # Holes are drilled whatever the part is made of or cut from.
@@ -303,7 +343,11 @@ def operations(geometry: dict, views: dict, spec: Any, rates: dict,
             depth / max(speed, 1.0) + _time(rates, "drill_overhead", 0.25))
         ops.append(Operation(
             "drill", "mill", minutes,
-            f"{hole['count']}x ø{hole['diameter']:g} through {depth:g} mm"))
+            Said("cost.d.drill",
+                 {"n": hole["count"], "dia": f"{hole['diameter']:g}",
+                  "depth": f"{depth:g}"},
+                 f"{hole['count']}x ø{hole['diameter']:g} through "
+                 f"{depth:g} mm")))
 
     # A fit is a reamed hole, and a thread is a tapped one. Both are read
     # from the specification rather than guessed at from a diameter.
@@ -312,13 +356,18 @@ def operations(geometry: dict, views: dict, spec: Any, rates: dict,
         ops.append(Operation(
             "ream to fit", "mill",
             len(fits) * _time(rates, "ream_extra", 0.8),
-            ", ".join(f.fit for f in fits[:4])))
-        notes.append(f"{len(fits)} fit(s) reamed rather than drilled")
+            Said("cost.d.ream",
+                 {"fits": ", ".join(f.fit for f in fits[:4])},
+                 ", ".join(f.fit for f in fits[:4]))))
+        notes.append(Said(
+            "cost.a.fits", {"n": len(fits)},
+            f"{len(fits)} fit(s) reamed rather than drilled"))
 
     if edge_m > 0:
         ops.append(Operation(
             "deburr", "bench", edge_m * _time(rates, "deburr_per_m", 2.0),
-            f"{edge_m * 1000:.0f} mm of edge"))
+            Said("cost.d.edge", {"mm": f"{edge_m * 1000:.0f}"},
+                 f"{edge_m * 1000:.0f} mm of edge")))
 
     return ops, {"stock_mm3": stock_mm3, "stock_kind": stock_kind,
                  "material_key": key, "notes": notes, "part_mm3": part_mm3}
@@ -352,8 +401,10 @@ def estimate(geometry: dict, views: dict, spec: Any = None,
         scrap_kg = max(0.0, stock["stock_mm3"] - stock["part_mm3"]) / 1e9 \
             * metal["density"]
         out.material_cost -= scrap_kg * metal["price"] * recovery
-        out.assumptions.append(
-            f"{recovery * 100:.0f}% of the swarf recovered against the stock")
+        out.assumptions.append(Said(
+            "cost.a.scrap", {"pct": f"{recovery * 100:.0f}"},
+            f"{recovery * 100:.0f}% of the swarf recovered against the "
+            f"stock"))
 
     out.machining_cost = sum(op.cost(rates) for op in ops)
 
@@ -370,23 +421,29 @@ def estimate(geometry: dict, views: dict, spec: Any = None,
     out.setup_minutes /= quantity
 
     if stock["material_key"] == "unknown":
-        out.assumptions.append(
+        out.assumptions.append(Said(
+            "cost.a.unknown", {"what": material or "the material"},
             f"{material or 'the material'} is not in the rate table, so a "
-            f"generic steel price was used - add it to rates.toml")
+            f"generic steel price was used - add it to rates.toml"))
     if not process:
-        out.assumptions.append(
+        out.assumptions.append(Said(
+            "cost.a.noprocess", {},
             "no process was proposed, so the part was costed as a milled "
-            "billet")
+            "billet"))
     elif process in UNPRICED_PROCESSES:
-        out.assumptions.append(
+        out.assumptions.append(Said(
+            "cost.a.tooling", {"process": process},
             f"a {process} part is paid for mostly in tooling, which this "
             f"model does not carry - what follows is what it would cost "
             f"machined from solid, which is an upper bound and not a "
-            f"{process} price")
+            f"{process} price"))
     elif process not in SHEET_PROCESSES + TURNED_PROCESSES \
             and process not in ("milled", "machined"):
-        out.assumptions.append(
+        out.assumptions.append(Said(
+            "cost.a.unpriced", {"process": process},
             f"'{process}' is not a process this model prices, so the part "
-            f"was costed as a milled billet")
-    out.assumptions.append(f"setup divided across a batch of {quantity}")
+            f"was costed as a milled billet"))
+    out.assumptions.append(Said(
+        "cost.a.batch", {"n": quantity},
+        f"setup divided across a batch of {quantity}"))
     return out

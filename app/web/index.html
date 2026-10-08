@@ -384,6 +384,19 @@
       <div class="rbody"><div class="tiles" id="usage"></div></div>
     </section>
 
+    <!-- What the part would cost to make. After the geometry, because an
+         estimate is about a part that exists: the stock it is cut from and
+         the operations that turn one into the other. Every figure traces
+         to a line in app/costing/rates.toml, which is meant to be edited,
+         and the assumptions are on the card rather than in a tooltip. -->
+    <section class="rcard" id="cardCost" data-card="cost" hidden>
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="cost.heading">Manufacturing cost</h2>
+        <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody"><div id="costBody"></div></div>
+    </section>
+
     <section class="rcard" data-card="prompts">
       <button class="rhead" data-card-toggle>
         <h2 data-i18n="input.samples">Benchmark prompts</h2>

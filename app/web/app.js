@@ -34,6 +34,9 @@ const fmt = value => {
 
 const S = {
   jobId: null,
+  //: The last estimate fetched, kept so the card can be redrawn in the
+  //: other language without asking the server for it again.
+  cost: null,
   versions: [],      // one entry per pipeline iteration or applied edit
   selected: -1,
   health: null,
@@ -875,6 +878,7 @@ async function selectVersion(index, options) {
   // otherwise holds the controls back for seconds while the part is already
   // on screen, which reads as the panel having nothing to show.
   const controls = loadParameters(version.iteration);
+  loadCost(version.iteration);
 
   try {
     const box = await Viewer.load(
@@ -2281,6 +2285,99 @@ function endParameterRebuild() {
    anchored to the value it read, so a rebuilt part would otherwise re-centre
    every slider under the hand that just moved it; a range that still holds
    the new value is kept. */
+/* ═══════════════════════ what it costs to make ═══════════════════════ */
+
+/* Worked out on demand rather than stored with the run: the rates are a
+   file somebody edits, and an estimate baked in when the run finished
+   would be a number from a table that has since moved. Failing is not an
+   error either - a part still exists whether or not anybody can price it -
+   so the card says why and the run carries on. */
+async function loadCost(iteration) {
+  const body = $("#costBody");
+  if (!body) return;
+  try {
+    const answer = await API.cost(S.jobId, iteration);
+    if (!answer || !answer.cost) {
+      if (answer && answer.error) {
+        body.innerHTML = `<div class="await">${
+          esc(t("cost.failed", { why: answer.error }))}</div>`;
+        showCard("cost", true);
+      } else {
+        showCard("cost", false);
+      }
+      return;
+    }
+    S.cost = answer.cost;
+    renderCost();
+    showCard("cost", true);
+  } catch (error) {
+    showCard("cost", false);
+  }
+}
+
+const yen = n => "\u00a5" + Math.round(n).toLocaleString(localeTag());
+
+function renderCost() {
+  const body = $("#costBody");
+  const c = S.cost;
+  if (!body || !c) return;
+
+  // The three numbers, then how they were arrived at. Setup is its own
+  // line because it is most of a one-off and almost none of a hundred,
+  // and a total that hides it cannot be argued with.
+  const line = (label, value, note) => `
+    <div class="costrow">
+      <span>${esc(label)}</span>
+      <b>${esc(value)}${note ? `<u>${esc(note)}</u>` : ""}</b>
+    </div>`;
+
+  const stockKind = I18N.has("cost.stock." + c.stock_kind)
+    ? t("cost.stock." + c.stock_kind) : c.stock_kind;
+
+  // A sentence the server kept as a key and its numbers, written here in
+  // whichever language is being read. The English text rides along for a
+  // key nobody has translated yet, which is better than an empty line.
+  const said = s => {
+    if (!s) return "";
+    // A process is stored in English because tables are keyed on it, and
+    // it is spelled in the reader's language wherever it is shown - the
+    // same spelling the drawing's MATERIAL line uses.
+    const data = { ...(s.data || {}) };
+    if (data.process && I18N.has("process." + data.process))
+      data.process = t("process." + data.process);
+    return I18N.has(s.code) ? t(s.code, data) : (s.text || "");
+  };
+
+  const operations = (c.operations || []).map(op => `
+    <div class="costop">
+      <span>${esc(I18N.has("op." + op.name) ? t("op." + op.name) : op.name)}</span>
+      <i>${esc(t("cost.minutes", { n: op.minutes.toFixed(1) }))}</i>
+      <b>${esc(yen(op.cost))}</b>
+      <u>${esc(said(op.detail))}</u>
+    </div>`).join("");
+
+  body.innerHTML = `
+    <div class="costtop">
+      <b>${esc(yen(c.total))}</b>
+      <span>${esc(t("cost.total"))} \u00b7 ${
+        esc(t("cost.batch", { n: c.quantity }))}</span>
+    </div>
+    ${line(t("cost.material"), yen(c.material_cost),
+           t("cost.stock", { kind: stockKind,
+                             g: Math.round(c.stock_kg * 1000)
+                                  .toLocaleString(localeTag()) }))}
+    ${line(t("cost.machining"), yen(c.machining_cost),
+           t("cost.removed", { n: (c.removed_mm3 / 1000).toFixed(1) }))}
+    ${line(t("cost.setup"), yen(c.setup_cost),
+           t("cost.minutes", { n: c.setup_minutes.toFixed(0) }))}
+    ${operations ? `<div class="eyebrow costhead">${
+      esc(t("cost.operations"))}</div>${operations}` : ""}
+    <div class="costnote">${esc(t("cost.estimate", { date: c.revised }))}</div>
+    ${(c.assumptions || []).length ? `<div class="eyebrow costhead">${
+      esc(t("cost.assumed"))}</div><ul class="costwhy">${
+      c.assumptions.map(a => `<li>${esc(said(a))}</li>`).join("")}</ul>` : ""}`;
+}
+
 async function loadParameters(iteration) {
   const previous = new Map(S.params.map(p => [p.name, p]));
   S.paramBase = iteration;
@@ -2630,6 +2727,7 @@ function relocalise() {
   renderIterations();
   // A catalogue part has no design plan, but its panel still has text.
   if (S.designPlan || S.catalog) renderPlan(S.designPlan);
+  if (S.cost) renderCost();
   const version = S.versions[S.selected];
   if (version) { renderKernelFacts(version); renderValidation(version); }
   if ($("#hist").classList.contains("open")) loadHistory();

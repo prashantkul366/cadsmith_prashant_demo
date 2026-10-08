@@ -44,6 +44,105 @@ const I18N = (function () {
     "input.newpart":    ["Start a new part", "新しい部品を作成"],
     "props.heading":    ["Properties", "プロパティ"],
     "usage.heading":    ["Token tracking", "トークン使用量"],
+
+    /* What the part would cost to make. An estimate for comparing one
+       design against another, which the card says in as many words - a
+       figure with no provenance is worse than no figure, so the stock it
+       assumed and the rates it used are on the card rather than behind a
+       tooltip. */
+    "cost.heading":     ["Manufacturing cost", "製造コスト"],
+    "cost.material":    ["Material", "材料費"],
+    "cost.machining":   ["Machining", "加工費"],
+    "cost.setup":       ["Setup", "段取り費"],
+    "cost.total":       ["Per part", "1個あたり"],
+    "cost.stock":       ["{kind}, {g} g", "素材 {kind}、{g} g"],
+    "cost.stock.billet": ["billet", "ビレット"],
+    "cost.stock.bar":   ["bar", "丸棒"],
+    "cost.stock.sheet": ["sheet", "板材"],
+    "cost.removed":     ["{n} cm\u00b3 removed", "除去 {n} cm\u00b3"],
+    "cost.batch":       ["batch of {n}", "{n} 個ロット"],
+    "cost.operations":  ["Operations", "工程"],
+    "cost.minutes":     ["{n} min", "{n} 分"],
+    "cost.estimate":    [
+      "An estimate for comparing designs, not a quotation. Rates from "
+      + "app/costing/rates.toml, revised {date}.",
+      "設計比較のための概算であり、見積ではありません。レートは "
+      + "app/costing/rates.toml（{date} 改訂）。"],
+    "cost.assumed":     ["What it assumed", "前提条件"],
+    "cost.none":        ["No part has been built yet.", "まだ部品がありません。"],
+    "cost.failed":      ["The cost could not be worked out: {why}",
+                         "コストを算出できませんでした：{why}"],
+    "op.face the stock": ["face the stock", "素材の面出し"],
+    "op.rough out":     ["rough out", "荒加工"],
+    "op.finish":        ["finish", "仕上げ加工"],
+    "op.drill":         ["drill", "穴あけ"],
+    "op.ream to fit":   ["ream to fit", "リーマ仕上げ"],
+    "op.profile cut":   ["profile cut", "外形切断"],
+    "op.deburr":        ["deburr", "バリ取り"],
+
+    /* What each operation was working on, and what the estimate assumed.
+       Keys rather than sentences, because a sentence built on the server
+       is built in one language - see costing.Said. */
+    "cost.d.faces":     ["two faces, {cm2} cm\u00b2 each",
+                         "両面、各 {cm2} cm\u00b2"],
+    "cost.d.rough":     ["{cm3} cm\u00b3 at {rate} cm\u00b3/min",
+                         "{cm3} cm\u00b3、{rate} cm\u00b3/分"],
+    "cost.d.wall":      ["{cm2} cm\u00b2 of wall", "壁面 {cm2} cm\u00b2"],
+    "cost.d.drill":     ["{n}\u00d7 \u00f8{dia} through {depth} mm",
+                         "{n} 箇所 \u00f8{dia}、深さ {depth} mm"],
+    "cost.d.ream":      ["to {fits}", "{fits} 仕上げ"],
+    "cost.d.cut":       ["{mm} mm of outline", "外形 {mm} mm"],
+    "cost.d.cutholes":  ["{mm} mm of outline and {around} mm around "
+                         + "{holes} hole(s)",
+                         "外形 {mm} mm と穴 {holes} 箇所まわり {around} mm"],
+    "cost.d.edge":      ["{mm} mm of edge", "エッジ {mm} mm"],
+    "cost.a.billet":    ["billet {size} mm, {mm} mm allowance on each face",
+                         "ビレット {size} mm（各面 {mm} mm の取り代）"],
+    "cost.a.bar":       ["bar \u00f8{dia} \u00d7 {len} mm, {mm} mm allowance",
+                         "丸棒 \u00f8{dia} \u00d7 {len} mm（取り代 {mm} mm）"],
+    "cost.a.sheet":     ["sheet {mm} mm thick, nested with {pct}% waste",
+                         "板厚 {mm} mm、ネスティング歩留り損 {pct}%"],
+    "cost.a.fits":      ["{n} fit(s) reamed rather than drilled",
+                         "はめあい {n} 箇所はリーマ仕上げ"],
+    "cost.a.scrap":     ["{pct}% of the swarf recovered against the stock",
+                         "切り屑の {pct}% を材料費から控除"],
+    "cost.a.unknown":   [
+      "{what} is not in the rate table, so a generic steel price was used "
+      + "\u2014 add it to rates.toml",
+      "{what} はレート表にないため、一般的な鋼材価格を使用しました "
+      + "\u2014 rates.toml に追加してください"],
+    "cost.a.noprocess": [
+      "no process was proposed, so the part was costed as a milled billet",
+      "加工法の提案がないため、ビレットからの機械加工として算出しました"],
+    "cost.a.tooling":   [
+      "a {process} part is paid for mostly in tooling, which this model "
+      + "does not carry \u2014 what follows is what it would cost machined "
+      + "from solid, which is an upper bound and not a {process} price",
+      "{process} 部品の費用は主に金型・治具であり、本モデルは扱いません "
+      + "\u2014 以下は削り出しの場合の費用で、上限値であって "
+      + "{process} の価格ではありません"],
+    "cost.a.unpriced":  [
+      "'{process}' is not a process this model prices, so the part was "
+      + "costed as a milled billet",
+      "「{process}」は本モデルが価格を持たない加工法のため、ビレットからの"
+      + "機械加工として算出しました"],
+    "cost.a.batch":     ["setup divided across a batch of {n}",
+                         "段取り費を {n} 個で按分"],
+
+    /* The nine processes the app will name on a sheet or in an estimate.
+       Kept to that list on purpose - a process drives the tolerance a
+       shop can hold - so the English value stays in the data and only its
+       spelling changes here. The drawing's MATERIAL line uses the same
+       words, which is the point: one part, one vocabulary. */
+    "process.machined": ["machined", "機械加工"],
+    "process.turned":   ["turned", "旋削"],
+    "process.milled":   ["milled", "フライス加工"],
+    "process.cast":     ["cast", "鋳造"],
+    "process.moulded":  ["moulded", "成形"],
+    "process.printed":  ["printed", "積層造形"],
+    "process.sheet":    ["sheet", "板金"],
+    "process.fabricated": ["fabricated", "溶接組立"],
+    "process.extruded": ["extruded", "押出"],
     "usage.tok":        ["tokens", "トークン"],
     "usage.in":         ["in", "入力"],
     "usage.out":        ["out", "出力"],

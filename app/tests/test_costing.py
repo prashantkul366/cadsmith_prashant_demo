@@ -96,10 +96,22 @@ def main() -> int:
         machines = {op["machine"] for op in sheet["operations"]}
         check("a laser-cut part never visits a mill", "mill" not in machines,
               ", ".join(sorted(machines)))
+        cut = next(op for op in sheet["operations"]
+                   if op["machine"] == "laser")
         check("because the laser cuts the holes on the same pass",
-              any("hole" in op["detail"] for op in sheet["operations"]
-                  if op["machine"] == "laser"),
-              str([op["detail"] for op in sheet["operations"]]))
+              cut["detail"]["code"] == "cost.d.cutholes"
+              and cut["detail"]["data"]["holes"] == 4,
+              str(cut["detail"]))
+        # The sentence is kept as a key and its numbers so the card can be
+        # read in either language; the English text rides along as the
+        # fallback for a key nobody has translated yet.
+        check("and every sentence travels as a key, not as words",
+              all(op["detail"] is None
+                  or (op["detail"]["code"] and op["detail"]["text"])
+                  for op in sheet["operations"] + milled["operations"])
+              and all(a["code"] and a["text"]
+                      for a in milled["assumptions"]),
+              str([op["detail"]["code"] for op in milled["operations"]]))
 
         print("\nEvery figure comes from the table, so editing it moves them")
         dearer = copy.deepcopy(rates)
@@ -134,28 +146,28 @@ def main() -> int:
               f"¥{batched['total']:,.0f} vs ¥{milled['total']:,.0f}")
 
         print("\nWhat it assumed, said out loud")
+        def codes(estimate):
+            return [a["code"] for a in estimate["assumptions"]]
+
         unknown = price("milled", material="unobtainium")
         check("a material it does not know is reported, not hidden",
-              any("rates.toml" in note for note in unknown["assumptions"]),
-              "; ".join(unknown["assumptions"])[:90])
+              "cost.a.unknown" in codes(unknown), str(codes(unknown)))
         check("and so is the stock it decided to start from",
-              any("billet" in note for note in milled["assumptions"]),
-              "; ".join(milled["assumptions"])[:90])
+              "cost.a.billet" in codes(milled), str(codes(milled)))
         check("and the batch the setup was divided by",
-              any("batch of 1" in note for note in milled["assumptions"]))
+              "cost.a.batch" in codes(milled), str(codes(milled)))
 
         print("\nA process it cannot price says so rather than guessing")
-        for process, mark in (("moulded", "tooling"),
-                              ("forged", "not a process this model prices")):
-            said = price(process)["assumptions"]
+        for process, want in (("moulded", "cost.a.tooling"),
+                              ("forged", "cost.a.unpriced")):
+            said = [a["code"] for a in price(process)["assumptions"]]
             check(f"a {process} part is flagged, not quietly machined",
-                  any(mark in note for note in said),
-                  "; ".join(said)[:80])
+                  want in said, str(said))
         for process in ("milled", "sheet", "turned"):
-            said = price(process)["assumptions"]
+            said = [a["code"] for a in price(process)["assumptions"]]
             check(f"while {process} is priced without a caveat",
-                  not any("does not carry" in note
-                          or "not a process" in note for note in said))
+                  not ({"cost.a.tooling", "cost.a.unpriced"} & set(said)),
+                  str(said))
 
         print("\nA fit is reamed, not drilled")
         block = (cq.Workplane("XY").box(60, 40, 30)
