@@ -144,6 +144,18 @@ class RunContext:
         return d
 
     def emit(self, phase: str, status: str, message: str = "", **data: Any):
+        # Which road this run is on, stamped on every event rather than
+        # guessed by the reader. The two roads share the pipeline's phase
+        # names - both plan, both report a `code` stage, both export - so
+        # there is no phase a reader can take as evidence of either, and the
+        # browser was taking `code` as evidence of the script one. It then
+        # told anyone watching a FreeCAD build that CadQuery was being
+        # written, for as long as the first builder call took.
+        #
+        # `source` is set before the first stage event of either road, so
+        # the very first event a run emits already carries this, and a
+        # replayed run carries it too.
+        data.setdefault("road", self.source)
         return self.sink.emit(phase, status, message, **data)
 
 

@@ -182,6 +182,9 @@ const I18N = (function () {
     "detail.grounded":  ["Retrieving standard dimensions", "規格寸法を参照中"],
     "detail.decompose": ["Decomposing the request", "要求を分解中"],
     "detail.apidocs":   ["Retrieving CadQuery API docs", "CadQuery API 文書を参照中"],
+    /* The same stage on the tool road, which retrieves no documents:
+       it reads what operations FreeCAD will accept. */
+    "detail.tools":     ["Reading the available operations", "利用可能な操作を参照中"],
     "detail.lines":     ["{n} lines written", "{n} 行を生成"],
     "detail.kernel":    ["Running in the OCCT kernel", "OCCT カーネルで実行中"],
     "detail.execfail":  ["Execution failed — repairing", "実行に失敗 — 修復中"],

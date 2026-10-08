@@ -455,8 +455,39 @@ function stageLabel(stage) {
   return special ? stage.label + ".freecad" : stage.label;
 }
 
+/* How long the running stage has been running.
+
+   A Planner call on a hard part is a minute of a model thinking, and a
+   strip that says only "Planning the part" cannot be told apart from one
+   that has hung - which is exactly how it was read. The clock is the
+   difference between the two, and it costs one text node a second.
+
+   It ticks in place rather than through renderStages, because redrawing
+   the strip every second restarts the pulse on the active bullet and
+   throws away the detail line that arrived with the last event. */
+let stageClock = 0;
+
+function paintClock() {
+  const node = $("#pipe .pstep.act .pms");
+  if (!node) return;
+  const seconds = Math.round((Date.now() - (S.stage.at || Date.now())) / 1000);
+  node.textContent = seconds >= 1 ? `${seconds}s` : "";
+}
+
+function startClock() {
+  if (!stageClock) stageClock = setInterval(paintClock, 1000);
+}
+
+function stopClock() {
+  if (stageClock) { clearInterval(stageClock); stageClock = 0; }
+}
+
 function renderStages(activeKey, detail) {
-  S.stage = { key: activeKey, detail: detail || "" };
+  // Only a change of stage restarts the clock. A detail line arriving for
+  // the stage already running is news about the same wait, not a new one.
+  const at = S.stage && S.stage.key === activeKey && S.stage.at
+    ? S.stage.at : Date.now();
+  S.stage = { key: activeKey, detail: detail || "", at };
   const activeIndex = STAGES.findIndex(s => s.key === activeKey);
   const phase = $("#thinkPhase");
   if (phase) {
@@ -471,12 +502,16 @@ function renderStages(activeKey, detail) {
           <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg><i class="pspin"></i>
         </div>
         <div>
-          <div class="plabel">${esc(t(stageLabel(stage)))}</div>
+          <div class="plabel">${esc(t(stageLabel(stage)))}<span class="pms"></span></div>
           ${i === activeIndex && detail
             ? `<div class="pdetail">${esc(detail)}</div>` : ""}
         </div>
       </div>${i < STAGES.length - 1 ? '<div class="pline"></div>' : ""}`;
   }).join("");
+  // Nothing is waiting once the last stage is lit, and a finished run must
+  // not leave an interval behind counting up forever.
+  if (activeKey === "done" || activeIndex < 0) stopClock();
+  else { paintClock(); startClock(); }
 }
 
 function appendLog(line) {
@@ -503,6 +538,14 @@ function showOverlay(which) {
 const PHASE_STAGE = {
   plan: "plan", code: "code", execute: "execute", error_fix: "execute",
   render: "judge", judge: "judge", refine: "code",
+  /* The tool road reports `freecad` for every operation it lands, and that
+     is the whole build - there is no script to write and nothing to run
+     afterwards. Left unmapped, the strip froze on whichever stage came
+     before and stayed there for the length of the build, so a run that was
+     working looked hung. It is the execute stage, which stageLabel renames
+     for this road. `spec` is the kernel measuring the finished part against
+     the plan, which is validation. */
+  freecad: "execute", spec: "judge",
 };
 
 /* ══════════ Reasoning panel ══════════
@@ -817,18 +860,31 @@ function handleEvent(event) {
   if (data && data.tokens) noteUsage(phase, data.tokens);
   if (data && data.spend) { S.spend = data.spend; renderUsage(); }
 
-  // A `freecad` event can only happen on the tool road; a `code` event can
-  // only happen on the script one. Whichever arrives first decides, and a
-  // fall-through relabels the strip rather than leaving it lying.
-  if (phase === "freecad") S.road = "freecad";
-  if (phase === "code") S.road = "script";
+  // Which road this run is on. The server stamps it on every event, from
+  // the first one, because no phase name distinguishes the two roads: both
+  // plan, both report a `code` stage, and both export. Guessing it from the
+  // phase meant a FreeCAD build spent its first model call claiming to be
+  // writing CadQuery, which is the longest a wrong label gets to sit there.
+  // A run that falls through from FreeCAD to the script pipeline relabels
+  // itself at the moment it does, because `source` changes with it.
+  if (data && data.road === "freecad") S.road = "freecad";
+  else if (data && data.road === "pipeline") S.road = "script";
+  // A run recorded before the server said so, replayed now.
+  else if (phase === "freecad") S.road = "freecad";
 
   const stage = PHASE_STAGE[phase];
   if (stage) {
     let detail = "";
     if (phase === "ground") detail = t("detail.grounded");
     if (phase === "plan" && status === "started") detail = t("detail.decompose");
-    if (phase === "code" && status === "started") detail = t("detail.apidocs");
+    // The tool road reaches this stage too, and it retrieves no API docs:
+    // it reads the list of operations it may call.
+    if (phase === "code" && status === "started")
+      detail = t(S.road === "freecad" ? "detail.tools" : "detail.apidocs");
+    // The operation FreeCAD just finished. It changes every call, which is
+    // what makes a long build legible as a build.
+    if (phase === "freecad" && data && data.step && data.step.tool)
+      detail = data.step.tool;
     if (phase === "code" && status === "ok") detail = t("detail.lines", { n: data.lines });
     if (phase === "execute" && status === "started") detail = t("detail.kernel");
     if (phase === "execute" && status === "failed") detail = t("detail.execfail");
@@ -1577,6 +1633,7 @@ function thinkSummary() {
 }
 
 function finishRun(data) {
+  stopClock();
   thinkSummary();
   // The run held the composer while it worked; give it back. selectVersion
   // decides only whether the next thing typed edits this part or starts
@@ -1635,6 +1692,7 @@ function modelAdvice(message) {
 }
 
 function failRun(message) {
+  stopClock();
   S.busy = false;
   setComposerEnabled(true);
   Viewer.building = false;
