@@ -1,0 +1,144 @@
+# What a part costs to make, in yen.
+#
+# THIS FILE IS MEANT TO BE EDITED. Every number in it is a starting value,
+# not a quotation: material prices move weekly and a shop rate is whatever
+# your shop charges. Nothing here is derived from anything else, so a
+# number you change is a number that changes the answer, and the breakdown
+# on screen names the line it came from.
+#
+# A cost from this file is an estimate for comparing two designs, not a
+# price to put in front of a customer. The app says so on the output.
+#
+# Units are stated on every line because getting them wrong is the easiest
+# way to be out by a thousand.
+
+[meta]
+currency = "JPY"
+# Shown beside the estimate, so a figure six months old says so.
+revised = "2026-10-08"
+
+# ---------------------------------------------------------------------------
+# Materials: what the stock costs and what it weighs.
+#
+# `density` is kg/m3 and is physics - leave it alone unless the grade is
+# wrong. `price` is yen per kilogramme of bar, plate or billet as bought,
+# and is the number to argue with. `removal` is how fast a 3-axis mill
+# takes metal off it in cm3/min, roughing, with a cutter that suits the
+# material; it is what turns a volume into minutes.
+# ---------------------------------------------------------------------------
+
+[materials.aluminium]
+density = 2700.0
+price = 950.0
+removal = 90.0
+aliases = ["al", "6061", "6061-t6", "6082", "6082-t6", "5052", "a5052", "7075"]
+
+[materials.steel]
+density = 7850.0
+price = 280.0
+removal = 25.0
+aliases = ["mild steel", "carbon steel", "s45c", "s50c", "ss400", "sphc"]
+
+[materials.stainless]
+density = 7900.0
+price = 1400.0
+removal = 12.0
+aliases = ["stainless steel", "sus", "sus304", "sus316", "sus301", "304",
+           "316", "301", "17-4"]
+
+[materials.brass]
+density = 8500.0
+price = 1600.0
+removal = 120.0
+aliases = ["c3604", "cuzn", "bronze", "c2801"]
+
+[materials.titanium]
+density = 4430.0
+price = 11000.0
+removal = 5.0
+aliases = ["ti", "ti-6al-4v", "ti64", "gr5"]
+
+[materials.plastic]
+density = 1400.0
+price = 900.0
+removal = 200.0
+aliases = ["abs", "pom", "delrin", "nylon", "pa6", "pa66", "pc", "pp",
+           "pe", "peek", "ptfe", "acetal"]
+
+# Used when the Planner names a material this table does not know. Said
+# plainly on the output rather than quietly assumed.
+[materials.unknown]
+density = 7850.0
+price = 500.0
+removal = 25.0
+aliases = []
+
+# ---------------------------------------------------------------------------
+# Machines: what an hour on each costs, and what it costs to set one up.
+#
+# `rate` is yen per hour, machine and operator together. `setup` is minutes
+# of setting up and proving out, charged once per part here - which is only
+# right for a one-off. For a batch, divide it: see [batch].
+# ---------------------------------------------------------------------------
+
+[machines.mill]
+rate = 7500.0
+setup = 30.0
+
+[machines.lathe]
+rate = 6500.0
+setup = 25.0
+
+[machines.laser]
+rate = 10000.0
+setup = 10.0
+
+[machines.press]
+rate = 5000.0
+setup = 45.0
+
+[machines.bench]
+rate = 4000.0
+setup = 5.0
+
+# ---------------------------------------------------------------------------
+# How long an operation takes.
+#
+# These are the formulas' constants. Each says what it means, because a
+# number without that is a number nobody can correct.
+# ---------------------------------------------------------------------------
+
+[times]
+# Minutes to face off one side of the stock, per 10000 mm2 of face.
+facing_per_area = 1.2
+# Drilling feed in mm of depth per minute, for a hole of ordinary size.
+# Scaled by the material's removal rate relative to steel.
+drill_feed = 120.0
+# Minutes added per hole for approach, retract and tool change.
+drill_overhead = 0.25
+# A reamed or H7 hole is drilled undersize and then reamed: minutes extra.
+ream_extra = 0.8
+# Tapping is slower than drilling: minutes per mm of thread depth.
+tap_per_mm = 0.04
+# Minutes per metre of profile cut on a laser, 1 mm to 3 mm sheet.
+laser_per_m = 1.5
+# Minutes per metre of edge chamfered or deburred on the bench.
+deburr_per_m = 2.0
+# Finishing pass over the walls a pocket leaves, minutes per 10000 mm2.
+finish_per_area = 2.5
+
+[stock]
+# How much bigger than the part the billet is bought, in mm on each face.
+# A machined part starts from stock that has to be held and faced.
+allowance_mm = 3.0
+# What is left over from a sheet part after nesting, as a fraction. 0.25
+# means a part needs stock 25% larger in area than the part itself.
+sheet_waste = 0.25
+# What the swarf is worth back, as a fraction of the stock price. Zero is
+# the safe assumption for a small shop.
+scrap_recovery = 0.0
+
+[batch]
+# How many of the part are being made. The setup is divided by this, which
+# is most of why a second part costs so much less than the first.
+quantity = 1

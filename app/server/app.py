@@ -27,6 +27,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 
 from . import catalog_run, i18n, providers, tls
+from . import drawing as drawing_mod
 from .drawing import ensure_dxf, ensure_sheet
 from .edits import Change, describe_parameters, parameters
 from .jobs import JobManager, JobOptions, STATUS_DONE, STATUS_ERROR
@@ -433,6 +434,56 @@ def _version_code(job, version: Optional[int], lang: str) -> tuple[int, str]:
         raise HTTPException(status_code=404,
                             detail=i18n.t("http.artifactmissing", lang))
     return chosen, path.read_text(encoding="utf-8")
+
+
+@app.get("/api/jobs/{job_id}/cost")
+def job_cost(job_id: str, request: Request,
+             version: Optional[int] = None) -> JSONResponse:
+    """What this version would cost to make, and what that was worked out from.
+
+    Read off the solid rather than asked for: the geometry is what is true,
+    and a hole is a hole whatever the plan called it. The two things the
+    model cannot know - what it is made of and how it is made - come from
+    the specification the Planner proposed, which is also what the drawing
+    prints, so the sheet and the estimate never disagree about the part.
+
+    An estimate and not a quotation. Every rate behind it is a line in
+    app/costing/rates.toml that whoever owns this repository is meant to
+    edit, and `assumptions` names the ones that were guessed at.
+    """
+    lang = _lang(request)
+    job = manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=i18n.t("http.nojob", lang))
+
+    if version is None:
+        chosen = job.versions[-1].get("iteration") if job.versions else None
+    else:
+        try:
+            chosen = int(version)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400,
+                                detail=i18n.t("http.badversion", lang))
+
+    step = (manager.artifact_path(job.id, chosen, "model.step")
+            if chosen is not None else None)
+    if step is None:
+        return JSONResponse({"version": chosen, "cost": None})
+
+    from . import costing
+
+    version_dir = step.parent
+    _, geometry, spec, _ = drawing_mod._version_inputs(version_dir)  # noqa: SLF001
+    try:
+        views = drawing_mod._project(                                # noqa: SLF001
+            step, cache=version_dir / "projection.json")
+        rates = costing.load_rates()
+        estimate = costing.estimate(geometry, views, spec, rates)
+    except Exception as error:      # an estimate must never cost the run
+        return JSONResponse({"version": chosen, "cost": None,
+                             "error": f"{type(error).__name__}: {error}"})
+    return JSONResponse({"version": chosen,
+                         "cost": estimate.to_dict(rates)})
 
 
 @app.get("/api/jobs/{job_id}/parameters")
