@@ -103,6 +103,11 @@ class Specification:
     #: True when anything here came from the Planner rather than a table.
     proposed: bool = False
     notes: list[str] = field(default_factory=list)
+    #: True when the Planner asked for a class its own process cannot
+    #: ordinarily hold. Kept as a fact rather than as the sentence that
+    #: says it, so the sentence can be written in the reader's language -
+    #: it was the one note on a Japanese sheet still in English.
+    tight_for_process: bool = False
 
     @property
     def stated(self) -> bool:
@@ -145,6 +150,15 @@ class Specification:
         for fit in self.fits[:4]:
             lines.append(fit.render() if fit.grounded else
                          i18n.t("note.fitproposed", lang, fit=fit.render()))
+        if self.tight_for_process:
+            # Not overruled: a casting held to 2768-m is possible with
+            # machining after, and the Planner may know that.
+            key = f"process.{self.process.strip().lower()}"
+            lines.append(i18n.t(
+                "note.tight", lang,
+                what=self.tolerance_class.upper(),
+                process=(i18n.t(key, lang) if i18n.has(key)
+                         else self.process.upper())))
         if self.proposed:
             # The whole point of the original refusal to print a tolerance
             # note: never let the sheet imply an engineer signed this off.
@@ -157,6 +171,7 @@ class Specification:
             "material": self.material, "process": self.process,
             "tolerance_class": self.tolerance_class, "finish": self.finish,
             "proposed": self.proposed,
+            "tight_for_process": self.tight_for_process,
             "fits": [{"feature": f.feature, "size_mm": f.size_mm,
                       "fit": f.fit, "why": f.why, "grounded": f.grounded}
                      for f in self.fits],
@@ -282,9 +297,7 @@ def read(plan: Any, prompt: str = "") -> Specification:
     floor = PROCESS_FLOOR.get(spec.process)
     if floor and spec.tolerance_class and spec.tolerance_class in _ORDER \
             and _ORDER.index(spec.tolerance_class) < _ORDER.index(floor):
-        spec.notes.append(
-            f"{spec.tolerance_class.upper()} IS TIGHT FOR A "
-            f"{spec.process.upper()} PART — CHECK WITH THE SUPPLIER")
+        spec.tight_for_process = True
     return spec
 
 
@@ -298,6 +311,7 @@ def from_dict(raw: Any) -> Optional[Specification]:
         tolerance_class=_tolerance_class(raw.get("tolerance_class")),
         finish=_text(raw.get("finish"), 40),
         proposed=bool(raw.get("proposed")),
+        tight_for_process=bool(raw.get("tight_for_process")),
         notes=[_text(n, 90) for n in (raw.get("notes") or []) if _text(n, 90)],
     )
     for item in (raw.get("fits") or []):

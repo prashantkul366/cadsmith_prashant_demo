@@ -51,6 +51,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
+from app.server import features
 from app.server import i18n
 
 # ---------------------------------------------------------------------------
@@ -565,6 +566,10 @@ PATTERN_TOL = 0.05
 #: Two radii on a view is what a part like a filleted, shelled box has -
 #: the outside round and the inside one. Past that the sheet says so in a
 #: note rather than growing a third and a fourth leader into the margin.
+#: At most this many cut-outs are dimensioned per view. Past it a
+#: sheet stops being read, and the note says the rest are as modelled.
+MAX_CUTOUTS = 3
+
 MAX_ROUND_CALLOUTS = 2
 
 
@@ -959,6 +964,48 @@ def plan_view(name: str, view: dict, scale: float, dimension: str) -> dict:
             if positioned >= 2:
                 break
 
+    # Everything cut into the outline that is not round. A slit, a slot, a
+    # pocket and a window all project as a closed loop inside the boundary,
+    # and until features.py chained the projector's loose edges back into
+    # loops nothing downstream could see one: they were drawn and never
+    # dimensioned. On the flexible strip this was found on, the five slits
+    # were on the page and their 0.5 by 10 was not.
+    #
+    # Size and position, like a hole, and in the same ladder so a cut-out's
+    # width never lands on a pitch. Identical cut-outs are one dimension and
+    # a count - five slits are "5x 0.5", which is what ISO 129-1 asks for
+    # and the difference between a sheet somebody reads and a sheet covered
+    # in the same number. Capped for the same reason the leaders are.
+    # Never on the pictorial view. An isometric is a picture of the part,
+    # not a measured projection of it: its lengths are foreshortened and
+    # its circles are ellipses, so a number taken off it is simply wrong.
+    # Measured: a 10 mm hole on the isometric read 5.773, which is 10/root
+    # 3, which is the foreshortening and not a dimension of anything.
+    cut = [] if name == "ISO" else features.cutouts(view)
+    for group in features.groups(cut)[:MAX_CUTOUTS]:
+        gmin_u, gmin_v, gmax_u, gmax_v = group["bbox"]
+        ax, ay = to_sheet(gmin_u, gmin_v)
+        bx, by = to_sheet(gmax_u, gmax_v)
+        count = f"{group['count']}x " if group["count"] > 1 else ""
+        plan["dimensions"].append({
+            "p1": (ax, ay), "p2": (bx, ay), "offset": below_line(ay),
+            "vertical": False, "measure": group["w"],
+            "label": f"{count}{_num(group['w'])}"})
+        plan["dimensions"].append({
+            "p1": (ax, ay), "p2": (ax, by), "offset": left_line(ax),
+            "vertical": True, "measure": group["h"],
+            "label": f"{count}{_num(group['h'])}"})
+        level += 1
+        # Where the row of them starts and how far apart they are. One
+        # pitch says where all five are; five positions say it five times.
+        if group["pitch_u"] and len(group["members"]) > 1:
+            px, _ = to_sheet(group["members"][0]["u"], gmin_v)
+            qx, _ = to_sheet(group["members"][1]["u"], gmin_v)
+            plan["dimensions"].append({
+                "p1": (px, ay), "p2": (qx, ay), "offset": below_line(ay),
+                "vertical": False, "measure": group["pitch_u"]})
+            level += 1
+
     # Leaders, largest first and capped: a drawing that calls out every
     # circle on a gear is unreadable, and the ones that matter are the big
     # ones. One leader per group, so four identical holes are named once.
@@ -1088,7 +1135,8 @@ def _render_view(plan: dict, lang: str = "en") -> list[str]:
     for dim in plan["dimensions"]:
         out += _linear_dimension(dim["p1"][0], dim["p1"][1],
                                  dim["p2"][0], dim["p2"][1],
-                                 dim["offset"], _num(dim["measure"]),
+                                 dim["offset"],
+                                 dim.get("label") or _num(dim["measure"]),
                                  vertical=dim["vertical"])
 
     for call in plan["callouts"]:
@@ -1209,7 +1257,8 @@ _NOTES = ["note.mm", "note.hidden"]
 
 def note_lines(geometry: dict, spec: Any = None,
                sheet: Optional[dict] = None,
-               lang: str = "en") -> list[str]:
+               lang: str = "en",
+               parameters: Optional[list] = None) -> list[str]:
     """Every note the sheet carries, in reading order.
 
     Shared by both renderers for the same reason ``plan_sheet`` is: two
@@ -1227,13 +1276,27 @@ def note_lines(geometry: dict, spec: Any = None,
         lines.append(i18n.t("note.rounds", lang))
     if geometry.get("is_valid"):
         lines.append(i18n.t("note.watertight", lang))
+    # What the part declares that the page does not carry. Measured across
+    # every sheet this app had made: 1554 declared lengths, 610 printed.
+    # Some of those should not be on a sheet - a tapping drill diameter is
+    # implied by the thread callout beside it - so this is a line to read
+    # rather than a fault to fix, and it is here because the alternative
+    # is a sheet that implies what it shows is all there was.
+    if sheet is not None and parameters:
+        missing = features.undimensioned(sheet, parameters)
+        if missing:
+            lines.append(i18n.t(
+                "note.undimensioned", lang, n=len(missing),
+                names=", ".join(missing[:6])
+                + (", ..." if len(missing) > 6 else "")))
     return lines
 
 
 def _notes(geometry: dict, spec: Any = None,
-           sheet: Optional[dict] = None, lang: str = "en") -> list[str]:
+           sheet: Optional[dict] = None, lang: str = "en",
+           parameters: Optional[list] = None) -> list[str]:
     """The notes as SVG."""
-    lines = note_lines(geometry, spec, sheet, lang)
+    lines = note_lines(geometry, spec, sheet, lang, parameters)
     out = []
     # Grown upward from just above the footer rather than downward from the
     # title block. A specified part has three times the notes an unspecified
@@ -1252,7 +1315,8 @@ def _notes(geometry: dict, spec: Any = None,
 
 def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
                 version: int, projection: Optional[Path] = None,
-                spec: Any = None, lang: str = "en") -> str:
+                spec: Any = None, lang: str = "en",
+                parameters: Optional[list] = None) -> str:
     """Compose the drawing as a standalone SVG document."""
     sheet = plan_sheet(_project(step_path, cache=projection))
     scale = sheet["scale"]
@@ -1262,7 +1326,7 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
         body += _render_view(view, lang)
 
     body += _title_block(prompt, geometry, job_id, version, scale, lang)
-    body += _notes(geometry, spec, sheet, lang)
+    body += _notes(geometry, spec, sheet, lang, parameters)
 
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{SHEET_W}mm" '
@@ -1278,15 +1342,17 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
 
 
 def _version_inputs(version_dir: Path):
-    """The STEP this version built, what was measured, and what it specifies.
+    """What this version built, measured, specifies, and declares.
 
-    The specification is read from disk rather than passed in, so the
-    prebuild - which runs from a version directory and nothing else - puts
-    the same notes on the sheet as a request that arrives later.
+    All four read from disk rather than passed in, so the prebuild - which
+    runs from a version directory and nothing else - puts the same notes on
+    the sheet as a request that arrives later. The declared parameters are
+    the fourth because the sheet now says which of them it does not carry,
+    and the script beside the STEP is where they are declared.
     """
     step = version_dir / "model.step"
     if not step.exists():
-        return None, {}, None
+        return None, {}, None, []
 
     geometry = {}
     geometry_file = version_dir / "geometry.json"
@@ -1305,7 +1371,17 @@ def _version_inputs(version_dir: Path):
                 json.loads(spec_file.read_text(encoding="utf-8")))
         except Exception:      # a bad file must never cost the drawing
             spec = None
-    return step, geometry, spec
+
+    parameters: list = []
+    code = version_dir / "code.py"
+    if code.exists():
+        try:
+            from . import edits
+            parameters = edits.describe_parameters(
+                code.read_text(encoding="utf-8"))
+        except Exception:      # nor must an unparseable one
+            parameters = []
+    return step, geometry, spec, parameters
 
 
 def _built_by_this_code(path: Path, marker: str) -> bool:
@@ -1335,13 +1411,13 @@ def ensure_sheet(version_dir: Path, prompt: str, job_id: str,
             and _built_by_this_code(target, f'data-sheet="{SHEET_SCHEMA}"')):
         return target
 
-    step, geometry, spec = _version_inputs(version_dir)
+    step, geometry, spec, parameters = _version_inputs(version_dir)
     if step is None:
         return None
 
     sheet = build_sheet(step, geometry, prompt, job_id, version,
                         projection=version_dir / "projection.json",
-                        spec=spec, lang=lang)
+                        spec=spec, lang=lang, parameters=parameters)
     target.write_text(sheet, encoding="utf-8")
     return target
 
@@ -1373,7 +1449,8 @@ def _dxf_y(y: float) -> float:
 
 def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
               version: int, projection: Optional[Path] = None,
-              spec: Any = None, lang: str = "en"):
+              spec: Any = None, lang: str = "en",
+              parameters: Optional[list] = None):
     """The same drawing as a DXF document, with real DIMENSION entities.
 
     The SVG on screen is a picture of the drawing; this is the drawing. Its
@@ -1518,7 +1595,7 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
         text(TITLE_L + 2.0, y, label, TEXT_SMALL, "MIDDLE_LEFT")
         text(TITLE_L + 52.0, y, value, TEXT_SMALL, "MIDDLE_LEFT")
 
-    notes = note_lines(geometry, spec, sheet, lang)
+    notes = note_lines(geometry, spec, sheet, lang, parameters)
     for index, note in enumerate(notes):
         # Bottom-aligned, as on the SVG, so the two sheets stay the same
         # drawing however many notes a specification adds.
@@ -1541,13 +1618,13 @@ def ensure_dxf(version_dir: Path, prompt: str, job_id: str,
             and _built_by_this_code(target, _DXF_MARKER)):
         return target
 
-    step, geometry, spec = _version_inputs(version_dir)
+    step, geometry, spec, parameters = _version_inputs(version_dir)
     if step is None:
         return None
 
     doc = build_dxf(step, geometry, prompt, job_id, version,
                     projection=version_dir / "projection.json",
-                    spec=spec, lang=lang)
+                    spec=spec, lang=lang, parameters=parameters)
     doc.saveas(target)
     return target
 

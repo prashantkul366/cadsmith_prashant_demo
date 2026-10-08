@@ -81,10 +81,26 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ja": "材料・加工法・公差等級はプランナーの提案です \u2014 製造前に"
               "確認してください",
     },
+    "note.tight": {
+        "en": "{what} IS TIGHT FOR A {process} PART \u2014 CHECK WITH THE "
+              "SUPPLIER",
+        "ja": "{what} は{process}部品には厳しい公差です \u2014 サプライヤーに"
+              "確認してください",
+    },
     "note.fitproposed": {"en": "{fit} (PROPOSED)", "ja": "{fit}（提案）"},
     "note.rounds": {
         "en": "ROUNDS AND FILLETS NOT CALLED OUT ARE AS MODELLED",
         "ja": "指示のない丸み・すみ肉はモデルどおり",
+    },
+    # The honest answer to "is this drawing enough to make the part from".
+    # Not a fault: a tapping drill diameter is implied by the thread
+    # callout beside it, and a clearance is a number the model worked with
+    # rather than one a machinist works to. It is the difference between a
+    # sheet that omits something and one that implies there was nothing to
+    # omit.
+    "note.undimensioned": {
+        "en": "{n} DECLARED DIMENSION(S) ARE NOT ON THIS SHEET: {names}",
+        "ja": "この図面に記載のない宣言寸法 {n} 件：{names}",
     },
     "note.watertight": {
         "en": "SOLID IS CLOSED AND WATERTIGHT AS PROJECTED",

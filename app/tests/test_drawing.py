@@ -283,8 +283,18 @@ def main() -> int:
         check("and no fillet earns a centre mark",
               not btop["centre_lines"], f'{len(btop["centre_lines"])} line(s)')
         measures = sorted(round(d["measure"], 2) for d in btop["dimensions"])
+        # A fillet centre sits 5 in from each face on this part, so a
+        # position dimension taken to one would read 5, 35 or 55. None of
+        # those is a dimension of anything: the corner is R5 and the
+        # callout says so.
         check("nor is a fillet centre dimensioned from the datum",
-              measures == [40.0], str(measures))
+              not ({5.0, 35.0, 55.0} & set(measures)), str(measures))
+        # The cavity, on the other hand, is a feature and wants dimensions:
+        # a 60 x 40 box filleted R5 and shelled 2 thick is 56 x 36 inside,
+        # and somebody has to machine that. It is the kind of thing the
+        # sheet carried nothing about until cut-outs were dimensioned.
+        check("while the shelled cavity is",
+              36.0 in measures and 56.0 in measures, str(measures))
 
         # The awkward shapes the kernel hands over, checked directly: one
         # hole is often two half-edges, and one fillet is the same quarter
