@@ -15,6 +15,7 @@ from __future__ import annotations
 import builtins
 import json
 import shutil
+import os
 import sys
 import tempfile
 import threading
@@ -480,9 +481,30 @@ def main() -> int:
           == "x.claude-opus-5-5")
     check("a family the account does not carry falls back, not guesses",
           providers.best_claude(offered, "fable") == "")
-    check("and with no list at all the compiled-in default stands",
-          providers.bedrock_default("sonnet", "anthropic.claude-sonnet-5-5")
-          in (offered + ["anthropic.claude-sonnet-5-5"]))
+
+    # And what happens when the account carries Claude but not the family
+    # this role wanted. Returning the constant there is the worst answer
+    # available: it is a guess about another account, made while holding a
+    # list that says it is wrong. A run went out under
+    # `anthropic.claude-sonnet-5-5` and died on a 404 while 33 invokable ids
+    # sat in the model box beside it.
+    no_sonnet = [i for i in offered if "sonnet" not in i]
+    providers._model_list_cache[os.getenv("AWS_REGION") or "us-east-1"] = (
+        time.time(), tuple(no_sonnet))
+    try:
+        chosen = providers.bedrock_default("sonnet", "anthropic.claude-sonnet-5-5")
+        check("an account with no Sonnet gets its best other Claude",
+              chosen in no_sonnet, chosen)
+        check("the best one, not merely any one",
+              chosen == "global.anthropic.claude-opus-4-6", chosen)
+        check("and the picker offers exactly the list it was picked from",
+              providers._list_bedrock_models() == no_sonnet)
+        providers._model_list_cache.clear()
+        check("with no list at all the compiled-in default still stands",
+              providers.bedrock_default("sonnet", "stands.in")
+              in (offered + ["stands.in"]))
+    finally:
+        providers._model_list_cache.clear()
 
     claude = providers.build_client(
         LLMConfig(provider="anthropic", kind="anthropic", base_url="",

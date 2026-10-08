@@ -465,7 +465,12 @@ def _invokable(timeout: float = 6.0) -> tuple[str, ...]:
     except Exception:
         ids = []
     found = tuple(ids)
-    _model_list_cache[region] = (time.time(), found)
+    # Only an answer is remembered. Caching "could not ask" for five minutes
+    # meant one slow moment at startup decided which model every run for the
+    # next five minutes was addressed by, and the answer it decided on was
+    # the compiled-in guess.
+    if found:
+        _model_list_cache[region] = (time.time(), found)
     return found
 
 
@@ -490,18 +495,37 @@ def best_claude(ids, family: str) -> str:
     return best
 
 
+#: Which family to try when the account does not carry the one a role asked
+#: for, best first. Ranked by how much of this pipeline's work they can
+#: carry rather than by price: the Coder writes a whole program in one
+#: reply and the Judge reads renders, and a smaller model does both worse.
+_FAMILY_ORDER = ("opus", "sonnet", "haiku")
+
+
 def bedrock_default(family: str, fallback: str) -> str:
     """The id to use for this role, preferring what the account really has.
 
     A compiled-in default is a guess about somebody else's AWS account.
     Measured the hard way: `anthropic.claude-sonnet-5-5` is right for one
     account and a 404 for the next, whose models are all served as
-    `global.anthropic.*` cross-region inference profiles. So the list
-    decides, and the constant is only what is used when Bedrock cannot be
-    asked at all.
+    `global.anthropic.*` cross-region inference profiles.
+
+    So while the list is empty the constant is all there is, and the moment
+    it is not, the constant is the worst answer available - a guess we are
+    holding evidence against. An account that carries Claude but not this
+    family gets the best other family it does carry, because a run that
+    answers in 404 is worse than one answered by a different model. The
+    second time this bit, the id in the request was not in the 33 the same
+    server had just listed in the model box beside it.
     """
-    found = best_claude(_invokable(), family)
-    return found or fallback
+    ids = _invokable()
+    if not ids:
+        return fallback
+    for wanted in (family,) + _FAMILY_ORDER:
+        found = best_claude(ids, wanted)
+        if found:
+            return found
+    return fallback
 
 
 def bedrock_models(timeout: float = 6.0) -> tuple[list[str], str]:
@@ -581,15 +605,28 @@ def bedrock_models(timeout: float = 6.0) -> tuple[list[str], str]:
 
 
 def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
-    return bedrock_models(timeout)[0]
+    """The picker's list, which must be the list the default is picked from.
+
+    Through the same cache, because these were two paths to one question and
+    they could disagree: the model box offered 33 ids while the run beside it
+    died on a 34th that was never among them.
+    """
+    return list(_invokable(timeout))
 
 
-#: What Bedrock lists and what Bedrock will invoke are different sets.
-#: This account offers 27 ids through list_foundation_models and
-#: list_inference_profiles, refuses the ones that were tried from it, and
-#: serves the two ProviderSpec declares - which are not in the list at all.
-#: So the list populates the picker and explains a failure; it does not get
-#: to overrule a default that works.
+def warm_bedrock_models() -> None:
+    """Ask Bedrock what it serves, off the request path.
+
+    The answer decides which model every agent in a run is addressed by, so
+    a cold cache at the moment a job starts means the run is addressed by a
+    compiled-in guess instead. Called at startup, where six seconds cost
+    nobody anything.
+    """
+    try:
+        _invokable()
+    except Exception:
+        pass            # a listing that cannot be had is not a startup fault
+
 
 
 def list_models(provider_id: str, timeout: float = 6.0) -> list[str]:

@@ -972,6 +972,11 @@ def _startup() -> None:
     # and a half to start and then answers in under a tenth, and the first
     # drawing somebody asks for should not be the one that pays.
     threading.Thread(target=drawing_mod.warm_up, daemon=True).start()
+    # And the Bedrock model list, which is not a speed matter: it decides
+    # which model id every agent in a run is addressed by, and a cold cache
+    # at the moment a job starts means the run goes out under a compiled-in
+    # guess. One account's guess is another account's 404.
+    threading.Thread(target=providers.warm_bedrock_models, daemon=True).start()
     status = _health()
     print(f"CADSmith app ready - {restored} past run(s) restored"
           + (f", {pruned} old run(s) removed" if pruned else ""))
