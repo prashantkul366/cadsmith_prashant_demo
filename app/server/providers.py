@@ -279,13 +279,18 @@ def resolve(
     # with two problems to go and fix in the UI.
     named = os.getenv(spec.env_model, "").strip() if spec.env_model else ""
     fallback = named or spec.default_generation_model
+    judge_fallback = spec.default_judge_model
+    if spec.kind == "bedrock" and not named:
+        # What this account can invoke, not what some other account could.
+        fallback = bedrock_default("sonnet", fallback) or fallback
+        judge_fallback = bedrock_default("opus", judge_fallback) or judge_fallback
     return LLMConfig(
         provider=spec.id,
         kind=spec.kind,
         base_url=_base_url_for(spec),
         api_key=_api_key_for(spec),
         generation_model=generation_model or fallback,
-        judge_model=judge_model or spec.default_judge_model
+        judge_model=judge_model or judge_fallback
                     or generation_model or fallback,
         judge_vision=judge_vision,
         effort=normalise_effort(effort) or DEFAULT_EFFORT,
@@ -431,6 +436,72 @@ def mask_arn(arn: str) -> str:
 def _aws_identity(timeout: float = 4.0) -> str:
     """The caller ARN if AWS credentials resolve, else ""."""
     return _aws_check(timeout)[0]
+
+
+#: A Claude id, whatever the platform puts in front of it:
+#: anthropic.claude-sonnet-5-5, global.anthropic.claude-haiku-4-5-20251001-v1:0.
+_CLAUDE_ID = re.compile(r"claude-(opus|sonnet|haiku)-(\d+)(?:[-.](\d+))?",
+                        re.IGNORECASE)
+
+#: How long a model list is reused before Bedrock is asked again. The list
+#: changes when an account is granted a model, which is not something that
+#: happens mid-run.
+_MODEL_LIST_TTL = 300.0
+_model_list_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
+
+
+def _invokable(timeout: float = 6.0) -> tuple[str, ...]:
+    """What this Bedrock account can actually invoke, briefly cached.
+
+    Never raises and never blocks a run: an empty tuple means "could not
+    ask", and the caller falls back to the compiled-in default.
+    """
+    region = os.getenv("AWS_REGION") or "us-east-1"
+    hit = _model_list_cache.get(region)
+    if hit and time.time() - hit[0] < _MODEL_LIST_TTL:
+        return hit[1]
+    try:
+        ids, _ = bedrock_models(timeout)
+    except Exception:
+        ids = []
+    found = tuple(ids)
+    _model_list_cache[region] = (time.time(), found)
+    return found
+
+
+def best_claude(ids, family: str) -> str:
+    """The newest Claude of this family among ids, or "" if there is none.
+
+    Ranked by version rather than by position, because a provider lists in
+    no useful order, and an undated id wins a tie - `claude-sonnet-5-5`
+    over `claude-sonnet-5-5-20260401-v1:0` - since the dated one pins a
+    snapshot that will age out.
+    """
+    best, rank = "", ()
+    for identifier in ids:
+        found = _CLAUDE_ID.search(identifier)
+        if not found or found.group(1).lower() != family:
+            continue
+        major = int(found.group(2))
+        minor = int(found.group(3) or 0)
+        here = (major, minor, -len(identifier))
+        if here > rank:
+            best, rank = identifier, here
+    return best
+
+
+def bedrock_default(family: str, fallback: str) -> str:
+    """The id to use for this role, preferring what the account really has.
+
+    A compiled-in default is a guess about somebody else's AWS account.
+    Measured the hard way: `anthropic.claude-sonnet-5-5` is right for one
+    account and a 404 for the next, whose models are all served as
+    `global.anthropic.*` cross-region inference profiles. So the list
+    decides, and the constant is only what is used when Bedrock cannot be
+    asked at all.
+    """
+    found = best_claude(_invokable(), family)
+    return found or fallback
 
 
 def bedrock_models(timeout: float = 6.0) -> tuple[list[str], str]:

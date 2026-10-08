@@ -455,6 +455,35 @@ def main() -> int:
     check("Bedrock needs no key, because it uses the AWS credential chain",
           providers.BUILTIN["bedrock"].needs_key is False)
 
+    # A compiled-in default is a guess about somebody else's AWS account.
+    # One account serves `anthropic.claude-sonnet-5-5`; the next serves
+    # everything as `global.anthropic.*` cross-region inference profiles
+    # and answers 404 to the bare id. So the account's own list decides,
+    # and the constant is only the answer when Bedrock cannot be asked.
+    offered = ["global.anthropic.claude-haiku-4-5-20251001-v1:0",
+               "global.anthropic.claude-haiku-5-5",
+               "global.anthropic.claude-opus-4-5-20251101-v1:0",
+               "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+               "global.anthropic.claude-opus-4-6",
+               "anthropic.claude-3-5-sonnet-20240620-v1:0"]
+    check("the newest Sonnet the account has is chosen",
+          providers.best_claude(offered, "sonnet")
+          == "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+          providers.best_claude(offered, "sonnet"))
+    check("and the newest Opus, by version rather than by listing order",
+          providers.best_claude(offered, "opus")
+          == "global.anthropic.claude-opus-4-6",
+          providers.best_claude(offered, "opus"))
+    check("an undated id wins a tie, because a dated one pins a snapshot",
+          providers.best_claude(["x.claude-opus-5-5-20260401-v1:0",
+                                 "x.claude-opus-5-5"], "opus")
+          == "x.claude-opus-5-5")
+    check("a family the account does not carry falls back, not guesses",
+          providers.best_claude(offered, "fable") == "")
+    check("and with no list at all the compiled-in default stands",
+          providers.bedrock_default("sonnet", "anthropic.claude-sonnet-5-5")
+          in (offered + ["anthropic.claude-sonnet-5-5"]))
+
     claude = providers.build_client(
         LLMConfig(provider="anthropic", kind="anthropic", base_url="",
                   api_key="x", generation_model="gen", judge_model="jud"))
