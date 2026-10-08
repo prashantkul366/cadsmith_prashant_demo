@@ -168,6 +168,13 @@ const I18N = (function () {
     "stage.plan":       ["Planning the part", "部品を計画中"],
     "stage.code":       ["Writing CadQuery", "CadQuery を記述中"],
     "stage.execute":    ["Building the solid", "ソリッドを構築中"],
+    /* The same two stages on the FreeCAD road, where no script is written
+       and nothing is executed afterwards: the model calls CAD operations
+       against a live document and each one is measured as it lands. The
+       strip said "Writing CadQuery" while FreeCAD was building the part,
+       which is the one place the two roads must not look alike. */
+    "stage.code.freecad":    ["Choosing the operations", "操作を選択中"],
+    "stage.execute.freecad": ["Building in FreeCAD", "FreeCAD で構築中"],
     "stage.judge":      ["Validating geometry", "形状を検証中"],
     "stage.done":       ["Ready", "完了"],
 

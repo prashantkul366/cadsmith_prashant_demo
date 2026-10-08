@@ -37,6 +37,12 @@ const S = {
   //: "build" when the part was made by calling CAD operations, "code" when
   //: a script was generated. It decides what the centre panel shows.
   record: "code",
+  //: Which road this run is on - "freecad" or "script" - learned from the
+  //: first event only one of them can produce. Two of the five pipeline
+  //: stages are named differently on each, because they do different
+  //: things: nothing is written and nothing is executed afterwards when
+  //: FreeCAD is building the part as the operations land.
+  road: "",
   versions: [],      // one entry per pipeline iteration or applied edit
   selected: -1,
   health: null,
@@ -437,13 +443,25 @@ function renderExamples() {
 
 /* ═══════════════════════ pipeline progress ═══════════════════════ */
 
+/* Which road this run took. The two share a strip, and two of its five
+   stages mean different things on each: on the FreeCAD road nothing is
+   written and nothing is executed afterwards - the model picks operations
+   and FreeCAD builds as they land. Set from the first event that can only
+   come from one road, so a run that starts in FreeCAD and falls through to
+   the script pipeline relabels itself when it does. */
+function stageLabel(stage) {
+  const special = S.road === "freecad" && (stage.key === "code"
+                                           || stage.key === "execute");
+  return special ? stage.label + ".freecad" : stage.label;
+}
+
 function renderStages(activeKey, detail) {
   S.stage = { key: activeKey, detail: detail || "" };
   const activeIndex = STAGES.findIndex(s => s.key === activeKey);
   const phase = $("#thinkPhase");
   if (phase) {
     const stage = STAGES[activeIndex];
-    phase.textContent = stage ? t(stage.label) : "";
+    phase.textContent = stage ? t(stageLabel(stage)) : "";
   }
   $("#pipe").innerHTML = STAGES.map((stage, i) => {
     const state = i < activeIndex ? "done" : (i === activeIndex ? "act" : "");
@@ -453,7 +471,7 @@ function renderStages(activeKey, detail) {
           <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg><i class="pspin"></i>
         </div>
         <div>
-          <div class="plabel">${esc(t(stage.label))}</div>
+          <div class="plabel">${esc(t(stageLabel(stage)))}</div>
           ${i === activeIndex && detail
             ? `<div class="pdetail">${esc(detail)}</div>` : ""}
         </div>
@@ -798,6 +816,12 @@ function handleEvent(event) {
   // the run goes rather than only at the end.
   if (data && data.tokens) noteUsage(phase, data.tokens);
   if (data && data.spend) { S.spend = data.spend; renderUsage(); }
+
+  // A `freecad` event can only happen on the tool road; a `code` event can
+  // only happen on the script one. Whichever arrives first decides, and a
+  // fall-through relabels the strip rather than leaving it lying.
+  if (phase === "freecad") S.road = "freecad";
+  if (phase === "code") S.road = "script";
 
   const stage = PHASE_STAGE[phase];
   if (stage) {
@@ -1499,6 +1523,7 @@ async function generate() {
   $("#drawBtn").disabled = true;
   setComposerEnabled(false);
   showOverlay("pipe");
+  S.road = "";
   renderStages("plan", t("detail.sending"));
 
   const options = {
