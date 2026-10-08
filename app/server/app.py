@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -819,6 +820,11 @@ def _startup() -> None:
     # thing that should be visible in the log at a moment someone is reading
     # it, not a surprise midway through a job.
     pruned = manager.prune()
+    # The Bedrock model list, off the request path. It decides which model
+    # id every agent in a run is addressed by, and a cold cache at the
+    # moment a job starts means the run goes out under a compiled-in guess.
+    # One account's guess is another account's 404.
+    threading.Thread(target=providers.warm_bedrock_models, daemon=True).start()
     status = _health()
     print(f"CADSmith app ready - {restored} past run(s) restored"
           + (f", {pruned} old run(s) removed" if pruned else ""))

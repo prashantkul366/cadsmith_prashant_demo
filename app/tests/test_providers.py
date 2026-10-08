@@ -15,6 +15,7 @@ from __future__ import annotations
 import builtins
 import json
 import shutil
+import os
 import sys
 import tempfile
 import threading
@@ -444,6 +445,56 @@ def main() -> int:
           any("AWS credentials" in p for p in providers.problems(bedrock))
           or providers._aws_identity() != "",
           "; ".join(providers.problems(bedrock)) or "credentials present")
+
+    # A compiled-in default is a guess about somebody else's AWS account.
+    # One account serves `anthropic.claude-sonnet-5-5`; the next serves
+    # everything as `global.anthropic.*` cross-region inference profiles
+    # and answers 404 to the bare id. So the account's own list decides,
+    # and the constant is only the answer when Bedrock cannot be asked.
+    offered = ["global.anthropic.claude-haiku-4-5-20251001-v1:0",
+               "global.anthropic.claude-haiku-5-5",
+               "global.anthropic.claude-opus-4-5-20251101-v1:0",
+               "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+               "global.anthropic.claude-opus-4-6",
+               "anthropic.claude-3-5-sonnet-20240620-v1:0"]
+    check("the newest Sonnet the account has is chosen",
+          providers.best_claude(offered, "sonnet")
+          == "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+          providers.best_claude(offered, "sonnet"))
+    check("and the newest Opus, by version rather than by listing order",
+          providers.best_claude(offered, "opus")
+          == "global.anthropic.claude-opus-4-6",
+          providers.best_claude(offered, "opus"))
+    check("an undated id wins a tie, because a dated one pins a snapshot",
+          providers.best_claude(["x.claude-opus-5-5-20260401-v1:0",
+                                 "x.claude-opus-5-5"], "opus")
+          == "x.claude-opus-5-5")
+    check("a family the account does not carry falls back, not guesses",
+          providers.best_claude(offered, "fable") == "")
+
+    # And what happens when the account carries Claude but not the family
+    # this role wanted. Returning the constant there is the worst answer
+    # available: it is a guess about another account, made while holding a
+    # list that says it is wrong. A run went out under
+    # `anthropic.claude-sonnet-5-5` and died on a 404 while 33 invokable ids
+    # sat in the model box beside it.
+    no_sonnet = [i for i in offered if "sonnet" not in i]
+    providers._model_list_cache[os.getenv("AWS_REGION") or "us-east-1"] = (
+        time.time(), tuple(no_sonnet))
+    try:
+        chosen = providers.bedrock_default("sonnet", "anthropic.claude-sonnet-5-5")
+        check("an account with no Sonnet gets its best other Claude",
+              chosen in no_sonnet, chosen)
+        check("the best one, not merely any one",
+              chosen == "global.anthropic.claude-opus-4-6", chosen)
+        check("and the picker offers exactly the list it was picked from",
+              providers._list_bedrock_models() == no_sonnet)
+        providers._model_list_cache.clear()
+        check("with no list at all the compiled-in default still stands",
+              providers.bedrock_default("sonnet", "stands.in")
+              in (offered + ["stands.in"]))
+    finally:
+        providers._model_list_cache.clear()
 
     # The likeliest way Bedrock fails is a virtualenv without boto3, which
     # `pip install anthropic` leaves behind unless the [bedrock] extra is
