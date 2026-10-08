@@ -212,6 +212,16 @@ def main() -> int:
           Endpoint.seen[-1]["messages"][0]["content"][-90:].replace("\n", " "))
     check("nothing was sent as a tool definition after the refusal",
           "tools" not in Endpoint.seen[-1])
+    # Improvising, the reply is text, so it streams - and that is not
+    # cosmetic. A self-hosted endpoint is reached through a tunnel that
+    # answers 524 when the origin has sent nothing for a hundred seconds,
+    # and a generation on one GPU takes longer than that. Unstreamed, every
+    # step of the tool road was risking a 524 whose retry pays for the same
+    # generation twice.
+    check("and the improvised call was streamed, so a tunnel sees bytes",
+          all(body.get("stream") is True for body in Endpoint.seen
+              if "tools" not in body),
+          str([body.get("stream") for body in Endpoint.seen]))
     check("and the earlier turns were flattened to text a plain model reads",
           all(isinstance(m.get("content"), str)
               for m in Endpoint.seen[-1]["messages"]),

@@ -1208,13 +1208,26 @@ class OpenAICompatibleClient:
     def _post_once(self, model: str, messages: list[dict], max_tokens: int,
                    role: str = "generation", tools: Optional[list] = None
                    ) -> tuple[str, _Usage, list[ToolCall]]:
-        # Tool calls are short by nature - a name and a few numbers - so
-        # there is nothing to stream, and accumulating tool_calls out of
-        # SSE deltas is a pile of index-keyed bookkeeping for no gain.
-        if tools is None and self._stream_ok:
+        # Two cases stream, and they are the same case: the reply is text.
+        #
+        # No tools at all - a Planner or a Coder writing a whole script -
+        # and a tool road that is *improvising*, where the endpoint has no
+        # tool channel, the tools went into the prompt, and the answer
+        # comes back as JSON in the content. Asking for the whole reply
+        # there was leaving the connection silent for the length of a
+        # generation, which is what a tunnel answers 524 to - and the
+        # retry then pays for the same generation twice.
+        #
+        # A real tool channel still does not stream: accumulating
+        # tool_calls out of index-keyed SSE deltas is a pile of bookkeeping
+        # for a reply that is a name and a few numbers.
+        improvising = bool(tools) and not self._tools_ok
+        if (tools is None or improvising) and self._stream_ok:
             try:
                 text, usage = self._post_streaming(
                     model, messages, max_tokens, role)
+                # Improvising, the call is in the text; the caller reads it
+                # with the same reader the unstreamed road uses.
                 return text, usage, []
             except (_VisionUnsupported, _GatewayBusy):
                 raise
