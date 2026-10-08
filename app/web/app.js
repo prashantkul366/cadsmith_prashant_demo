@@ -919,9 +919,18 @@ function renderPlan(plan) {
   const bbox = (plan.dimensions && plan.dimensions.overall_bbox) || {};
   const constraints = plan.constraints || {};
 
+  // A reading for each dimension name, in the language being read. The
+  // names themselves stay the script's own snake_case, so the panel and
+  // the parameter sliders agree - they come from one dictionary rather
+  // than one from a dictionary and one from the model. The plan carries a
+  // label per language, so the switch relabels the panel without asking
+  // the server for the plan again.
+  const named = (plan.dimensions
+                 && plan.dimensions.key_dimension_labels
+                 && plan.dimensions.key_dimension_labels[I18N.current]) || {};
   const rows = Object.entries(dimensions).map(([key, value]) => `
-    <div class="dim" data-k="${esc(key)}">
-      <span>${esc(key.replace(/_/g, " "))}</span>
+    <div class="dim" data-k="${esc(key)}" title="${esc(key)}">
+      <span>${esc(named[key] || key.replace(/_/g, " "))}</span>
       <b>${fmt(value)}<u>mm</u></b>
     </div>`).join("");
 

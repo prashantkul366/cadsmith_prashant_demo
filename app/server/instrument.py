@@ -40,6 +40,7 @@ from autofab.validator import Validator, ValidationCheck, ValidationReport
 
 from app.catalog import grounding
 
+from . import glossary
 from . import budget as budget_mod
 from . import drawing
 from . import i18n
@@ -414,11 +415,30 @@ def install_agent_hooks() -> None:
         ctx.design_plan = plan if isinstance(plan, dict) else None
         return plan
 
+    def _planned(plan: Any) -> dict:
+        """The plan, with a reading for each dimension name beside it.
+
+        The names stay English snake_case - they are the same names the
+        generated script declares, so the Design Plan panel and the
+        parameter sliders agree only while both come from one dictionary
+        rather than one from a dictionary and one from the model. What
+        travels with the plan is a label per language, because the browser
+        has no dictionary and the panel has to relabel itself the moment
+        somebody moves the language switch.
+        """
+        if isinstance(plan, dict):
+            dims = plan.get("dimensions")
+            if isinstance(dims, dict):
+                named = dims.get("key_dimensions")
+                if isinstance(named, dict) and named:
+                    dims["key_dimension_labels"] = glossary.labels(named)
+        return {"design_plan": plan}
+
     agents.plan = wrap(
         grounded_plan,
         PHASE_PLAN,
         lambda prompt, *a, **k: {"prompt": prompt},
-        lambda plan: {"design_plan": plan},
+        _planned,
     )
     agents.generate_code = wrap(
         agents.generate_code,

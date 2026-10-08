@@ -29,6 +29,8 @@ import re
 #: words. Checked before anything is split up.
 _TERMS = {
     "outer_diameter": "外径",
+    "od": "外径",
+    "id": "内径",
     "outside_diameter": "外径",
     "inner_diameter": "内径",
     "inside_diameter": "内径",
@@ -43,6 +45,10 @@ _TERMS = {
     "centre_bore": "中心穴",
     "center_bore": "中心穴",
     "wall_thickness": "肉厚",
+    # 大径 and 小径 already carry the 径; as words they would
+    # double it, so they are only ever read as whole terms.
+    "major_diameter": "大径",
+    "minor_diameter": "小径",
     "pressure_angle": "圧力角",
     "pitch_diameter": "ピッチ円直径",
     "pitch_circle_diameter": "ピッチ円直径",
@@ -104,6 +110,19 @@ _WORDS = {
     "outer": "外", "inner": "内", "centre": "中心", "center": "中心",
     "small": "小", "large": "大", "deg": "度",
     "x": "X", "y": "Y", "z": "Z",
+    # measured off a live run rather than guessed at: these are the words
+    # that turned up in names the first Japanese parts came back with.
+    "spacing": "間隔", "overall": "全体", "tolerance": "公差",
+    "opening": "開口", "inlet": "入口", "outlet": "出口", "port": "ポート",
+    "channel": "流路", "wall": "肉", "flat": "平", "arc": "円弧",
+    "apex": "頂点", "rim": "リム", "neck": "ネック", "shell": "シェル",
+    "leg": "脚", "arm": "アーム", "bracket": "ブラケット", "mount": "取付",
+    "spring": "ばね", "coil": "コイル", "helix": "らせん", "lead": "リード",
+    "origin": "原点", "axis": "軸", "plane": "平面", "surface": "表面",
+    "area": "面積", "volume": "体積", "mass": "質量", "density": "密度",
+    "crest": "山", "root": "谷",
+    "barrel": "バレル", "palm": "パーム", "stud": "スタッド",
+    "square": "正方形", "round": "丸",
 }
 
 #: After another word, a diameter is written 径 rather than 直径: a hole's
@@ -177,3 +196,14 @@ def coverage(names) -> tuple[list[str], list[str]]:
     for name in names:
         (known if _japanese(name) else unknown).append(name)
     return known, unknown
+
+
+def labels(names, langs=("en", "ja")) -> dict:
+    """``{lang: {name: label}}`` for a set of parameter names.
+
+    Both languages at once, and carried with the plan rather than resolved
+    when it is drawn, because the browser has no dictionary and the panel
+    has to relabel itself the moment somebody moves the language switch.
+    """
+    return {lang: {name: label(name, lang) for name in names}
+            for lang in langs}
