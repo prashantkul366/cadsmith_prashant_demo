@@ -1204,39 +1204,36 @@ def _title_block(prompt: str, geometry: dict, job_id: str, version: int,
 #: Said once, on the sheet, rather than repeated against every dimension.
 #: The tolerance line is not here: what it says depends on whether anything
 #: has actually been specified, which ``specification.py`` decides.
-_NOTES = [
-    "ALL DIMENSIONS IN MILLIMETRES",
-    "HIDDEN DETAIL SHOWN DASHED · ALL VIEWS TO THE STATED SCALE",
-]
+_NOTES = ["note.mm", "note.hidden"]
 
 
 def note_lines(geometry: dict, spec: Any = None,
-               sheet: Optional[dict] = None) -> list[str]:
+               sheet: Optional[dict] = None,
+               lang: str = "en") -> list[str]:
     """Every note the sheet carries, in reading order.
 
     Shared by both renderers for the same reason ``plan_sheet`` is: two
     implementations of one drawing drift, and a tolerance note that appears
     on the SVG and not on the DXF is worse than one that appears on neither.
     """
-    lines = list(_NOTES)
-    lines.extend(spec.sheet_notes() if spec is not None
-                 else ["DIMENSIONS ARE AS MODELLED — NO TOLERANCES "
-                       "ARE SPECIFIED"])
+    lines = [i18n.t(key, lang) for key in _NOTES]
+    lines.extend(spec.sheet_notes(lang) if spec is not None
+                 else [i18n.t("note.notolerance", lang)])
     # Two radii are called out per view and the rest are left to the model.
     # Saying so is the difference between a drawing that omits them and one
     # that implies the corners it did not name are sharp.
     if sheet is not None and any(view.get("rounds_uncalled")
                                  for view in sheet.get("views", [])):
-        lines.append("ROUNDS AND FILLETS NOT CALLED OUT ARE AS MODELLED")
+        lines.append(i18n.t("note.rounds", lang))
     if geometry.get("is_valid"):
-        lines.append("SOLID IS CLOSED AND WATERTIGHT AS PROJECTED")
+        lines.append(i18n.t("note.watertight", lang))
     return lines
 
 
 def _notes(geometry: dict, spec: Any = None,
-           sheet: Optional[dict] = None) -> list[str]:
+           sheet: Optional[dict] = None, lang: str = "en") -> list[str]:
     """The notes as SVG."""
-    lines = note_lines(geometry, spec, sheet)
+    lines = note_lines(geometry, spec, sheet, lang)
     out = []
     # Grown upward from just above the footer rather than downward from the
     # title block. A specified part has three times the notes an unspecified
@@ -1265,7 +1262,7 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
         body += _render_view(view, lang)
 
     body += _title_block(prompt, geometry, job_id, version, scale, lang)
-    body += _notes(geometry, spec, sheet)
+    body += _notes(geometry, spec, sheet, lang)
 
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{SHEET_W}mm" '
@@ -1521,7 +1518,7 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
         text(TITLE_L + 2.0, y, label, TEXT_SMALL, "MIDDLE_LEFT")
         text(TITLE_L + 52.0, y, value, TEXT_SMALL, "MIDDLE_LEFT")
 
-    notes = note_lines(geometry, spec, sheet)
+    notes = note_lines(geometry, spec, sheet, lang)
     for index, note in enumerate(notes):
         # Bottom-aligned, as on the SVG, so the two sheets stay the same
         # drawing however many notes a specification adds.

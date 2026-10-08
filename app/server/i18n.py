@@ -50,6 +50,61 @@ MESSAGES: dict[str, dict[str, str]] = {
     "sheet.sheet": {"en": "SHEET", "ja": "用紙"},
     "sheet.overall": {"en": "OVERALL", "ja": "全体寸法"},
 
+    # -- the notes under the views ------------------------------------------
+    # A drawing is read on a shop floor, and the notes are the part of it
+    # that is prose rather than geometry: the one place a sheet otherwise
+    # lettered in Japanese was still entirely in English. Material and
+    # tolerance designations stay as they are written - SUS301, 6061-T6,
+    # ISO 2768-m are the same mark in every language, and in ISO 286 a
+    # fit's letter case is its meaning.
+    "note.mm": {
+        "en": "ALL DIMENSIONS IN MILLIMETRES",
+        "ja": "寸法単位はミリメートル",
+    },
+    "note.hidden": {
+        "en": "HIDDEN DETAIL SHOWN DASHED · ALL VIEWS TO THE STATED SCALE",
+        "ja": "かくれ線は破線で表示 · 各図は記載の尺度による",
+    },
+    "note.material": {"en": "MATERIAL: {what}", "ja": "材料：{what}"},
+    "note.finish": {"en": "FINISH: {what}", "ja": "表面処理：{what}"},
+    "note.tolerance": {
+        "en": "GENERAL TOLERANCES TO {what} UNLESS OTHERWISE STATED",
+        "ja": "普通公差は {what} による（特記なき場合）",
+    },
+    "note.notolerance": {
+        "en": "DIMENSIONS ARE AS MODELLED \u2014 NO TOLERANCES ARE SPECIFIED",
+        "ja": "寸法はモデルどおり \u2014 公差の指定なし",
+    },
+    "note.proposed": {
+        "en": "MATERIAL, PROCESS AND TOLERANCE CLASS ARE PROPOSED BY THE "
+              "PLANNER \u2014 CONFIRM BEFORE MANUFACTURE",
+        "ja": "材料・加工法・公差等級はプランナーの提案です \u2014 製造前に"
+              "確認してください",
+    },
+    "note.fitproposed": {"en": "{fit} (PROPOSED)", "ja": "{fit}（提案）"},
+    "note.rounds": {
+        "en": "ROUNDS AND FILLETS NOT CALLED OUT ARE AS MODELLED",
+        "ja": "指示のない丸み・すみ肉はモデルどおり",
+    },
+    "note.watertight": {
+        "en": "SOLID IS CLOSED AND WATERTIGHT AS PROJECTED",
+        "ja": "ソリッドは投影時点で閉じた水密形状",
+    },
+
+    # The nine processes the app is willing to name on a drawing. Kept to
+    # that list on purpose - a process drives the tolerance a shop can hold,
+    # so the English value stays in the data and only its spelling here
+    # changes. See specification.PROCESSES.
+    "process.machined": {"en": "MACHINED", "ja": "機械加工"},
+    "process.turned": {"en": "TURNED", "ja": "旋削"},
+    "process.milled": {"en": "MILLED", "ja": "フライス加工"},
+    "process.cast": {"en": "CAST", "ja": "鋳造"},
+    "process.moulded": {"en": "MOULDED", "ja": "成形"},
+    "process.printed": {"en": "PRINTED", "ja": "積層造形"},
+    "process.sheet": {"en": "SHEET", "ja": "板金"},
+    "process.fabricated": {"en": "FABRICATED", "ja": "溶接組立"},
+    "process.extruded": {"en": "EXTRUDED", "ja": "押出"},
+
     "stated.read": {
         "en": "{n} dimension(s) stated in the request, held fixed",
         "ja": "リクエストに明記された寸法 {n} 件を固定値として使用します",
@@ -364,6 +419,16 @@ def from_header(accept_language: Optional[str]) -> str:
         if code != DEFAULT_LANG or tag.lower().startswith("en"):
             return code
     return DEFAULT_LANG
+
+
+def has(key: str) -> bool:
+    """Whether there is a message under this key.
+
+    For callers that build a key from data - a process name, a material -
+    and need to tell "no translation for this one" from a translation that
+    happens to read like its key.
+    """
+    return key in MESSAGES
 
 
 def t(key: str, lang: Optional[str] = None, **params) -> str:

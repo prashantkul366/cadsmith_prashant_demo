@@ -25,6 +25,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+from . import glossary
+
 from app.catalog import japanese
 
 # A top-level parametric assignment: `name = 12.5  # mm`.  Anchored to column
@@ -402,18 +404,22 @@ def _range_for(kind: str, value: float) -> tuple[float, float, float]:
     return step, high, step
 
 
-def _label(name: str) -> str:
-    """``hole_diameter`` -> ``Hole diameter``.
+def _label(name: str, lang: str = "en") -> str:
+    """``hole_diameter`` -> ``Hole diameter``, or ``穴径``.
 
-    Not translated: these are the script's own identifiers, and a person
-    editing a value needs to see the name the code uses. The unit beside it
-    is what carries the meaning, and that is a symbol in either language.
+    This used to say the name could not be translated, because it is the
+    script's own identifier and somebody editing a value needs to see what
+    the code calls it. The first half of that is still true - the
+    identifier stays ASCII, and it travels beside the label in `name` for
+    the control to show - but the second half was answered the wrong way.
+    A panel of English sliders in a window that is otherwise Japanese is
+    not a link to the code; it is the one thing on screen the reader
+    cannot read. See glossary.py for what it can and cannot read back.
     """
-    words = name.replace("_", " ").strip()
-    return words[:1].upper() + words[1:] if words else name
+    return glossary.label(name, lang)
 
 
-def describe_parameters(code: str) -> list[dict]:
+def describe_parameters(code: str, lang: str = "en") -> list[dict]:
     """Every top-level parameter, with enough about it to draw a control.
 
     Read from the same assignments ``apply_changes`` rewrites, so a control
@@ -436,7 +442,7 @@ def describe_parameters(code: str) -> list[dict]:
         high = max(high, parameter.value)
         described.append({
             "name": parameter.name,
-            "label": _label(parameter.name),
+            "label": _label(parameter.name, lang),
             "value": parameter.value,
             "line": parameter.line,
             "kind": kind,

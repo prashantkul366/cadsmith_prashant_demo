@@ -38,6 +38,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from . import i18n
+
 from app.catalog import standards
 
 #: General tolerance classes, coarsest last. ISO 2768-1 covers linear and
@@ -107,37 +109,46 @@ class Specification:
         """Is there anything to put on the sheet at all?"""
         return bool(self.material or self.tolerance_class or self.fits)
 
-    def sheet_notes(self) -> list[str]:
+    def sheet_notes(self, lang: str = "en") -> list[str]:
         """The lines under the views, in the order they should be read.
 
         Notes rather than title-block fields, which is where a general
         tolerance note belongs on an ISO sheet anyway. The title block here
         is a fixed four rows sized to sit clear of the isometric view, and
         material is not worth moving a view for.
+
+        The prose is written in the reader's language; the designations in
+        it are not. A material is called SUS301 or 6061-T6 on a Japanese
+        drawing as readily as on an English one, a tolerance class is ISO
+        2768-m either way, and in ISO 286 a fit's letter case *is* its
+        meaning - H7 a hole, h7 a shaft - so none of them is touched. The
+        process is the exception: it is one of nine words this app is
+        willing to print, so there is a spelling for each.
         """
         lines: list[str] = []
         if self.material:
             material = self.material.upper()
             if self.process:
-                material += f" · {self.process.upper()}"
-            lines.append(f"MATERIAL: {material}")
+                key = f"process.{self.process.strip().lower()}"
+                spelled = (i18n.t(key, lang) if i18n.has(key)
+                           else self.process.upper())
+                material += f" \u00b7 {spelled}"
+            lines.append(i18n.t("note.material", lang, what=material))
         if self.finish:
-            lines.append(f"FINISH: {self.finish.upper()}")
+            lines.append(i18n.t("note.finish", lang,
+                                what=self.finish.upper()))
         if self.tolerance_class:
-            lines.append(
-                f"GENERAL TOLERANCES TO {self.tolerance_class} UNLESS "
-                f"OTHERWISE STATED")
+            lines.append(i18n.t("note.tolerance", lang,
+                                what=self.tolerance_class))
         else:
-            lines.append("DIMENSIONS ARE AS MODELLED — NO TOLERANCES "
-                         "ARE SPECIFIED")
+            lines.append(i18n.t("note.notolerance", lang))
         for fit in self.fits[:4]:
-            mark = "" if fit.grounded else " (PROPOSED)"
-            lines.append(f"{fit.render()}{mark}")
+            lines.append(fit.render() if fit.grounded else
+                         i18n.t("note.fitproposed", lang, fit=fit.render()))
         if self.proposed:
             # The whole point of the original refusal to print a tolerance
             # note: never let the sheet imply an engineer signed this off.
-            lines.append("MATERIAL, PROCESS AND TOLERANCE CLASS ARE PROPOSED "
-                         "BY THE PLANNER — CONFIRM BEFORE MANUFACTURE")
+            lines.append(i18n.t("note.proposed", lang))
         lines.extend(self.notes)
         return lines
 

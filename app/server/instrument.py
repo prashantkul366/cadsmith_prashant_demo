@@ -187,6 +187,49 @@ def _token_usage() -> dict:
 #: holder does not fit in 4096, and the reply comes back unclosed.
 CODE_MAX_TOKENS = int(os.getenv("CADSMITH_CODE_MAX_TOKENS", "16000"))
 
+#: What to add to an agent's instructions so a reader of this language can
+#: read what comes back.
+#:
+#: The pipeline's own prompts are English and stay English - they are the
+#: language the agents' instructions and the CadQuery documentation they
+#: are given are written in, and translating those would be rewriting the
+#: research code this app is built around. What is added is a paragraph
+#: about the *reply*: a Japanese run was reasoning, planning and naming its
+#: dimensions in English in a window that was otherwise entirely Japanese,
+#: and the one thing on screen the reader could not read was everything the
+#: model had written.
+#:
+#: The carve-outs are not politeness, they are the parts that something
+#: downstream reads rather than displays:
+#:
+#:   * JSON keys are the schema the pipeline parses by name.
+#:   * Python identifiers are parsed back out of the generated script to
+#:     build the parameter sliders, and a non-ASCII name would take that
+#:     panel out entirely.
+#:   * `material`, `process` and `tolerance_class` are looked up in tables -
+#:     specification.PROCESSES and PROCESS_FLOOR key off the English word,
+#:     and so does anything costing the part - so they are written in
+#:     English and translated where they are shown.
+#:   * A fit like H7 and a standard like ISO 2768-m are written the same in
+#:     every language, and in ISO 286 the letter's case *is* the meaning.
+_REPLY_LANGUAGE = {
+    "ja": (
+        "\n\nReply in Japanese. Everything a person reads - your reasoning, "
+        "the part description, the names of components and of key "
+        "dimensions, and anything you assert must be true of the finished "
+        "part - is written in Japanese.\n"
+        "Four things stay in English, because they are read by a program "
+        "rather than by a person:\n"
+        "- every JSON key, exactly as this prompt spells it;\n"
+        "- every identifier in the Python you write, which stays ASCII "
+        "snake_case, though its comments may be Japanese;\n"
+        "- the values of `material`, `process` and `tolerance_class`, which "
+        "are looked up in tables by their English names;\n"
+        "- designations written the same everywhere: M8x1.25, H7, Ø, "
+        "ISO 2768-m, 6061-T6."
+    ),
+}
+
 _HOOKS_INSTALLED = False
 
 
@@ -222,6 +265,16 @@ def install_agent_hooks() -> None:
             if asked is None or asked < CODE_MAX_TOKENS:
                 kwargs["max_tokens"] = CODE_MAX_TOKENS
         ctx = _current.get()
+        # Say which language to answer in, where the reader is not reading
+        # English. Appended to the agent's own instructions rather than
+        # replacing anything in them, so the pipeline's prompts are the
+        # published ones with a paragraph after them.
+        speak = _REPLY_LANGUAGE.get(ctx.lang) if ctx is not None else None
+        if speak and isinstance(system, str):
+            if args:
+                args = (system + speak,) + tuple(args[1:])
+            else:
+                kwargs["system"] = system + speak
         if ctx is not None and ctx.budget is not None:
             # Checked before the call, not after: a request already in flight
             # is already billable, so the only useful place to stop is here.

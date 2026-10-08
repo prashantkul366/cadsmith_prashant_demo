@@ -469,7 +469,8 @@ def job_parameters(job_id: str, request: Request,
         return JSONResponse({"version": chosen, "parameters": []})
     return JSONResponse({
         "version": chosen,
-        "parameters": describe_parameters(path.read_text(encoding="utf-8")),
+        "parameters": describe_parameters(path.read_text(encoding="utf-8"),
+                                          lang),
     })
 
 
