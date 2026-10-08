@@ -1277,10 +1277,9 @@ class OpenAICompatibleClient:
         if status == 400 and _VISION_ERROR.search(detail):
             raise _VisionUnsupported(detail)
         if status == 400:
-            found = _CONTEXT_FULL.search(detail)
-            if found:
-                raise _ContextTooLong(int(found.group(1)), int(found.group(2)),
-                                      detail)
+            full = _window_refusal(detail)
+            if full is not None:
+                raise full
         if status in GATEWAY_STATUS:
             raise _GatewayBusy(
                 f"{self.config.provider} returned {status} for "
@@ -1303,25 +1302,8 @@ class OpenAICompatibleClient:
         last: Optional[_GatewayBusy] = None
         for attempt in range(GATEWAY_ATTEMPTS):
             try:
-                try:
-                    return self._post_once(model, messages, max_tokens,
-                                           role, tools)
-                except _ContextTooLong as full:
-                    # Asked for more than the window had left. The endpoint
-                    # reported both numbers, so ask for what remains - once.
-                    room = full.room_for_reply()
-                    if room < 256 or room >= max_tokens:
-                        raise RuntimeError(
-                            f"{full} - the prompt alone is "
-                            f"{full.prompt_tokens} tokens against a "
-                            f"{full.window}-token window, so no reply fits. "
-                            f"Serve the model with a longer context, or send "
-                            f"less.") from full
-                    self._note(
-                        f"{max_tokens} output tokens would not fit beside a "
-                        f"{full.prompt_tokens}-token prompt in a "
-                        f"{full.window}-token window; asking for {room}.")
-                    return self._post_once(model, messages, room, role, tools)
+                return self._post_fitted(model, messages, max_tokens,
+                                         role, tools)
             except _GatewayBusy as exc:
                 last = exc
                 if attempt + 1 >= GATEWAY_ATTEMPTS:
@@ -1336,6 +1318,75 @@ class OpenAICompatibleClient:
             f"{last} - and again on {GATEWAY_ATTEMPTS} attempts. A slow "
             f"endpoint behind a tunnel needs either a faster model or a "
             f"direct URL; CADSMITH_GATEWAY_ATTEMPTS raises the count.")
+
+    def _post_fitted(self, model: str, messages: list[dict], max_tokens: int,
+                     role: str = "generation",
+                     tools: Optional[list] = None
+                     ) -> tuple[str, _Usage, list[ToolCall]]:
+        """Ask, shrinking the ceiling until it fits the window.
+
+        The endpoint reports the window and the prompt, so the first refit
+        is arithmetic rather than a guess. It is not the last word, though:
+        vLLM says the prompt "contains **at least** N input tokens", so a
+        ceiling computed from N can be refused again - and the first
+        version of this retried inside its own `except`, where a second
+        refusal escaped uncaught and took the run with it. Measured: two of
+        the sixty-one died that way, and two that had been producing a
+        solid stopped.
+
+        So it loops, taking the endpoint's newest numbers each time and
+        giving away a little more, and gives up with a sentence that says
+        which part does not fit.
+        """
+        asked = max_tokens
+        refits = 0
+        last: Optional[_ContextTooLong] = None
+        for _ in range(_CONTEXT_REFITS):
+            try:
+                return self._post_once(model, messages, asked, role, tools)
+            except _ContextTooLong as full:
+                last = full
+                # Two bounds on how much room is left, and the smaller wins.
+                #
+                # The endpoint's own arithmetic is the first, and it is only
+                # a lower bound: vLLM says the prompt "contains **at least**
+                # N input tokens", so a ceiling computed from N can be
+                # refused again, and shaving a token off each time achieves
+                # nothing - measured, three refits went 16000 -> 15935 ->
+                # 15934 -> 15933 and gave up four minutes later with a
+                # sentence it had guessed. Halving is the second, and it is
+                # what guarantees the loop reaches an answer rather than
+                # creeping towards one.
+                #
+                # The refusal itself sharpens the first: a window that would
+                # not hold `asked` beside the prompt proves the prompt is
+                # larger than window - asked, whatever was reported.
+                bound = max(full.prompt_tokens, full.window - asked + 1)
+                arithmetic = full.window - bound - _CONTEXT_MARGIN
+                # Halving only once the arithmetic has itself been refused.
+                # Before that it gives the largest reply that can actually
+                # fit, and handing the Coder less than fits is the
+                # truncation this ceiling was raised to stop: a program cut
+                # off mid-function is a failed run, not a cheaper one.
+                room = (min(arithmetic, asked // 2) if refits
+                        else (arithmetic if arithmetic < asked
+                              else asked // 2))
+                refits += 1
+                if room < _CONTEXT_FLOOR:
+                    break
+                self._note(
+                    f"{asked} output tokens would not fit beside a "
+                    f"{full.prompt_tokens}-token prompt in a "
+                    f"{full.window}-token window; asking for {room}.")
+                asked = room
+        # Whatever the endpoint last said, in its own words. The sentence
+        # that used to end this call was written in advance and asserted
+        # which part did not fit, which is not something the loop knows.
+        raise RuntimeError(
+            f"{self.config.base_url} would not fit a reply beside this "
+            f"prompt: {last}" if last is not None else
+            f"{self.config.base_url} refused {_CONTEXT_REFITS} ceilings in "
+            f"a row as too large for its window.")
 
     def _post_once(self, model: str, messages: list[dict], max_tokens: int,
                    role: str = "generation", tools: Optional[list] = None
@@ -1410,10 +1461,9 @@ class OpenAICompatibleClient:
                         # A full window has nothing to do with streaming;
                         # reading it as "cannot stream" wasted a request and
                         # switched streaming off for the rest of the session.
-                        full = _CONTEXT_FULL.search(detail)
-                        if full:
-                            raise _ContextTooLong(int(full.group(1)),
-                                                  int(full.group(2)), detail)
+                        full = _window_refusal(detail)
+                        if full is not None:
+                            raise full
                         raise _StreamUnsupported(f"{response.status_code}")
                     self._fail(response.status_code, detail, model)
                 for line in response.iter_lines():
@@ -1795,9 +1845,29 @@ _CONTEXT_FULL = re.compile(
     r"(?:prompt contains at least |input (?:length|tokens)[^0-9]{0,20})(\d+)",
     re.IGNORECASE | re.DOTALL)
 
+#: The same refusal, said the other way, with the prompt left out:
+#: "max_tokens=200000 cannot be greater than max_model_len=32768". vLLM
+#: answers this when the ceiling alone is past the window and the one
+#: above when the two together are. Going unrecognised, it was fatal where
+#: its twin was merely refittable.
+_CEILING_PAST_WINDOW = re.compile(
+    r"max_tokens=(\d+) cannot be greater than max_model_len=(\d+)",
+    re.IGNORECASE)
+
 #: Left free for the reply after the clamp, so a prompt that grows by a few
 #: tokens between the refusal and the retry does not refuse again.
 _CONTEXT_MARGIN = 64
+
+#: How many times to shrink the ceiling before giving up. The endpoint's
+#: own "at least N input tokens" is a lower bound and can be out by a
+#: factor of two, which takes three or four halvings to close. Each refused
+#: attempt is a 400 the endpoint answers without generating anything, so
+#: the extra rounds cost far less than the run they save.
+_CONTEXT_REFITS = 6
+
+#: Below this a reply is not worth having, so say so instead of shrinking
+#: towards nothing.
+_CONTEXT_FLOOR = 256
 
 
 class _ContextTooLong(RuntimeError):
@@ -1810,6 +1880,25 @@ class _ContextTooLong(RuntimeError):
 
     def room_for_reply(self) -> int:
         return self.window - self.prompt_tokens - _CONTEXT_MARGIN
+
+
+def _window_refusal(detail: str):
+    """``_ContextTooLong`` if this 400 is a window refusal, else ``None``.
+
+    Both of the endpoint's phrasings, read in one place because they were
+    read in two and only one of them was. The second names no prompt size,
+    so it is reported as zero: the arithmetic then caps the ceiling at the
+    window, and the next attempt draws the fuller message, which carries
+    the prompt.
+    """
+    found = _CONTEXT_FULL.search(detail)
+    if found:
+        return _ContextTooLong(int(found.group(1)), int(found.group(2)),
+                               detail)
+    found = _CEILING_PAST_WINDOW.search(detail)
+    if found:
+        return _ContextTooLong(int(found.group(2)), 0, detail)
+    return None
 
 
 class _GatewayBusy(RuntimeError):
