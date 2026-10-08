@@ -493,6 +493,10 @@ textarea.prompt::placeholder{color:#535E6E}
 .pstep.act .pspin{opacity:1;animation:breathe 1s ease-in-out infinite}
 .pstep.done .pspin{display:none}
 .plabel{font-size:12px;color:var(--ink-dim);transition:color .25s}
+/* The running stage's clock. Dim and monospaced so the number changing
+   every second reads as a measurement rather than as the label moving. */
+.pms{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);
+  letter-spacing:.05em;margin-left:7px;font-weight:400}
 .pstep.act .plabel{color:var(--ink);font-weight:600}
 .pstep.done .plabel{color:var(--ink-2)}
 .pline{width:1.5px;height:11px;background:var(--line);margin-left:8px}

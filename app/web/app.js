@@ -265,8 +265,39 @@ function renderExamples() {
 
 /* ═══════════════════════ pipeline progress ═══════════════════════ */
 
+/* How long the running stage has been running.
+
+   A Planner call on a hard part is a minute of a model thinking, and a
+   strip that says only "Planning the part" cannot be told apart from one
+   that has hung - which is exactly how it was read. The clock is the
+   difference between the two, and it costs one text node a second.
+
+   It ticks in place rather than through renderStages, because redrawing
+   the strip every second restarts the pulse on the active bullet and
+   throws away the detail line that arrived with the last event. */
+let stageClock = 0;
+
+function paintClock() {
+  const node = $("#pipe .pstep.act .pms");
+  if (!node) return;
+  const seconds = Math.round((Date.now() - (S.stage.at || Date.now())) / 1000);
+  node.textContent = seconds >= 1 ? `${seconds}s` : "";
+}
+
+function startClock() {
+  if (!stageClock) stageClock = setInterval(paintClock, 1000);
+}
+
+function stopClock() {
+  if (stageClock) { clearInterval(stageClock); stageClock = 0; }
+}
+
 function renderStages(activeKey, detail) {
-  S.stage = { key: activeKey, detail: detail || "" };
+  // Only a change of stage restarts the clock. A detail line arriving for
+  // the stage already running is news about the same wait, not a new one.
+  const at = S.stage && S.stage.key === activeKey && S.stage.at
+    ? S.stage.at : Date.now();
+  S.stage = { key: activeKey, detail: detail || "", at };
   const activeIndex = STAGES.findIndex(s => s.key === activeKey);
   const phase = $("#thinkPhase");
   if (phase) {
@@ -281,12 +312,16 @@ function renderStages(activeKey, detail) {
           <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg><i class="pspin"></i>
         </div>
         <div>
-          <div class="plabel">${esc(t(stage.label))}</div>
+          <div class="plabel">${esc(t(stage.label))}<span class="pms"></span></div>
           ${i === activeIndex && detail
             ? `<div class="pdetail">${esc(detail)}</div>` : ""}
         </div>
       </div>${i < STAGES.length - 1 ? '<div class="pline"></div>' : ""}`;
   }).join("");
+  // Nothing is waiting once the last stage is lit, and a finished run must
+  // not leave an interval behind counting up forever.
+  if (activeKey === "done" || activeIndex < 0) stopClock();
+  else { paintClock(); startClock(); }
 }
 
 function appendLog(line) {
@@ -313,6 +348,9 @@ function showOverlay(which) {
 const PHASE_STAGE = {
   plan: "plan", code: "code", execute: "execute", error_fix: "execute",
   render: "judge", judge: "judge", refine: "code",
+  // The kernel measuring the finished solid against the plan is validation,
+  // and left unmapped it was the one stage of the run the strip sat out.
+  spec: "judge",
 };
 
 /* ══════════ Reasoning panel ══════════
@@ -1302,6 +1340,7 @@ function thinkSummary() {
 }
 
 function finishRun(data) {
+  stopClock();
   thinkSummary();
   // The run held the composer while it worked; give it back. selectVersion
   // decides only whether the next thing typed edits this part or starts
@@ -1360,6 +1399,7 @@ function modelAdvice(message) {
 }
 
 function failRun(message) {
+  stopClock();
   S.busy = false;
   setComposerEnabled(true);
   Viewer.building = false;
