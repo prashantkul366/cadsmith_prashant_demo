@@ -217,9 +217,12 @@ def printed(sheet: dict) -> list[float]:
 
 
 #: A number in a callout, which is where a depth or a counterbore is
-#: written. Not preceded by a digit, so the 25 of M8x1.25 is one number
-#: rather than two, and not the count in "4x".
-_NUMBER = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)(?!\s*\u00d7)")
+#: written. Bounded by a non-digit on both sides, so the 25 of M8x1.25 is
+#: one number rather than two, and not the count in "4x" - and not, as it
+#: was, the 25 that regex backtracking finds inside the 250 of "250x O4",
+#: which put a 25 mm dimension on the sheet's tally that the sheet never
+#: printed and the part never had.
+_NUMBER = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])(?!\s*\u00d7)")
 
 
 def _in_text(label) -> list[float]:
