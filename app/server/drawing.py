@@ -1068,7 +1068,7 @@ def plan_view(name: str, view: dict, scale: float, dimension: str,
     #
     # Size and position, like a hole, and in the same ladder so a cut-out's
     # width never lands on a pitch. Identical cut-outs are one dimension and
-    # a count - five slits are "5x 0.5", which is what ISO 129-1 asks for
+    # a count - five slits are "5\u00d7 0.5", which is what ISO 129-1 asks
     # and the difference between a sheet somebody reads and a sheet covered
     # in the same number. Capped for the same reason the leaders are.
     # Never on the pictorial view. An isometric is a picture of the part,
@@ -1081,7 +1081,11 @@ def plan_view(name: str, view: dict, scale: float, dimension: str,
         gmin_u, gmin_v, gmax_u, gmax_v = group["bbox"]
         ax, ay = to_sheet(gmin_u, gmin_v)
         bx, by = to_sheet(gmax_u, gmax_v)
-        count = f"{group['count']}x " if group["count"] > 1 else ""
+        # The same multiplication sign the hole leaders use. Two
+        # spellings of one thing on one sheet is how "3x 0.5" came to
+        # be read as a 3 mm length: the count prefix is recognised by
+        # its sign, and an ASCII x is not that sign.
+        count = f"{group['count']}\u00d7 " if group["count"] > 1 else ""
         plan["dimensions"].append({
             "p1": (ax, ay), "p2": (bx, ay), "offset": below_line(ay),
             "vertical": False, "measure": group["w"],
