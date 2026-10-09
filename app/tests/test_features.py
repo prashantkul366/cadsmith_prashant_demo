@@ -121,6 +121,21 @@ def main() -> int:
               sorted(set(round(n, 2) for n in features.printed(sheet)))
               == [10.0, 12.0, 40.0, 60.0],
               str(sorted(set(round(n, 2) for n in features.printed(sheet)))))
+        # A count is not a size. "250x O4" says there are two hundred and
+        # fifty 4 mm holes, and the only length in it is the 4 - but the
+        # number reader used to backtrack inside the 250 and find a 25,
+        # so a sheet of many small holes was credited with a 25 mm
+        # dimension it never printed. Caught by auditing the 61-prompt
+        # library: three parts' only untraceable numbers were this.
+        counted = {"views": [{"dimensions": [], "callouts": [
+            {"measure": 4.0, "label": "250\u00d7 \u00d84"},
+            {"measure": 4.0, "label": "249\u00d7 \u00d84"},
+            {"measure": 6.6, "label": "4\u00d7 \u00d86.6 THRU \u2334\u00d811 \u25bc6.5"},
+            {"measure": 13.0, "label": "8\u00d7 \u00d813 ON \u00d8200 PCD"},
+            {"measure": 8.0, "label": "4\u00d7 M8\u00d71.25"}]}]}
+        got = sorted(set(round(n, 2) for n in features.printed(counted)))
+        check("a count inside a callout is not read as a length",
+              got == [1.25, 4.0, 6.5, 6.6, 8.0, 11.0, 13.0, 200.0], str(got))
 
         print("\nWhat the part declares that the sheet does not carry")
         declared = [{"name": "plate_length", "value": 60.0, "kind": "length"},
