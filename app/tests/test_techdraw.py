@@ -57,6 +57,26 @@ doc.recompute()
 '''
 
 
+#: A square plate with its corners broken, which is the shape the old
+#: rule for the overall dimension could not measure. Picking the longest
+#: straight edge is ambiguous on a square - half of them run the wrong
+#: way, and a DistanceX across a vertical edge reads 0 - and the break
+#: makes every straight edge 98 of a part that is 100 across.
+SQUARE = '''
+import FreeCAD
+doc = FreeCAD.newDocument("Part")
+box = doc.addObject("Part::Box", "B")
+box.Length, box.Width, box.Height = 100, 100, 10
+doc.recompute()
+broken = doc.addObject("Part::Chamfer", "Widget")
+broken.Base = box
+vertical = [i + 1 for i, e in enumerate(box.Shape.Edges)
+            if abs(e.Vertexes[0].Point.z - e.Vertexes[-1].Point.z) > 1e-6]
+broken.Edges = [(i, 1.0, 1.0) for i in vertical]
+doc.recompute()
+'''
+
+
 def freecadcmd() -> str:
     for candidate in CANDIDATES:
         if not candidate:
@@ -145,6 +165,20 @@ def main() -> int:
     check("the diameter is the 6.6 hole, not the 120 edge beside it",
           abs(placed.get("Diameter", 0) - 6.6) < 0.01,
           str(placed.get("Diameter")))
+
+    print("\nThe overall dimension on a part whose edges do not help")
+    square = techdraw.build(Bridge(binary, SQUARE), "Part", "Widget",
+                            [{"type": "DistanceX", "spec": ""},
+                             {"type": "DistanceY", "spec": ""}])
+    across = {d["type"]: d["value"] for d in square.get("dimensions", [])}
+    check("a square plate is 100 across, not 0 and not 98",
+          abs(across.get("DistanceX", 0) - 100.0) < 0.01,
+          square.get("why") or str(across.get("DistanceX")))
+    check("and 100 the other way, measured in that direction",
+          abs(across.get("DistanceY", 0) - 100.0) < 0.01,
+          str(across.get("DistanceY")))
+    check("with neither of them refused", not square.get("skipped"),
+          str(square.get("skipped"))[:90])
 
     print("\n" + "=" * 58)
     print("ALL CHECKS PASSED" if not failures else f"{failures} CHECK(S) FAILED")

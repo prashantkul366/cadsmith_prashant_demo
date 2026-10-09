@@ -102,24 +102,50 @@ doc.recompute()
 
 front = group.Anchor
 edges = front.getVisibleEdges()
-lines = [(i, e) for i, e in enumerate(edges)
-         if not hasattr(e.Curve, "Radius")]
 circles = [(i, e) for i, e in enumerate(edges) if hasattr(e.Curve, "Radius")]
 
 
-def place(kind, index, name, spec):
-    """One dimension, attached to an edge and then read back."""
+def points():
+    """Every point of the view's geometry, with its reference index."""
+    out, i = [], 0
+    while True:
+        try:
+            vertex = front.getVertexByIndex(i)
+        except Exception:
+            break
+        if vertex is None:
+            break
+        out.append((i, vertex.Point))
+        i += 1
+    return out
+
+
+def place(kind, refs, name, spec, want):
+    """One dimension, attached to geometry and then read back.
+
+    `refs` is what it is measured from: one edge, or two vertices. The
+    value is read back before the dimension is kept, because a dimension
+    that measures nothing is worse on a sheet than a missing one - a
+    reader has no way to tell it from a real zero.
+    """
     dim = doc.addObject("TechDraw::DrawViewDimension", name)
     page.addView(dim)
     dim.Type = kind
-    dim.References2D = [(front, "Edge%%d" %% index)]
+    dim.References2D = [(front, ref) for ref in refs]
     if spec:
         dim.FormatSpec = spec
     doc.recompute()
+    value = dim.getRawValue()
+    if not (abs(value) > 1e-6):
+        doc.removeObject(dim.Name)
+        doc.recompute()
+        report["skipped"].append({"want": want, "why": "measured zero"})
+        return False
     report["dimensions"].append({
-        "name": name, "type": kind, "edge": index,
-        "value": round(dim.getRawValue(), 4),
+        "name": name, "type": kind, "refs": list(refs),
+        "value": round(value, 4),
     })
+    return True
 
 
 placed = 0
@@ -136,15 +162,31 @@ for want in wanted:
                 report["skipped"].append(
                     {"want": want, "why": "no circle of that radius"})
                 continue
-            place(kind, found[0], "CADSmithDim%%d" %% placed,
-                  want.get("spec") or "")
-        elif kind in ("DistanceX", "DistanceY"):
-            if not lines:
-                report["skipped"].append({"want": want, "why": "no edges"})
+            if not place(kind, ["Edge%%d" %% found[0]],
+                         "CADSmithDim%%d" %% placed,
+                         want.get("spec") or "", want):
                 continue
-            index = max(lines, key=lambda ie: ie[1].Length)[0]
-            place(kind, index, "CADSmithDim%%d" %% placed,
-                  want.get("spec") or "")
+        elif kind in ("DistanceX", "DistanceY"):
+            # The overall length, between the two points of the view
+            # furthest apart along the axis being dimensioned. This used
+            # to attach to the longest straight edge, which has no
+            # bearing on the direction asked for: on a square plate it
+            # chose a vertical edge and the DistanceX read 0, and on a
+            # plate with its corners broken the longest edge is 298 of a
+            # part that is 300 across. Two points cannot be wrong about
+            # either.
+            seen = points()
+            if len(seen) < 2:
+                report["skipped"].append({"want": want, "why": "no points"})
+                continue
+            reach = ((lambda p: p.x) if kind == "DistanceX"
+                     else (lambda p: p.y))
+            low = min(seen, key=lambda ip: reach(ip[1]))[0]
+            high = max(seen, key=lambda ip: reach(ip[1]))[0]
+            if not place(kind, ["Vertex%%d" %% low, "Vertex%%d" %% high],
+                         "CADSmithDim%%d" %% placed,
+                         want.get("spec") or "", want):
+                continue
         else:
             report["skipped"].append({"want": want, "why": "unknown type"})
             continue
