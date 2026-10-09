@@ -217,12 +217,18 @@ def printed(sheet: dict) -> list[float]:
 
 
 #: A number in a callout, which is where a depth or a counterbore is
-#: written. Bounded by a non-digit on both sides, so the 25 of M8x1.25 is
-#: one number rather than two, and not the count in "4x" - and not, as it
-#: was, the 25 that regex backtracking finds inside the 250 of "250x O4",
-#: which put a 25 mm dimension on the sheet's tally that the sheet never
-#: printed and the part never had.
-_NUMBER = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])(?!\s*\u00d7)")
+#: written.  Bounded by a non-digit on both sides, so the 25 of M8x1.25 is
+#: one number rather than two, and not - as it was - the 25 that regex
+#: backtracking finds inside the 250 of "250x O4", which put a 25 mm
+#: dimension on the sheet's tally that the sheet never printed and the
+#: part never had.
+#:
+#: A number against the multiplication sign is a count, not a length, and
+#: the space decides which: a count is written closed up to it ("4x O6.6",
+#: "3x 0.5") and a size is written clear of it, as ISO 129-1 writes a
+#: chamfer "2 x 45deg".  Allowing a space here read every chamfer's leg as
+#: a count and dropped it.
+_NUMBER = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])(?!\u00d7)")
 
 
 def _in_text(label) -> list[float]:
