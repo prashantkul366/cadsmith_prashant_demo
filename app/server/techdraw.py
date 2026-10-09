@@ -105,19 +105,64 @@ edges = front.getVisibleEdges()
 circles = [(i, e) for i, e in enumerate(edges) if hasattr(e.Curve, "Radius")]
 
 
-def points():
-    """Every point of the view's geometry, with its reference index."""
-    out, i = [], 0
+def indexed():
+    """How many points of the view's geometry can be referenced."""
+    i = 0
     while True:
         try:
-            vertex = front.getVertexByIndex(i)
+            if front.getVertexByIndex(i) is None:
+                break
         except Exception:
             break
-        if vertex is None:
-            break
-        out.append((i, vertex.Point))
         i += 1
+    return i
+
+
+def find(wanted):
+    """The reference index of each point, by where it is."""
+    out = {}
+    for i in range(indexed()):
+        at = front.getVertexByIndex(i).Point
+        for name, (x, y) in wanted.items():
+            if abs(at.x - x) < 1e-6 and abs(at.y - y) < 1e-6:
+                out[name] = i
     return out
+
+
+def corners(axis):
+    """Two points to measure the view's overall length between.
+
+    The outline's own extremes along `axis`, which are not in general
+    model vertices: a plate with a radiused corner has no vertex at the
+    side it is widest at, and a view whose outline is arcs may have no
+    referenceable vertex anywhere near its edge. TechDraw's answer to a
+    point that is not model geometry is a cosmetic vertex, so that is
+    what the overall dimension is attached to - placed level with the
+    bottom of the view, where its dimension line belongs.
+    """
+    boxes = [e.BoundBox for e in front.getVisibleEdges()]
+    if not boxes:
+        return {}
+    xmin = min(b.XMin for b in boxes)
+    xmax = max(b.XMax for b in boxes)
+    ymin = min(b.YMin for b in boxes)
+    ymax = max(b.YMax for b in boxes)
+    if axis == "x":
+        ends = {"a": (xmin, ymin), "b": (xmax, ymin)}
+    else:
+        ends = {"a": (xmin, ymin), "b": (xmin, ymax)}
+    if abs(ends["b"][0] - ends["a"][0]) < 1e-6 and \
+            abs(ends["b"][1] - ends["a"][1]) < 1e-6:
+        return {}
+    for x, y in ends.values():
+        tag = front.makeCosmeticVertex(FreeCAD.Vector(x, y, 0.0))
+        # A dimension needs the point, not a dot printed at it.
+        try:
+            front.getCosmeticVertex(tag).Show = False
+        except Exception:
+            pass
+    doc.recompute()
+    return find(ends)
 
 
 def place(kind, refs, name, spec, want):
@@ -167,23 +212,18 @@ for want in wanted:
                          want.get("spec") or "", want):
                 continue
         elif kind in ("DistanceX", "DistanceY"):
-            # The overall length, between the two points of the view
-            # furthest apart along the axis being dimensioned. This used
-            # to attach to the longest straight edge, which has no
-            # bearing on the direction asked for: on a square plate it
-            # chose a vertical edge and the DistanceX read 0, and on a
-            # plate with its corners broken the longest edge is 298 of a
-            # part that is 300 across. Two points cannot be wrong about
-            # either.
-            seen = points()
-            if len(seen) < 2:
-                report["skipped"].append({"want": want, "why": "no points"})
+            # The overall length, across the view's own outline. This
+            # used to attach to the longest straight edge, which says
+            # nothing about the direction asked for: on a square plate
+            # it chose a vertical edge and the DistanceX read 0, and on
+            # a plate with its corners broken the longest edge is 298 of
+            # a part that is 300 across.
+            ends = corners("x" if kind == "DistanceX" else "y")
+            if len(ends) < 2:
+                report["skipped"].append({"want": want, "why": "no outline"})
                 continue
-            reach = ((lambda p: p.x) if kind == "DistanceX"
-                     else (lambda p: p.y))
-            low = min(seen, key=lambda ip: reach(ip[1]))[0]
-            high = max(seen, key=lambda ip: reach(ip[1]))[0]
-            if not place(kind, ["Vertex%%d" %% low, "Vertex%%d" %% high],
+            if not place(kind, ["Vertex%%d" %% ends["a"],
+                                "Vertex%%d" %% ends["b"]],
                          "CADSmithDim%%d" %% placed,
                          want.get("spec") or "", want):
                 continue

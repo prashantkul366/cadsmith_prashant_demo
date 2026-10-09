@@ -77,6 +77,19 @@ doc.recompute()
 '''
 
 
+#: A round plate, which has no straight edge at all and only a handful of
+#: referenceable vertices - none of them where it is widest. Measured on
+#: the library's parts, that is where attaching the overall to a model
+#: vertex gave 11 for a part 22 across.
+DISC = '''
+import FreeCAD
+doc = FreeCAD.newDocument("Part")
+disc = doc.addObject("Part::Cylinder", "Widget")
+disc.Radius, disc.Height = 30, 10
+doc.recompute()
+'''
+
+
 def freecadcmd() -> str:
     for candidate in CANDIDATES:
         if not candidate:
@@ -179,6 +192,13 @@ def main() -> int:
           str(across.get("DistanceY")))
     check("with neither of them refused", not square.get("skipped"),
           str(square.get("skipped"))[:90])
+
+    round_plate = techdraw.build(Bridge(binary, DISC), "Part", "Widget",
+                                 [{"type": "DistanceX", "spec": ""}])
+    wide = {d["type"]: d["value"] for d in round_plate.get("dimensions", [])}
+    check("a round plate is as wide as it is, with no edge to measure",
+          abs(wide.get("DistanceX", 0) - 60.0) < 0.01,
+          round_plate.get("why") or str(wide.get("DistanceX")))
 
     print("\n" + "=" * 58)
     print("ALL CHECKS PASSED" if not failures else f"{failures} CHECK(S) FAILED")
