@@ -40,9 +40,24 @@ if (-not $python) {
 }
 Write-Host "Using $python" -ForegroundColor DarkGray
 
-& $python -c "import cadquery" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "CadQuery is not installed in $python" -ForegroundColor Red
+# Probe the interpreter, and report what actually went wrong.
+#
+# Deliberately NOT keyed on $LASTEXITCODE. Redirecting a native command's
+# stderr in Windows PowerShell - with either 2>$null or 2>&1, and regardless
+# of $ErrorActionPreference - can leave $LASTEXITCODE not reflecting the real
+# result, so a working install gets reported as missing. Have Python print a
+# sentinel and look for it: if the import failed, the sentinel is absent, and
+# whatever Python said instead is the error worth showing.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$probe = & $python -c "import cadquery, vtk; print('CADSMITH_IMPORT_OK', cadquery.__version__, vtk.VTK_VERSION)" 2>&1
+$ErrorActionPreference = $prevEAP
+$probeText = ($probe | Out-String)
+
+if ($probeText -notmatch "CADSMITH_IMPORT_OK") {
+    Write-Host "Could not import CadQuery and VTK with $python" -ForegroundColor Red
+    Write-Host $probeText.TrimEnd()
+    Write-Host ""
     Write-Host "  .venv\Scripts\python -m pip install -r app\requirements-app.txt"
     exit 1
 }
@@ -50,6 +65,12 @@ if ($LASTEXITCODE -ne 0) {
 # Load .env into this process. The agents read it through python-dotenv too,
 # but setting it here means the health check reports the truth before the
 # first run starts.
+#
+# A variable already set in this shell wins. Someone who just typed
+# `$Env:AWS_SESSION_TOKEN = "..."` means it, and a stale value left in .env
+# should not quietly replace a fresh one - which, for short-lived AWS
+# credentials, reads as an expired token with no explanation. This is also
+# python-dotenv's own default, so both halves now agree.
 $envFile = Join-Path $root ".env"
 if (Test-Path $envFile) {
     foreach ($line in Get-Content $envFile) {
@@ -58,6 +79,7 @@ if (Test-Path $envFile) {
         $split = $trimmed.IndexOf("=")
         if ($split -lt 1) { continue }
         $name = $trimmed.Substring(0, $split).Trim()
+        if ([Environment]::GetEnvironmentVariable($name, "Process")) { continue }
         $value = $trimmed.Substring($split + 1).Trim().Trim('"').Trim("'")
         [Environment]::SetEnvironmentVariable($name, $value, "Process")
     }

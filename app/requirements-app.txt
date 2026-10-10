@@ -23,6 +23,12 @@ vtk
 fastapi
 uvicorn[standard]
 
+# Claude on Amazon Bedrock. The Anthropic SDK reaches Bedrock through boto3,
+# and `pip install anthropic` alone does not bring it: without this the app
+# still starts, the health banner still says Bedrock is ready, and the first
+# Generate answers 503 blaming the AWS credentials - for a missing import.
+anthropic[bedrock]
+
 # Talks to OpenAI-compatible backends (OpenAI, Ollama, llama.cpp, vLLM,
 # LM Studio, and the hosted gateways that speak the same API). The Anthropic
 # path uses its own SDK, from requirements.txt.
@@ -32,3 +38,11 @@ httpx
 # Required on corporate networks that inspect TLS, where every HTTPS
 # connection is re-signed by a company CA the OS trusts and certifi does not.
 truststore
+
+# Writes the engineering drawing as DXF, which is the format a drawing is
+# exchanged in. Its DIMENSION entities carry the geometry they measure, so a
+# CAD system opening the file re-measures the part rather than reading back a
+# string this app wrote; that is worth a dependency rather than hand-rolling.
+# The sheet shown in the browser is SVG and does not need this - a missing
+# ezdxf costs the DXF download and nothing else.
+ezdxf

@@ -287,7 +287,11 @@ class Pipeline:
 
             if error_retries < self.max_error_retries:
                 self.log(f"  [ERROR FIX] Attempt {error_retries + 1}/{self.max_error_retries}...")
-                fixed_code = agents.fix_error(current_code, exec_result.error, design_plan)
+                # Hand over what has already been tried, so the third attempt
+                # is not the first one again.
+                fixed_code = agents.fix_error(
+                    current_code, exec_result.error, design_plan,
+                    history=list(retry_log))
                 retry_log.append({
                     "attempt": error_retries + 1,
                     "error_type": exec_result.error_type,

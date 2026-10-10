@@ -90,7 +90,7 @@ def main() -> int:
         wait_for(job)
     check("job converged", job.converged)
     check("one version", len(job.versions) == 1, str(len(job.versions)))
-    baseline = json.loads((job.directory / "v0" / "geometry.json").read_text())
+    baseline = json.loads((job.directory / "v0" / "geometry.json").read_text(encoding="utf-8"))
     check("baseline is 2mm thick",
           abs(baseline["bounding_box"]["zlen"] - 2.0) < 1e-6)
 
@@ -115,7 +115,7 @@ def main() -> int:
           str(edited.get("changes")))
 
     geometry = json.loads(
-        (job.directory / f"v{edited['iteration']}" / "geometry.json").read_text())
+        (job.directory / f"v{edited['iteration']}" / "geometry.json").read_text(encoding="utf-8"))
     check("kernel rebuilt it at 4mm",
           abs(geometry["bounding_box"]["zlen"] - 4.0) < 1e-6,
           f"zlen={geometry['bounding_box']['zlen']}")
@@ -124,7 +124,7 @@ def main() -> int:
     check("still watertight", geometry["is_valid"])
     check("patched source saved",
           "thickness = 4.0" in
-          (job.directory / f"v{edited['iteration']}" / "code.py").read_text())
+          (job.directory / f"v{edited['iteration']}" / "code.py").read_text(encoding="utf-8"))
     check("STL exported for the edit",
           (job.directory / f"v{edited['iteration']}" / "model.stl").exists())
     check("Judge was skipped for a patch",
@@ -149,7 +149,7 @@ def main() -> int:
     check("the Judge did run on the agent path",
           refined["judge_passed"] is True, str(refined.get("judge_passed")))
     refined_geometry = json.loads(
-        (job.directory / f"v{refined['iteration']}" / "geometry.json").read_text())
+        (job.directory / f"v{refined['iteration']}" / "geometry.json").read_text(encoding="utf-8"))
     check("chamfer added faces",
           refined_geometry["num_faces"] > geometry["num_faces"],
           f"{geometry['num_faces']} → {refined_geometry['num_faces']}")

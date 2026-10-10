@@ -22,6 +22,7 @@ from app.server.events import (
     PHASE_EXECUTE,
     PHASE_JUDGE,
     PHASE_RENDER,
+    PHASE_SPEC,
     PHASE_VERSION,
     STATUS_FAILED,
     STATUS_OK,
@@ -131,8 +132,24 @@ def main() -> int:
     check("three-view render produced",
           (PHASE_RENDER, STATUS_OK) in kinds,
           "VTK offscreen unavailable" if (PHASE_RENDER, STATUS_FAILED) in kinds else "")
-    check("no failed events", not [k for k in kinds if k[1] == STATUS_FAILED],
-          str([e.message[:60] for e in events if e.status == STATUS_FAILED]))
+    # The first attempt is deliberately 2mm thick where the request says 4mm,
+    # so exactly one measured rejection is expected and it must be that one.
+    # Nothing else may fail: a failed render or a failed export is a fault.
+    failed = [e for e in events if e.status == STATUS_FAILED]
+    check("nothing failed except the measured rejection of attempt one",
+          all(e.phase == PHASE_SPEC for e in failed),
+          str([(e.phase, e.message[:50]) for e in failed]))
+    spec_failures = [e for e in failed if e.phase == PHASE_SPEC]
+    check("the 2mm plate was caught by measurement, not left to the Judge",
+          len(spec_failures) == 1 and spec_failures[0].data.get("iteration") == 0,
+          str([e.message[:70] for e in spec_failures]))
+    # And caught specifically because the request said 4mm thick - the stated
+    # dimension is what makes this a hard gate rather than an advisory one.
+    caught = spec_failures[0].data.get("spec", {}).get("checks", []) if spec_failures else []
+    check("the request's own 4mm is what rejected it",
+          any(c.get("key", "").startswith("stated_") and not c.get("passed")
+              for c in caught),
+          str([c.get("key") for c in caught if not c.get("passed")]))
     versions = [e for e in events if e.phase == PHASE_VERSION]
     check("two version bundles announced", len(versions) == 2)
     check("first version rejected, second passed",
@@ -140,7 +157,7 @@ def main() -> int:
           and versions[0].data["passed"] is False
           and versions[1].data["passed"] is True)
     check("events persisted to disk", (job_dir / "events.jsonl").exists()
-          and len((job_dir / "events.jsonl").read_text().splitlines()) == len(events))
+          and len((job_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()) == len(events))
 
     print("\nArtifact bundles")
     for n in (0, 1):

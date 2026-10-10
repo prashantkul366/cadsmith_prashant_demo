@@ -84,12 +84,30 @@ def main() -> int:
 
         response = client.post("/api/jobs", json={
             "prompt": PROMPT,
-            "options": {"max_iterations": 2, "use_vision": True},
+            "options": {"max_iterations": 2, "use_vision": True,
+                        "effort": "low"},
         })
         check("job accepted", response.status_code == 201,
               f"status {response.status_code}")
         job_id = response.json()["job"]["id"]
+        check("the chosen effort is recorded on the job",
+              response.json()["job"]["options"]["effort"] == "low",
+              str(response.json()["job"]["options"].get("effort")))
         print(f"        job id: {job_id}")
+
+        listing = client.get("/api/providers").json()
+        check("the effort picker is offered levels to choose from",
+              listing.get("efforts") == ["low", "medium", "high"],
+              str(listing.get("efforts")))
+        check("and told which one the API applies by default",
+              listing.get("effort") == "high", str(listing.get("effort")))
+
+        junk = client.post("/api/jobs", json={
+            "prompt": PROMPT, "options": {"effort": "turbo"}})
+        check("an effort the API would reject never reaches it",
+              junk.status_code == 201
+              and junk.json()["job"]["options"]["effort"] == "",
+              f"status {junk.status_code}")
 
         print("\nEvent stream (SSE)")
         events: list[dict] = []
@@ -164,6 +182,110 @@ def main() -> int:
         geometry = client.get(f"/api/jobs/{job_id}/v/0/geometry.json")
         check("geometry.json is valid and watertight",
               geometry.status_code == 200 and geometry.json()["is_valid"])
+
+        print("\nThe drawing is built before anyone asks for it")
+        # The projection is seconds of hidden-line work. It is started when
+        # the version is published, so the wait is spent while the person is
+        # still looking at the part rather than after they click Drawing.
+        version_dir = _TMP_RUNS / job_id / "v0"
+        sheet = version_dir / "drawing.svg"
+        for _ in range(120):
+            if sheet.exists() and sheet.stat().st_size > 0:
+                break
+            time.sleep(0.5)
+        check("the sheet appears without being requested",
+              sheet.exists() and sheet.stat().st_size > 0,
+              f"{sheet.stat().st_size} bytes" if sheet.exists() else "never built")
+        check("and the projection is cached beside it",
+              (version_dir / "projection.json").exists())
+
+        started = time.time()
+        drawn = client.get(f"/api/jobs/{job_id}/v/0/drawing.svg")
+        served = time.time() - started
+        check("so asking for it is served from disk, not rebuilt",
+              drawn.status_code == 200 and served < 1.0,
+              f"{served * 1000:.0f} ms")
+
+        # The DXF needs the same projection. Reusing the cached one is what
+        # keeps the second format from paying the first one's cost again.
+        started = time.time()
+        dxf = client.get(f"/api/jobs/{job_id}/v/0/drawing.dxf")
+        built = time.time() - started
+        check("and the DXF reuses that projection rather than redoing it",
+              dxf.status_code == 200 and b"DIMENSION" in dxf.content
+              and built < 5.0,
+              f"{len(dxf.content)} bytes in {built:.1f}s")
+
+        print("\nParameters, read and set")
+        described = client.get(f"/api/jobs/{job_id}/parameters")
+        check("the version's parameters are served",
+              described.status_code == 200,
+              f"status {described.status_code}")
+        by_name = {p["name"]: p
+                   for p in described.json().get("parameters", [])}
+        check("the washer's own dimensions are among them",
+              {"outer_dia", "bore", "thickness"} == set(by_name),
+              ", ".join(sorted(by_name)))
+        check("each carries what a control needs",
+              all({"value", "min", "max", "step", "unit", "kind"} <= set(p)
+                  for p in by_name.values()),
+              str(by_name.get("thickness")))
+
+        for body, why in [
+            ({"changes": {}}, "nothing to change"),
+            ({"changes": {"flange_diameter": 12}}, "no such parameter"),
+            ({"changes": {"thickness": "thick"}}, "not a number"),
+            ({"changes": {"thickness": -2}}, "not positive"),
+            ({"changes": {"thickness": None}}, "no value at all"),
+            ({"changes": {"thickness": 2.0}}, "already that value"),
+        ]:
+            refused = client.post(f"/api/jobs/{job_id}/parameters", json=body)
+            check(f"refused: {why}", refused.status_code == 400,
+                  f"status {refused.status_code}: "
+                  f"{refused.json().get('detail', '')[:60]}")
+
+        # Python's json module emits bare NaN and Infinity, and json.loads
+        # reads them back, so a non-browser client can post one. NaN compares
+        # false against every bound, so without its own check it would sail
+        # through as a dimension.
+        for literal in ("NaN", "Infinity"):
+            refused = client.post(
+                f"/api/jobs/{job_id}/parameters",
+                content=('{"changes":{"thickness":%s}}' % literal).encode(),
+                headers={"Content-Type": "application/json"})
+            check(f"refused: {literal} is not a dimension",
+                  refused.status_code == 400,
+                  f"status {refused.status_code}: "
+                  f"{refused.json().get('detail', '')[:60]}")
+
+        # The real thing: no model call, and the kernel measures the result.
+        before_calls = len(fake.calls)
+        set_response = client.post(f"/api/jobs/{job_id}/parameters",
+                                   json={"changes": {"thickness": 5.0}})
+        check("a real change is accepted", set_response.status_code == 202,
+              f"status {set_response.status_code}")
+        with client.stream("GET",
+                           f"/api/jobs/{job_id}/events?from_seq=0") as stream:
+            for line in stream.iter_lines():
+                if line.startswith("event: end"):
+                    break
+        after = client.get(f"/api/jobs/{job_id}").json()["job"]
+        check("it produced a new version", len(after["versions"]) == 2,
+              f"{len(after['versions'])} version(s)")
+        newest = after["versions"][-1]
+        check("the kernel rebuilt to the value that was set",
+              abs((newest.get("geometry") or {})
+                  .get("bounding_box", {}).get("zlen", 0) - 5.0) < 1e-6,
+              str((newest.get("geometry") or {}).get("bounding_box")))
+        check("and it cost no model call",
+              len(fake.calls) == before_calls,
+              ", ".join(fake.calls[before_calls:]) or "none")
+        rebuilt = client.get(f"/api/jobs/{job_id}/v/"
+                             f"{newest['iteration']}/code.py").text
+        check("the script itself carries the new value",
+              "thickness = 5.0" in rebuilt,
+              next((l for l in rebuilt.splitlines()
+                    if l.startswith("thickness")), "?"))
 
         print("\nSafety")
         missing = client.get(f"/api/jobs/{job_id}/v/9/model.stl")

@@ -7,6 +7,7 @@
 <!-- three.js is vendored so the app runs with no internet access:
      a live demo must not depend on a CDN being reachable. -->
 <script src="/static/vendor/three.min.js"></script>
+<script src="/static/i18n.js"></script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%234D8DF6%22%20stroke-width%3D%221.6%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M12%202%203%207v10l9%205%209-5V7z%22%2F%3E%3Cpath%20d%3D%22M3%207l9%205%209-5M12%2012v10%22%2F%3E%3C%2Fsvg%3E" />
 <link rel="stylesheet" href="/static/style.css" />
 </head>
@@ -17,16 +18,66 @@
     <svg class="logo" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>
     <h1>CADSmith</h1>
   </div>
-  <div class="pill" id="enginePill">Planner · Coder · Executor · Validator · Refiner</div>
+
+  <!-- Step back and forward through the versions of this part. The strip at
+       the foot of the viewport has always been able to do it by clicking a
+       thumbnail; this is the same move in the place a hand reaches for it,
+       and on the keys it reaches for - so a parameter dragged too far is one
+       key away from where it was. -->
+  <div class="undogrp">
+    <button class="ubtn" id="undoBtn" disabled
+            data-i18n-title="app.undo" title="Undo">
+      <svg class="icn" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>
+    </button>
+    <button class="ubtn" id="redoBtn" disabled
+            data-i18n-title="app.redo" title="Redo">
+      <svg class="icn" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg>
+    </button>
+  </div>
+  <!-- Was the always-on "Planner · Coder · Executor · Validator · Refiner"
+       strapline, which the design drops. The element stays because it is
+       also where a replay announces itself, and that is a state worth
+       keeping: it is the difference between watching a run and watching a
+       recording. Hidden until there is something to say. -->
+  <div class="pill" id="enginePill" hidden></div>
   <div style="flex:1"></div>
-  <button class="health" id="healthChip"><i></i><span>CHECKING…</span></button>
+
+  <!-- The four things a part can be looked at as. They were in three
+       different places - two in the right column's own toggle, one on the
+       viewport toolbar - which made them read as three unrelated controls
+       rather than one choice. -->
+  <div class="vseg" id="viewSeg" role="tablist" aria-label="View">
+    <button class="vsegb on" data-view="model" role="tab" aria-selected="true"
+            data-i18n-title="view.model" title="3D model">
+      <svg class="icn" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3.2"/></svg>
+    </button>
+    <button class="vsegb" data-view="code" role="tab" aria-selected="false"
+            data-i18n-title="view.code" title="Code">
+      <svg class="icn" viewBox="0 0 24 24"><path d="m8.5 17-5.5-5 5.5-5M15.5 7l5.5 5-5.5 5"/></svg>
+    </button>
+    <button class="vsegb" data-view="params" role="tab" aria-selected="false"
+            data-i18n-title="view.params" title="Parameters">
+      <svg class="icn" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 10h18M9.5 10v9.5"/></svg>
+    </button>
+    <button class="vsegb" data-view="drawing" role="tab" aria-selected="false"
+            data-i18n-title="view.drawing" title="Drawing" disabled>
+      <svg class="icn" viewBox="0 0 24 24"><rect x="3" y="3.5" width="18" height="17" rx="2"/><path d="M7 9h7M7 13h4.5M7 17h2.5M14.5 17H17"/></svg>
+    </button>
+  </div>
+
+  <button class="iconbtn accent" id="fullBtn" data-i18n-title="app.fullscreen"
+          title="Fullscreen">
+    <svg class="icn" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+  </button>
+  <div class="langsw" id="langSw" role="group"></div>
+  <button class="health" id="healthChip"><i></i><span data-i18n="health.checking">CHECKING…</span></button>
   <button class="btn ghost sm" id="histBtn">
-    <svg class="icn" viewBox="0 0 24 24"><path d="M3 3v6h6M3.5 9a9 9 0 1 0 2.1-3.4L3 9"/></svg>History
+    <svg class="icn" viewBox="0 0 24 24"><path d="M3 3v6h6M3.5 9a9 9 0 1 0 2.1-3.4L3 9"/></svg><span data-i18n="app.history">History</span>
   </button>
 </header>
 
 <div class="diag" id="diag" hidden>
-  <h4>Environment</h4>
+  <h4 data-i18n="app.environment">Environment</h4>
   <div id="diagRows"></div>
 </div>
 
@@ -34,83 +85,212 @@
 <div class="work">
 
   <!-- ══════════ LEFT: input ══════════ -->
+  <!-- ══════════ LEFT: the conversation ══════════ -->
+  <!-- What was an input panel is a thread: what was asked, what was planned,
+       what the model was thinking while it worked, and which version came
+       out. One composer at the foot of it does both jobs - describing a part
+       and changing one - because from where the reader sits those are the
+       same act, and two text boxes made it look like two applications. -->
   <div class="col left">
-    <div class="phead"><h2>Design Input</h2></div>
-    <div class="pbody">
+   <!-- One scroll for the whole conversation. The thread and the reasoning
+        were two bands, each with its own scrollbar, its own background and a
+        hard edge between them, which read as three stacked panels rather
+        than one. They are sections in a single flow now, separated by a
+        rule; only the composer is pinned. -->
+   <div class="rail" id="rail">
+    <div class="thread" id="thread">
 
       <div class="banner" id="keyBanner" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 8v5M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
         <span id="keyBannerText"></span>
       </div>
 
-      <div class="field">
-        <span class="eyebrow">Describe part</span>
-        <textarea class="prompt" id="prompt" placeholder="Describe the part you want to generate…"></textarea>
+      <div class="turn" id="askTurn" hidden>
+        <div class="bubble" id="askText"></div>
+        <div class="avatar" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>
+        </div>
       </div>
 
-      <button class="btn primary" style="width:100%" id="genBtn">
-        <svg class="icn" viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.6"/></svg>
-        Generate CAD
-      </button>
+      <section class="tsec" id="planSec">
+        <div class="tsechd">
+          <span class="eyebrow" data-i18n="plan.heading">Design plan</span>
+          <span class="eyebrow tmodel" id="genModelLabel" data-i18n="label.planner">PLANNER</span>
+        </div>
+        <div class="ai-body" id="planBody">
+        <div class="await">
+        <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+        <span data-i18n="plan.none">No part planned yet.</span>
+        </div>
+        </div>
+      </section>
 
+      <button class="verpill" id="verPill" hidden></button>
+    </div>
+
+    <!-- The reasoning, below what was asked and above what is typed next.
+         Part of the same flow as the thread: a rule above it rather than a
+         band of its own, and each agent folds away when it is done talking. -->
+    <section class="thinksec" id="thinkSec">
+      <div class="thinkhd">
+        <button class="thinktoggle" id="thinkClear" aria-expanded="true">
+          <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+          <span id="thinkSummary" data-i18n="think.heading">Reasoning</span>
+        </button>
+        <span class="livedot" id="thinkLive" hidden
+              data-i18n-label="think.working" aria-label="working"></span>
+        <span class="eyebrow" id="thinkPhase"></span>
+      </div>
+      <div class="think-body" id="thinkBody">
+        <div class="await">
+          <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+          <span data-i18n="think.await">The agents' reasoning appears here as they work.</span>
+        </div>
+      </div>
+    </section>
+   </div>
+
+    <!-- The one place anything is typed. -->
+    <div class="composer">
+      <!-- rows="1" because a textarea defaults to two, and the box is sized
+           from its own scrollHeight as you type: with the default, clearing
+           it left two empty lines behind and the box never came back down to
+           where it started. CSS gives it its resting height. -->
+      <textarea class="prompt" id="prompt" rows="1"
+                data-i18n-ph="input.placeholder"
+                placeholder="Describe the part you want to generate…"></textarea>
+      <div class="crow">
+        <!-- With one composer, "another part" and "change this part" are
+             the same box. This is what says which: without it the only way
+             back to a blank sheet is History or a reload. -->
+        <button class="kebab" id="newBtn" data-i18n-title="input.newpart"
+                title="Start a new part">
+          <svg class="icn" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button class="kebab" id="moreBtn" aria-haspopup="menu" aria-expanded="false"
+                data-i18n-title="opt.more" title="Model and run settings">
+          <svg class="icn" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
+        </button>
+        <div class="effortchip" id="effortRow">
+          <select id="optEffort" data-i18n-label="opt.effort"
+                  aria-label="Reasoning effort" data-i18n-title="opt.effort.tip"
+                  title="How hard the model is asked to think."></select>
+        </div>
+        <button class="modelchip" id="modelChip">
+          <span id="modelChipName">—</span>
+          <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <button class="send" id="genBtn" data-i18n-title="input.generate" title="Generate">
+          <svg class="icn" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
       <div class="opts">
         <div class="opt">
-          <span>Refinement iterations</span>
-          <span style="display:flex;align-items:center;gap:7px">
-            <input type="range" id="optIters" min="0" max="5" step="1" value="3" />
-            <output id="optItersOut">3</output>
-          </span>
-        </div>
-        <div class="opt">
-          <span>Vision Judge</span>
+          <span data-i18n="opt.vision">Vision Judge</span>
           <span class="sw on" id="optVision" role="switch" aria-checked="true" tabindex="0"></span>
         </div>
-      </div>
-
-      <div class="opts" id="llmOpts">
         <div class="opt">
-          <span>Provider</span>
-          <select id="optProvider"></select>
+          <span data-i18n="opt.grounding" data-i18n-title="opt.grounding.tip"
+                title="Give the Planner the published dimensions for any standard part the request names.">Standard dimensions</span>
+          <span class="sw on" id="optGround" role="switch" aria-checked="true" tabindex="0"></span>
         </div>
         <div class="opt">
-          <span>Generation model</span>
-          <input id="optGenModel" list="genModels" placeholder="model id" />
-          <datalist id="genModels"></datalist>
+          <span data-i18n="opt.catalog" data-i18n-title="opt.catalog.tip"
+                title="Answer an unambiguous standard-part request from the catalogue instead of generating it.">Standard parts</span>
+          <span class="sw on" id="optCatalog" role="switch" aria-checked="true" tabindex="0"></span>
         </div>
-        <div class="opt">
-          <span>Judge model</span>
-          <input id="optJudgeModel" list="judgeModels" placeholder="model id" />
-          <datalist id="judgeModels"></datalist>
-        </div>
-        <div class="keyrow" id="keyRow" hidden>
-          <input id="providerBase" type="text" placeholder="Base URL" hidden />
-          <input id="providerKey" type="password" placeholder="API key" autocomplete="off" />
-          <button class="btn sm" id="saveKeyBtn">Use</button>
-        </div>
-        <div class="optnote" id="providerNote"></div>
       </div>
-
-      <div class="field" style="margin:16px 0 0">
-        <span class="eyebrow">Benchmark prompts</span>
-        <div class="samples" id="samples"></div>
+      <!-- Everything that decides how a run is made, one click from the
+         composer rather than always on screen. -->
+      <div class="moremenu" id="moreMenu" role="menu" hidden>
+      <div class="opt">
+        <span data-i18n="opt.provider">Provider</span>
+        <select id="optProvider"></select>
       </div>
+      <div class="opt">
+        <span data-i18n="opt.genmodel">Generation model</span>
+        <input id="optGenModel" list="genModels" data-i18n-ph="ph.modelid" placeholder="model id" />
+        <datalist id="genModels"></datalist>
+      </div>
+      <div class="opt">
+        <span data-i18n="opt.judgemodel">Judge model</span>
+        <input id="optJudgeModel" list="judgeModels" data-i18n-ph="ph.modelid" placeholder="model id" />
+        <datalist id="judgeModels"></datalist>
+      </div>
+      <div class="opt">
+        <span data-i18n="opt.iterations">Refinement iterations</span>
+        <span style="display:flex;align-items:center;gap:7px">
+          <input type="range" id="optIters" min="0" max="5" step="1" value="3" />
+          <output id="optItersOut">3</output>
+        </span>
+      </div>
+      <div class="keyrow" id="keyRow" hidden>
+        <input id="providerBase" type="text" data-i18n-ph="ph.baseurl" placeholder="Base URL" hidden />
+        <input id="providerKey" type="password" data-i18n-ph="ph.apikey" placeholder="API key" autocomplete="off" />
+        <button class="btn sm" id="saveKeyBtn" data-i18n="btn.usekey">Use</button>
+      </div>
+      <div class="optnote" id="providerNote"></div>
     </div>
+
+      <!-- The health chip used to be the only way in here, and it is only on
+           screen now when something is wrong. This is the way in the rest of
+           the time. -->
+      <button class="opt optlink" id="optDiag" role="menuitem">
+        <span data-i18n="app.environment">Environment</span>
+        <svg class="icn" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+      </button>
+    </div>
+
   </div>
 
   <!-- ══════════ CENTRE: viewer ══════════ -->
   <div class="col center">
     <div class="vtools">
-      <button class="vt on" data-view="iso">ISO</button>
-      <button class="vt" data-view="front">FRONT</button>
-      <button class="vt" data-view="top">TOP</button>
-      <button class="vt" data-view="right">RIGHT</button>
-      <div class="spacer" style="flex:1"></div>
-      <button class="vt" id="fitBtn">FIT</button>
-      <button class="vt" id="wireBtn">WIREFRAME</button>
-      <button class="vt" id="spinBtn">SPIN</button>
-      <button class="btn sm" id="drawBtn" disabled>
-        <svg class="icn" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18M9 9v11"/></svg>Drawing
+      <!-- ISO / FRONT / TOP / RIGHT are gone from here on purpose: the axis
+           gizmo does that job now, the way it does in every CAD package -
+           click an axis to look down it. Four buttons replaced by the thing
+           people already reach for, rather than four buttons hidden. -->
+      <button class="chipb" id="spinBtn">
+        <span data-i18n="view.spin">Spin</span>
+        <svg class="icn" viewBox="0 0 24 24"><path d="M12 5a7 7 0 1 1-6.6 4.6"/><path d="M5 4v5h5"/></svg>
       </button>
+      <button class="chipb" id="fitBtn">
+        <span data-i18n="view.fit">Fit</span>
+        <svg class="icn" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+      </button>
+      <button class="chipb" id="reloadBtn">
+        <span data-i18n="view.reload">Reload</span>
+        <svg class="icn" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg>
+      </button>
+      <button class="chipb" id="wireBtn">
+        <span data-i18n="view.wire">Wireframe</span>
+        <svg class="icn" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>
+      </button>
+      <div class="spacer" style="flex:1"></div>
+      <button class="chipb" id="copyBtn">
+        <svg class="icn" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        <span data-i18n="code.copy">Copy</span>
+      </button>
+
+      <!-- One menu for the five formats that were spread across the code
+           panel and the drawing sheet. -->
+      <div class="expwrap">
+        <button class="chipb accent" id="exportBtn" aria-haspopup="menu" aria-expanded="false">
+          <svg class="icn" viewBox="0 0 24 24"><path d="M12 15V3M8 7l4-4 4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          <span data-i18n="export.label">Export</span>
+          <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div class="expmenu" id="exportMenu" role="menu" hidden>
+          <button class="expitem" id="dlStep" role="menuitem">STEP<small data-i18n="export.step">solid, for CAD</small></button>
+          <button class="expitem" id="dlStl" role="menuitem">STL<small data-i18n="export.stl">mesh, for printing</small></button>
+          <button class="expitem" id="dlPy" role="menuitem">.py<small data-i18n="export.py">the CadQuery script</small></button>
+          <div class="expsep"></div>
+          <button class="expitem" id="menuDxf" role="menuitem">DXF<small data-i18n="export.dxf">the drawing, re-measurable</small></button>
+          <button class="expitem" id="menuPng" role="menuitem">PNG<small data-i18n="export.png">the drawing, as a picture</small></button>
+        </div>
+      </div>
+
+      <button class="chipb" id="drawBtn" hidden disabled></button>
     </div>
 
     <div class="stage" id="stage">
@@ -123,10 +303,10 @@
       <div class="ov" id="ovEmpty">
         <div class="empty">
           <svg class="empty-art" viewBox="0 0 24 24" fill="none" stroke="#4A5768" stroke-width="1"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>
-          <h3>Nothing built yet</h3>
-          <p>Describe a part on the left. Five agents plan it, write CadQuery, run
-             it through the OpenCASCADE kernel and check the result before
-             anything appears here.</p>
+          <h3 data-i18n="empty.title">Nothing built yet</h3>
+          <p data-i18n="empty.body">Describe a part on the left. Five agents plan it,
+             write CadQuery, run it through the OpenCASCADE kernel and check the
+             result before anything appears here.</p>
         </div>
       </div>
 
@@ -140,107 +320,110 @@
       <div class="ov" id="ovErr" hidden>
         <div class="empty">
           <svg class="empty-art" viewBox="0 0 24 24" fill="none" stroke="#7A3038" stroke-width="1"><path d="M12 8v5M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
-          <h3 id="errTitle">The run could not complete</h3>
+          <h3 id="errTitle" data-i18n="err.title">The run could not complete</h3>
           <div class="quote" id="errMsg"></div>
           <p id="errFix"></p>
           <div class="row">
-            <button class="btn primary" id="errRetry">Try again</button>
-            <button class="btn" id="errKeep" hidden>Show best attempt</button>
+            <button class="btn primary" id="errRetry" data-i18n="err.retry">Try again</button>
+            <button class="btn" id="errKeep" hidden data-i18n="err.keep">Show best attempt</button>
           </div>
         </div>
       </div>
 
-      <div class="minfo" id="minfo" hidden>
-        <div class="mstat">
-          <svg class="icn" viewBox="0 0 24 24" id="mIcon" style="color:var(--valid)"><path d="M20 6 9 17l-5-5"/></svg>
-          <span id="mtitle">Model generated</span>
-        </div>
-        <div class="mfacts" id="mfacts"></div>
-      </div>
     </div>
 
+    <div class="centrepane" id="codeSec" hidden>
+      <div class="phead">
+        <h2 id="codeHeading" data-i18n="code.heading">Generated CadQuery</h2>
+        <div class="spacer" style="flex:1"></div>
+        <span class="eyebrow" id="codeStat">— — —</span>
+      </div>
+
+      <div class="codewrap" id="codeView">
+        <div class="code-scroll" id="codeScroll">
+          <div class="code-inner">
+            <pre class="hl" id="hl"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- The filmstrip: one thumbnail per version, scrolling sideways. The
+         spend that used to share this row is a card of its own now. -->
     <div class="iters" id="iters"></div>
   </div>
 
-  <!-- ══════════ RIGHT: plan, code, validation ══════════ -->
+  <!-- ══════════ RIGHT: four cards, each one shut away ══════════ -->
+  <!-- Detached cards with gaps rather than a flush split column, and each
+       collapses to its own title bar. Which of the four matters depends on
+       what you are doing: somebody checking a dimension does not need the
+       token bill on screen, and somebody watching the spend does not need
+       the verdict. Neither should have to scroll past the other. -->
   <div class="col right">
-    <div class="rsplit">
+    <section class="rcard" id="cardParams" data-card="params" hidden>
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="params.heading">Part parameters</h2>
+        <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody"><div class="params-body" id="paramsBody"></div></div>
+    </section>
 
-      <div class="rsec ai">
-        <div class="phead">
-          <h2>Design Plan</h2>
-          <div class="spacer" style="flex:1"></div>
-          <span class="eyebrow" id="genModelLabel">PLANNER</span>
-        </div>
-        <div class="ai-body" id="planBody">
-          <div class="await">
-            <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
-            No part planned yet.
-          </div>
-        </div>
-      </div>
+    <section class="rcard" id="cardProps" data-card="props" hidden>
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="props.heading">Properties</h2>
+        <span class="eyebrow" id="mtitle"></span>
+        <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody"><div class="tiles" id="mfacts"></div></div>
+    </section>
 
-      <div class="rsec code">
-        <div class="phead">
-          <h2>Generated CadQuery</h2>
-          <div class="spacer" style="flex:1"></div>
-          <span class="eyebrow" id="codeStat">— — —</span>
-        </div>
-        <div class="codewrap">
-          <div class="code-scroll" id="codeScroll">
-            <div class="code-inner">
-              <pre class="hl" id="hl"></pre>
-            </div>
-          </div>
-        </div>
-        <div class="coderow">
-          <button class="btn sm" id="copyBtn"><svg class="icn" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Copy</button>
-          <button class="btn sm" id="dlPy"><svg class="icn" viewBox="0 0 24 24"><path d="M12 3v12M7 11l5 5 5-5M4 20h16"/></svg>.py</button>
-          <button class="btn sm" id="dlStep">STEP</button>
-          <button class="btn sm" id="dlStl">STL</button>
-        </div>
-      </div>
+    <section class="rcard" id="cardTokens" data-card="tokens" hidden>
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="usage.heading">Token tracking</h2>
+        <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody"><div class="tiles" id="usage"></div></div>
+    </section>
 
-      <div class="rsec val">
-        <div class="phead">
-          <h2>Validation</h2>
-          <div class="spacer" style="flex:1"></div>
-          <span class="eyebrow" id="judgeModelLabel">JUDGE</span>
-        </div>
+    <section class="rcard" data-card="prompts">
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="input.samples">Benchmark prompts</h2>
+        <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody"><div class="samples" id="samples"></div></div>
+    </section>
+
+    <section class="rcard" data-card="val">
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="val.heading">Validation</h2>
+        <span class="eyebrow" id="judgeModelLabel" data-i18n="label.judge">JUDGE</span>
+        <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody">
         <div class="ai-body" id="valBody">
           <div class="await">
             <svg class="icn" viewBox="0 0 24 24" style="opacity:.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
-            Nothing validated yet.
+            <span data-i18n="val.none">Nothing validated yet.</span>
           </div>
         </div>
       </div>
+    </section>
+  </div>
 
-    </div>
-  </div>
-</div>
+</div><!-- /.work -->
+</div><!-- /.shell -->
 
-<!-- ══════════ command bar ══════════ -->
-<div class="cmd">
-  <div class="act" id="act" hidden>
-    <div class="act-steps" id="actSteps"></div>
-    <div id="actDiff"></div>
-  </div>
-  <div class="cmd-side">
-    <span class="eyebrow">Natural-language editor</span>
-    <span style="font-size:10.5px;color:var(--ink-dim)">Edits the current model</span>
-  </div>
-  <div class="cmd-in">
-    <svg class="icn" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></svg>
-    <input id="cmdIn" placeholder="Ask for a change…  e.g. make it 15 mm thick, or add a reinforcing gusset" disabled />
-  </div>
-  <button class="btn primary" id="applyBtn" disabled style="height:36px;padding:0 16px">Apply change</button>
-</div>
+<!-- The steps an edit goes through and the diff it produced. This used to
+     live in a second, full-width text box across the foot of the app; the
+     box is gone and this reports on its own. -->
+<div class="act" id="act" hidden>
+  <div class="act-steps" id="actSteps"></div>
+  <div id="actDiff"></div>
 </div>
 
 <!-- ══════════ history drawer ══════════ -->
 <aside class="hist" id="hist">
   <div class="hist-hd">
-    <h3>Run History</h3>
+    <h3 data-i18n="hist.heading">Run History</h3>
     <div class="spacer" style="flex:1"></div>
     <button class="x" id="histClose"><svg class="icn" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
   </div>
@@ -250,10 +433,15 @@
 <!-- ══════════ drawing sheet ══════════ -->
 <div class="sheet" id="sheet">
   <div class="sheet-bar">
-    <span class="eyebrow">ENGINEERING DRAWING</span>
+    <span class="eyebrow" data-i18n="draw.heading">ENGINEERING DRAWING</span>
     <div class="spacer" style="flex:1"></div>
-    <button class="btn sm" id="expPng">Export PNG</button>
-    <button class="btn sm primary" id="back3d">Back to 3D</button>
+    <!-- The drawing's own formats, on the drawing. The Export menu offers
+         them too, but the menu is in the viewport toolbar and the sheet
+         covers it - so looking at a drawing would have meant no way to
+         download one. -->
+    <button class="btn sm" id="expDxf" data-i18n="draw.exportdxf">Download DXF</button>
+    <button class="btn sm" id="expPng" data-i18n="draw.exportpng">Export PNG</button>
+    <button class="btn sm primary" id="back3d" data-i18n="draw.back3d">Back to 3D</button>
   </div>
   <div class="sheet-scroll"><div class="paper" id="paper"></div></div>
 </div>

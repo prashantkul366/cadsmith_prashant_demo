@@ -5,7 +5,9 @@ Implements the multi-agent pipeline:
                                           → Error Refiner (on code errors)
 """
 
+import json
 import os
+import re
 from typing import Optional
 
 import anthropic
@@ -54,6 +56,73 @@ def _call_claude(system: str, user: str, model: str = "claude-sonnet-4-5-2025092
 
 
 # ---------------------------------------------------------------------------
+# Reading JSON back out of a reply
+# ---------------------------------------------------------------------------
+
+def extract_json(text: str) -> dict:
+    """The JSON object in a reply, however the model chose to present it.
+
+    Both agents that return JSON used to strip a code fence and hand the rest
+    to ``json.loads``, which works right up until the model writes a sentence
+    first - and then the run dies on a JSONDecodeError that reads like a bug
+    in the app rather than a model being chatty.  The object is nearly always
+    there; it just has prose around it.
+
+    Three things are tolerated, in order of how often they are seen: a fenced
+    block, leading or trailing commentary, and a trailing comma before a
+    closing brace.  Anything still unparseable raises, because at that point
+    there is genuinely no plan in the reply and pretending otherwise would
+    hide the real failure.
+    """
+    body = (text or "").strip()
+
+    # A fenced block, with or without a language tag.
+    fence = re.search(r"```(?:json|JSON)?\s*\n(.*?)```", body, re.S)
+    if fence:
+        body = fence.group(1).strip()
+    elif body.startswith("```"):
+        body = body.lstrip("`").lstrip("json").lstrip("JSON").strip()
+        if body.endswith("```"):
+            body = body[:-3].strip()
+
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        pass
+
+    # Scan for the outermost balanced object, ignoring braces inside strings.
+    start = body.find("{")
+    if start >= 0:
+        depth, in_string, escaped = 0, False, False
+        for index in range(start, len(body)):
+            char = body[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = body[start:index + 1]
+                    try:
+                        return json.loads(candidate)
+                    except json.JSONDecodeError:
+                        # A trailing comma is the one malformation worth
+                        # repairing here; everything else is a real failure.
+                        repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
+                        return json.loads(repaired)
+    raise json.JSONDecodeError("no JSON object in the reply", body or "", 0)
+
+
+# ---------------------------------------------------------------------------
 # PLANNER AGENT
 # ---------------------------------------------------------------------------
 
@@ -79,8 +148,24 @@ Output a JSON object with these fields:
     "volume_error_threshold_pct": 5,
     "bbox_iou_threshold": 0.90
   },
+  "specification": {
+    "material": "what this would be made from, e.g. 'aluminium 6082-T6', 'mild steel S275', 'PA12 nylon'",
+    "process": "one of: machined, turned, cast, moulded, printed, sheet, fabricated",
+    "tolerance_class": "one of: ISO 2768-f, ISO 2768-m, ISO 2768-c",
+    "finish": "e.g. 'as machined', 'anodised', 'painted', or null",
+    "fits": [
+      {"feature": "what it is, e.g. 'bearing housing bore'", "size_mm": 40, "fit": "H7", "why": "6203 outer ring is a press fit in H7"}
+    ]
+  },
   "notes": "Any special considerations for the Coder agent"
 }
+
+The specification block is a PROPOSAL an engineer will review, not a decision.
+Say what you would choose and why; do not leave it blank because you are
+unsure. Pick the tolerance class from how the part is used: ISO 2768-f for a
+part with mating features, -m for general work, -c for a rough fabrication.
+Only list a fit where two parts actually meet - a bore for a bearing or a
+shaft, a spigot, a dowel. A clearance hole for a bolt is not a fit.
 
 Be precise with dimensions. If the user prompt includes explicit dimensions, use them exactly.
 If dimensions are not specified, estimate reasonable engineering dimensions and state your assumptions.
@@ -89,17 +174,7 @@ Output ONLY valid JSON, no other text."""
 
 def plan(prompt: str) -> dict:
     """Planner agent: natural language → structured design plan."""
-    import json
-    response = _call_claude(PLANNER_SYSTEM, prompt)
-    # Strip markdown code fences if present
-    text = response.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1]
-        if text.endswith("```"):
-            text = text[:-3]
-        elif "```" in text:
-            text = text[:text.rfind("```")]
-    return json.loads(text.strip())
+    return extract_json(_call_claude(PLANNER_SYSTEM, prompt))
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +197,15 @@ ORIENTATION CONVENTION (always follow):
 
 CRITICAL RULES:
 1. Import cadquery as cq at the top.
-2. Assign your final shape to a variable called `result` (type: cq.Workplane).
+2. Assign your final shape to a variable called `result`.
+   - For a single part, that is a cq.Workplane. This is the normal case.
+   - For a request that is genuinely several parts that go together - a
+     bearing block and its cover, a motor and its mount - build a
+     cq.Assembly instead, add each part with add(..., name=, loc=, color=),
+     and position them arithmetically from the parameters you already chose.
+     Do not use constraints or solve(): explicit placement is what the
+     kernel measures and what a reader can check.
+   - Do not wrap a single part in an Assembly. One part is one Workplane.
 3. Do NOT import or use ocp_vscode, show(), save_screenshot(), or any visualization.
 4. Do NOT call cq.exporters — the system handles export.
 5. The script must be self-contained and executable with just CadQuery installed.
@@ -181,12 +264,48 @@ CRITICAL RULES:
 4. Do NOT call cq.exporters.
 5. Fix the specific error while preserving the design intent.
 6. If a fillet/chamfer fails, reduce the radius or remove it — do not leave broken code.
-7. If a boolean operation fails, check that shapes actually overlap."""
+7. If a boolean operation fails, check that shapes actually overlap.
+
+YOU MAY ALSO RECEIVE YOUR OWN PREVIOUS ATTEMPTS at fixing this same code.
+Read them before answering. They are attempts that did NOT work:
+- Do not repeat a fix that is already listed there. It has been tried.
+- If the same error survived your last fix, the diagnosis was wrong, not the
+  execution. Change the diagnosis.
+- Escalate: replace the construction rather than adjusting its numbers. A
+  fillet that will not apply at 2mm and will not apply at 1mm is not a radius
+  problem — remove it, or build the edge a different way.
+- Say nothing about the attempts; just return code that differs from them."""
 
 
-def fix_error(code: str, error: str, design_plan: dict) -> str:
+def _attempt_history(history: Optional[list]) -> str:
+    """What has already been tried on this code, and what it did not fix.
+
+    The Judge has had this since it was written - it is told to escalate when
+    its own feedback comes back unaddressed - and the Error Refiner has not,
+    so it could offer the same correction three times and spend the whole
+    retry budget doing it. Only the error and a short extract of each fix go
+    in: the full code of three failed attempts would crowd out the code that
+    actually needs fixing.
+    """
+    if not history:
+        return ""
+    lines = ["PREVIOUS ATTEMPTS AT THIS SAME CODE — none of them worked:"]
+    for entry in history:
+        attempt = entry.get("attempt", "?")
+        kind = entry.get("error_type") or "error"
+        message = " ".join((entry.get("error") or "").split())[:200]
+        lines.append(f"  attempt {attempt}: still failed with {kind}: {message}")
+        fix = (entry.get("fix_code") or "").strip().splitlines()
+        if fix:
+            excerpt = " | ".join(line.strip() for line in fix[-4:])
+            lines.append(f"    what was tried: ...{excerpt[:220]}")
+    lines.append("Do not repeat any of these. Change the approach.")
+    return "\n".join(lines) + "\n\n"
+
+
+def fix_error(code: str, error: str, design_plan: dict,
+              history: Optional[list] = None) -> str:
     """Error Refiner agent: broken code + error → fixed code."""
-    import json
     from .rag_kb1 import get_api_context
     from .rag_kb2 import get_error_context
 
@@ -206,7 +325,7 @@ FAILED CODE:
 ERROR:
 {error}
 
-{kb2_context}
+{_attempt_history(history)}{kb2_context}
 {kb1_context}DESIGN PLAN:
 {json.dumps(design_plan, indent=2)}
 
@@ -380,15 +499,7 @@ def evaluate_geometry(
         _token_usage["output_tokens"] += response.usage.output_tokens
     _token_usage["calls"] += 1
 
-    text = response.content[0].text.strip()
-    if text.startswith("```json"):
-        text = text[len("```json"):].strip()
-    elif text.startswith("```"):
-        text = text[3:].strip()
-    if text.endswith("```"):
-        text = text[:-3].strip()
-
-    return json.loads(text)
+    return extract_json(response.content[0].text)
 
 
 # ---------------------------------------------------------------------------

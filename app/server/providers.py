@@ -41,6 +41,20 @@ import httpx
 #: Generous by design: a local model on CPU can take minutes for one reply.
 REQUEST_TIMEOUT = float(os.getenv("CADSMITH_LLM_TIMEOUT", "600"))
 
+#: What a hop in front of the model answers when it stops waiting. A
+#: Cloudflare quick tunnel - the usual shape for a vLLM on somebody's
+#: laptop - gives up on a slow generation after about a hundred seconds and
+#: answers 524; 502 and 503 come back while it reconnects. None of these is
+#: the model's answer and none of them means the request was wrong, so
+#: ending a run on one throws away a part that is half built.
+GATEWAY_STATUS = (502, 503, 504, 520, 521, 522, 523, 524, 525, 527, 530)
+
+#: Attempts in total, and the pause before each retry. Short and finite on
+#: purpose: a demo stalled behind an endpoint that is never coming back is
+#: worse than one that says so.
+GATEWAY_ATTEMPTS = max(1, int(os.getenv("CADSMITH_GATEWAY_ATTEMPTS", "3")))
+GATEWAY_BACKOFF = (6.0, 18.0, 30.0)
+
 
 @dataclass(frozen=True)
 class ProviderSpec:
@@ -50,6 +64,11 @@ class ProviderSpec:
     base_url: str = ""
     env_key: str = ""
     env_base_url: str = ""
+    #: Where a self-hosted endpoint's model id comes from. A hosted provider
+    #: has a catalogue of models with a sensible default; a vLLM server is
+    #: usually serving exactly one, and its name is not guessable, so it is
+    #: named beside the URL rather than picked from a list every session.
+    env_model: str = ""
     needs_key: bool = True
     #: Fallback models, used only when the provider cannot be asked what it
     #: has. Every provider here is queried for its real model list first.
@@ -65,11 +84,24 @@ BUILTIN: dict[str, ProviderSpec] = {
         label="Anthropic",
         kind="anthropic",
         env_key="ANTHROPIC_API_KEY",
-        # The models autofab/agents.py itself uses: Sonnet to generate,
-        # Opus to judge.
-        default_generation_model="claude-sonnet-4-5-20250929",
-        default_judge_model="claude-opus-4-20250514",
+        # A weaker coder with a stronger judge, as the pipeline intends, so
+        # the Judge is not grading its own homework.
+        default_generation_model="claude-sonnet-5",
+        default_judge_model="claude-opus-5",
         hint="Set ANTHROPIC_API_KEY in .env",
+    ),
+    "bedrock": ProviderSpec(
+        id="bedrock",
+        label="Claude on Amazon Bedrock",
+        kind="bedrock",
+        # No API key: Bedrock authenticates with the ambient AWS credential
+        # chain - an SSO profile, an instance role, or AWS_* env vars.
+        needs_key=False,
+        env_base_url="AWS_REGION",
+        default_generation_model="anthropic.claude-sonnet-5",
+        default_judge_model="anthropic.claude-opus-5",
+        hint="Sign in with `aws sso login`, or set AWS_ACCESS_KEY_ID / "
+             "AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN and AWS_REGION",
     ),
     "openai": ProviderSpec(
         id="openai",
@@ -105,9 +137,12 @@ BUILTIN: dict[str, ProviderSpec] = {
         kind="openai_compatible",
         env_key="CADSMITH_LLM_API_KEY",
         env_base_url="CADSMITH_LLM_BASE_URL",
+        env_model="CADSMITH_LLM_MODEL",
         needs_key=False,
         hint="Set CADSMITH_LLM_BASE_URL (and CADSMITH_LLM_API_KEY if needed) "
-             "for vLLM, llama.cpp, Together, Groq, OpenRouter, and so on",
+             "for vLLM, llama.cpp, Together, Groq, OpenRouter, and so on; "
+             "CADSMITH_LLM_MODEL names the model where the endpoint serves "
+             "one, and is otherwise picked in the app",
     ),
 }
 
@@ -160,6 +195,47 @@ def _base_url_for(spec: ProviderSpec) -> str:
 # Resolved configuration
 # ---------------------------------------------------------------------------
 
+#: How hard the model is asked to think, cheapest first. Effort governs the
+#: depth of reasoning and therefore both the wait and the token bill: a
+#: chamfered cylinder does not need the reasoning a planetary gearbox does.
+#: The ladder is the one the Messages API accepts; adaptive thinking and
+#: effort are generally available on Bedrock as well as the first-party API,
+#: so this works on either backend.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+#: What the picker offers. The rest of the ladder stays reachable through
+#: CADSMITH_EFFORT - xhigh and max are for a part worth waiting minutes for,
+#: not for a dropdown someone clicks through.
+EFFORT_CHOICES = ("low", "medium", "high")
+
+#: Effort the model applies when no request asks for one. Not our choice -
+#: the API's - and named here so the app can say which option is the default
+#: instead of leaving the picker to imply it.
+EFFORT_DEFAULT = "high"
+
+
+def normalise_effort(value: Any) -> str:
+    """The effort level as the API spells it, or "" for anything else.
+
+    Unknown values are dropped rather than passed on: the request would fail
+    for a typo, and the run is worth more than the setting.
+    """
+    text = str(value or "").strip().lower()
+    return text if text in EFFORT_LEVELS else ""
+
+
+#: Effort for a run that does not choose one. Set CADSMITH_EFFORT to pin the
+#: whole server to a level - including xhigh or max, which the picker omits.
+DEFAULT_EFFORT = normalise_effort(os.getenv("CADSMITH_EFFORT"))
+
+
+def effort_choices() -> list[str]:
+    """Levels the picker should offer, the server default included."""
+    out = list(EFFORT_CHOICES)
+    if DEFAULT_EFFORT and DEFAULT_EFFORT not in out:
+        out.append(DEFAULT_EFFORT)
+    return out
+
 
 @dataclass
 class LLMConfig:
@@ -170,6 +246,9 @@ class LLMConfig:
     generation_model: str
     judge_model: str
     judge_vision: bool = True
+    #: How hard this run asks the model to think. Empty leaves the choice to
+    #: the API, which reasons at ``EFFORT_DEFAULT``.
+    effort: str = ""
 
     def redacted(self) -> dict:
         return {
@@ -178,6 +257,7 @@ class LLMConfig:
             "generation_model": self.generation_model,
             "judge_model": self.judge_model,
             "judge_vision": self.judge_vision,
+            "effort": self.effort,
             "has_key": bool(self.api_key),
         }
 
@@ -187,17 +267,31 @@ def resolve(
     generation_model: str = "",
     judge_model: str = "",
     judge_vision: bool = True,
+    effort: str = "",
 ) -> LLMConfig:
     spec = BUILTIN.get(provider_id) or BUILTIN[DEFAULT_PROVIDER]
+    # What the request asked for, then what the environment names, then the
+    # provider's own default. A self-hosted endpoint has no default because
+    # nobody but its owner knows what it is serving, so naming it in .env is
+    # the difference between the app starting ready and the app starting
+    # with two problems to go and fix in the UI.
+    named = os.getenv(spec.env_model, "").strip() if spec.env_model else ""
+    fallback = named or spec.default_generation_model
+    judge_fallback = spec.default_judge_model
+    if spec.kind == "bedrock" and not named:
+        # What this account can invoke, not what some other account could.
+        fallback = bedrock_default("sonnet", fallback) or fallback
+        judge_fallback = bedrock_default("opus", judge_fallback) or judge_fallback
     return LLMConfig(
         provider=spec.id,
         kind=spec.kind,
         base_url=_base_url_for(spec),
         api_key=_api_key_for(spec),
-        generation_model=generation_model or spec.default_generation_model,
-        judge_model=judge_model or spec.default_judge_model
-                    or generation_model or spec.default_generation_model,
+        generation_model=generation_model or fallback,
+        judge_model=judge_model or judge_fallback
+                    or generation_model or fallback,
         judge_vision=judge_vision,
+        effort=normalise_effort(effort) or DEFAULT_EFFORT,
     )
 
 
@@ -212,11 +306,384 @@ def problems(config: LLMConfig) -> list[str]:
             f"No API key for {spec.label}. {spec.hint}, or paste one in the app.")
     if spec.kind == "openai_compatible" and not config.base_url:
         issues.append(f"No base URL for {spec.label}. {spec.hint}.")
+    if spec.kind == "bedrock":
+        why = _aws_check()[1]
+        if why:
+            issues.append(why)
     if not config.generation_model:
         issues.append(f"No generation model chosen for {spec.label}.")
     if not config.judge_model:
         issues.append(f"No judge model chosen for {spec.label}.")
     return issues
+
+
+_aws_cache: tuple[float, str, str] = (0.0, "", "")
+_AWS_TTL = 30.0
+
+
+def _aws_reason(exc: Exception) -> str:
+    """Why AWS would not confirm these credentials, in words worth reading.
+
+    Empty means the check failed for a reason that is not the credentials'
+    fault - STS unreachable behind a firewall, or refused by a service
+    control policy - which is no grounds to refuse a run, since the same
+    credentials may invoke Bedrock perfectly well.  Anything non-empty is
+    reason to stop before a twenty-minute run starts on a token that has
+    already expired.
+    """
+    code = ""
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = str(response.get("Error", {}).get("Code", "") or "")
+    name = code or type(exc).__name__
+    lowered = name.lower()
+    if "profilenotfound" in lowered:
+        return (f"AWS_PROFILE names a profile that does not exist ({name}). "
+                "`aws configure list-profiles` lists the real ones, or unset "
+                "AWS_PROFILE and use AWS_ACCESS_KEY_ID, "
+                "AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN instead.")
+    if "expired" in lowered:
+        return (f"The AWS credentials have expired ({name}). Sign in again "
+                "with `aws sso login`, or set a fresh AWS_ACCESS_KEY_ID, "
+                "AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN.")
+    if "credentials" in lowered:        # NoCredentials, PartialCredentials
+        return (f"No usable AWS credentials were found ({name}). Set "
+                "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and "
+                "AWS_SESSION_TOKEN, or sign in with `aws sso login`.")
+    if ("invalidclienttoken" in lowered or "unrecognizedclient" in lowered
+            or "signaturedoesnotmatch" in lowered
+            or "invalidsignature" in lowered):
+        return (f"These AWS credentials were rejected by AWS ({name}). Check "
+                "that the key, the secret and the session token were pasted "
+                "whole and belong to the same set.")
+    return ""
+
+
+def _aws_check(timeout: float = 4.0) -> tuple[str, str]:
+    """``(caller ARN, why the credentials cannot be used)``.
+
+    Both halves are needed.  Reporting only the ARN made every failure read
+    the same way, so a virtualenv with no boto3 in it - which is what
+    ``pip install anthropic`` leaves behind without the ``[bedrock]`` extra -
+    was announced as bad AWS credentials, and the reader went off to rotate
+    keys over a missing dependency.
+
+    Portal credentials are short-lived and expire mid-session, so this asks
+    AWS rather than trusting the presence of environment variables.  It is
+    briefly cached because every request asks.
+    """
+    global _aws_cache
+    now = time.monotonic()
+    if now - _aws_cache[0] < _AWS_TTL:
+        return _aws_cache[1], _aws_cache[2]
+
+    arn, why = "", ""
+    # A profile name copied out of documentation is not a profile name, and
+    # boto3 reads AWS_PROFILE whether or not anything passes it on - so this
+    # has to be refused here rather than quietly skipped at the call site.
+    profile = (os.getenv("AWS_PROFILE") or "").strip()
+    if profile.startswith("<") and profile.endswith(">"):
+        _aws_cache = (now, "", f"AWS_PROFILE is still the placeholder "
+                               f"{profile}. Put a real profile name in it, or "
+                               f"remove the line and set AWS_ACCESS_KEY_ID, "
+                               f"AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN.")
+        return _aws_cache[1], _aws_cache[2]
+    try:
+        import boto3
+        from botocore.config import Config
+    except Exception:
+        why = ("boto3 is not installed, so AWS credentials cannot be read. "
+               "Install it with `pip install \"anthropic[bedrock]\"`.")
+    else:
+        cfg = Config(connect_timeout=timeout, read_timeout=timeout,
+                     retries={"max_attempts": 1})
+        region = os.getenv("AWS_REGION") or "us-east-1"
+        try:
+            arn = boto3.client("sts", region_name=region,
+                               config=cfg).get_caller_identity()["Arn"]
+        except Exception as exc:
+            why = _aws_reason(exc)
+            if not why:
+                # STS itself did not answer. Credentials that do not resolve
+                # at all are still a refusal; one that merely could not be
+                # confirmed is not, and is left to fail at the call site.
+                try:
+                    resolved = boto3.Session().get_credentials()
+                except Exception:
+                    resolved = None
+                if resolved is None:
+                    why = ("No usable AWS credentials were found in the "
+                           "environment, the shared config, or an instance "
+                           "role. Set AWS_ACCESS_KEY_ID, "
+                           "AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN, or "
+                           "sign in with `aws sso login`.")
+    _aws_cache = (now, arn, why)
+    return arn, why
+
+
+def mask_arn(arn: str) -> str:
+    """The caller ARN with the account number masked.
+
+    Which role you are answers "whose credentials are these"; the account
+    number does not, and this gets printed by tools whose output is the
+    first thing anyone pastes into a chat asking for help.
+    """
+    return re.sub(r"\b\d{12}\b", "*" * 12, arn)
+
+
+def _aws_identity(timeout: float = 4.0) -> str:
+    """The caller ARN if AWS credentials resolve, else ""."""
+    return _aws_check(timeout)[0]
+
+
+#: A Claude id, whatever the platform puts in front of it:
+#: anthropic.claude-sonnet-5-5, global.anthropic.claude-haiku-4-5-20251001-v1:0.
+#: The provider saying it has never heard of this model id. Worth trying
+#: the next candidate for, and nothing else is - a 403 is permission and a
+#: 400 is the request. The wording is Bedrock's; the SDK raises NotFound
+#: for it, which is checked as well so a reworded message still counts.
+_NO_SUCH_MODEL = re.compile(
+    r"not_found_error|does not exist|could not be found|invalid model",
+    re.IGNORECASE)
+
+#: The region a listing puts in front of a model, which the Messages
+#: endpoint does not use. See rank_claude.
+_BARE_PREFIX = re.compile(r"^(?:global|us|eu|apac)\.anthropic\.")
+
+_CLAUDE_ID = re.compile(r"claude-(opus|sonnet|haiku)-(\d+)(?:[-.](\d+))?",
+                        re.IGNORECASE)
+
+#: How long a model list is reused before Bedrock is asked again. The list
+#: changes when an account is granted a model, which is not something that
+#: happens mid-run.
+_MODEL_LIST_TTL = 300.0
+_model_list_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
+
+
+def _invokable(timeout: float = 6.0) -> tuple[str, ...]:
+    """What this Bedrock account can actually invoke, briefly cached.
+
+    Never raises and never blocks a run: an empty tuple means "could not
+    ask", and the caller falls back to the compiled-in default.
+    """
+    region = os.getenv("AWS_REGION") or "us-east-1"
+    hit = _model_list_cache.get(region)
+    if hit and time.time() - hit[0] < _MODEL_LIST_TTL:
+        return hit[1]
+    try:
+        ids, _ = bedrock_models(timeout)
+    except Exception:
+        ids = []
+    found = tuple(ids)
+    # Only an answer is remembered. Caching "could not ask" for five minutes
+    # meant one slow moment at startup decided which model every run for the
+    # next five minutes was addressed by, and the answer it decided on was
+    # the compiled-in guess.
+    if found:
+        _model_list_cache[region] = (time.time(), found)
+    return found
+
+
+def rank_claude(ids, family: str) -> list[str]:
+    """Every Claude of this family among ids, best first.
+
+    A list rather than a winner, because the winner cannot be known from
+    here. What a Bedrock account lists and what its Messages endpoint will
+    serve are two different namespaces, and the difference is not
+    documented anywhere this code can read: one account served
+    `anthropic.claude-sonnet-5-5` while listing only `global.*`, and
+    another listed `anthropic.`, `us.` and `global.` spellings of the same
+    model and answered 404 to the first two. So the order here is a guess
+    worth making once, and `resolve` probes down it rather than betting
+    the run on the guess being right.
+
+    Newest version first, by version rather than by listing position, then
+    the bare `anthropic.` spelling ahead of the regional profiles.
+
+    That order is measured rather than reasoned. The two catalogues do not
+    agree: the control plane lists `global.` and `us.` inference profiles,
+    which is the InvokeModel path, while the Messages endpoint this app
+    calls answers to the bare prefix - and the proof is a sibling branch
+    that has run on `anthropic.claude-sonnet-5` throughout while every
+    regional spelling of the same model 404s on the same account. An
+    earlier version of this guessed the opposite way round.
+
+    So a listed `global.anthropic.claude-sonnet-5` also yields the bare
+    `anthropic.claude-sonnet-5`, which is not in the listing at all and is
+    the one that answers. Within a version, undated before dated, since a
+    dated id pins a snapshot that ages out.
+    """
+    out, seen = [], set()
+
+    def offer(identifier: str, major: int, minor: int) -> None:
+        if identifier in seen:
+            return
+        seen.add(identifier)
+        prefix = 0 if identifier.startswith("anthropic.") else (
+            -1 if identifier.startswith("global.") else -2)
+        out.append(((major, minor, prefix, -len(identifier)), identifier))
+
+    for identifier in ids:
+        found = _CLAUDE_ID.search(identifier)
+        if not found or found.group(1).lower() != family:
+            continue
+        major = int(found.group(2))
+        minor = int(found.group(3) or 0)
+        offer(identifier, major, minor)
+        bare = _BARE_PREFIX.sub("anthropic.", identifier, count=1)
+        if bare != identifier:
+            offer(bare, major, minor)
+    out.sort(reverse=True)
+    return [identifier for _, identifier in out]
+
+
+def best_claude(ids, family: str) -> str:
+    """The best-ranked Claude of this family, or "" if there is none."""
+    ranked = rank_claude(ids, family)
+    return ranked[0] if ranked else ""
+
+
+#: Which family to try when the account does not carry the one a role asked
+#: for, best first. Ranked by how much of this pipeline's work they can
+#: carry rather than by price: the Coder writes a whole program in one
+#: reply and the Judge reads renders, and a smaller model does both worse.
+_FAMILY_ORDER = ("opus", "sonnet", "haiku")
+
+
+def bedrock_candidates(family: str, fallback: str) -> list[str]:
+    """Ids to try for this role, best first.
+
+    A compiled-in default is a guess about somebody else's AWS account, and
+    the account's own listing is a guess about which namespace its Messages
+    endpoint answers in. Neither is knowable from here, so both go on the
+    list and the first one that answers wins - see `_serving` in
+    ClaudeClient, which is what turns a 404 into the next candidate instead
+    of the end of the run.
+
+    Measured the hard way, twice on the same account: `anthropic.claude-
+    sonnet-5-5` 404s and so does `us.anthropic.claude-sonnet-5-5`, while
+    both are what a reasonable reading of the listing suggests.
+    """
+    ids = _invokable()
+    out: list[str] = []
+    if ids:
+        out.extend(rank_claude(ids, family))
+        # An account that carries Claude but not this family still gets the
+        # best other family it does carry: a run answered by a different
+        # model beats one answered by a 404.
+        for other in _FAMILY_ORDER:
+            if other != family:
+                out.extend(rank_claude(ids, other))
+    if fallback and fallback not in out:
+        out.append(fallback)
+    return out
+
+
+def bedrock_default(family: str, fallback: str) -> str:
+    """The first id to try for this role."""
+    found = bedrock_candidates(family, fallback)
+    return found[0] if found else fallback
+
+
+def bedrock_models(timeout: float = 6.0) -> tuple[list[str], str]:
+    """``(ids this account can invoke, why the list is empty)``.
+
+    An empty list with no reason is the same trap the credential check used
+    to set: on a network that re-signs TLS, or with no boto3 installed, this
+    returns nothing and the reader is left guessing at model ids that were
+    never the problem.
+
+    Two calls, not one, because "the region carries it" and "you may invoke
+    it by that id" are different questions.  ``list_foundation_models``
+    answers the first; a model whose ``inferenceTypesSupported`` omits
+    ON_DEMAND answers the second with no - invoking it by the bare id comes
+    back telling you to use an inference profile instead, and every recent
+    Claude is in that group.  So the profile ids are asked for as well, and
+    a foundation id that cannot be invoked on demand is left out rather than
+    offered as a choice that fails at the first call.
+    """
+    try:
+        import boto3
+        from botocore.config import Config
+    except Exception:
+        return [], ("boto3 is not installed. Install it with "
+                    "`pip install \"anthropic[bedrock]\"`.")
+
+    cfg = Config(connect_timeout=timeout, read_timeout=timeout,
+                 retries={"max_attempts": 1})
+    region = os.getenv("AWS_REGION") or "us-east-1"
+    try:
+        client = boto3.client("bedrock", region_name=region, config=cfg)
+    except Exception as exc:
+        return [], f"{type(exc).__name__}: {exc}"
+
+    ids: set[str] = set()
+    failed = ""
+    try:
+        for entry in client.list_foundation_models().get("modelSummaries", []):
+            model_id = entry.get("modelId", "")
+            if "anthropic" not in model_id.lower():
+                continue
+            # Absent the field, assume on-demand: an older control plane
+            # that does not report it predates the profile-only models.
+            kinds = entry.get("inferenceTypesSupported")
+            if kinds is not None and "ON_DEMAND" not in kinds:
+                continue  # invokable only through an inference profile
+            # A model on its way out is still listed, and still answers, but
+            # it is not what anyone means by "what can I use".
+            lifecycle = (entry.get("modelLifecycle") or {}).get("status")
+            if lifecycle and lifecycle != "ACTIVE":
+                continue
+            ids.add(model_id)
+    except Exception as exc:
+        failed = f"list_foundation_models: {type(exc).__name__}: {exc}"
+    try:
+        for entry in client.list_inference_profiles().get(
+                "inferenceProfileSummaries", []):
+            profile_id = entry.get("inferenceProfileId", "")
+            if not profile_id:
+                continue
+            # A profile that is not ACTIVE is listed and cannot be invoked,
+            # which is the one thing this list exists to rule out.
+            status = entry.get("status")
+            if status and status != "ACTIVE":
+                continue
+            carries = " ".join(m.get("modelArn", "")
+                               for m in entry.get("models") or [])
+            if "anthropic" in (profile_id + carries).lower():
+                ids.add(profile_id)
+    except Exception as exc:
+        failed = failed or f"list_inference_profiles: {type(exc).__name__}: {exc}"
+    if ids:
+        return sorted(ids), ""
+    return [], failed or (f"AWS answered, but no Anthropic model is available "
+                          f"in {region}. Check the region, and Model access "
+                          f"for this account.")
+
+
+def _list_bedrock_models(timeout: float = 6.0) -> list[str]:
+    """The picker's list, which must be the list the default is picked from.
+
+    Through the same cache, because these were two paths to one question and
+    they could disagree: the model box offered 33 ids while the run beside it
+    died on a 34th that was never among them.
+    """
+    return list(_invokable(timeout))
+
+
+def warm_bedrock_models() -> None:
+    """Ask Bedrock what it serves, off the request path.
+
+    The answer decides which model every agent in a run is addressed by, so
+    a cold cache at the moment a job starts means the run is addressed by a
+    compiled-in guess instead. Called at startup, where six seconds cost
+    nobody anything.
+    """
+    try:
+        _invokable()
+    except Exception:
+        pass            # a listing that cannot be had is not a startup fault
+
 
 
 def list_models(provider_id: str, timeout: float = 6.0) -> list[str]:
@@ -228,6 +695,8 @@ def list_models(provider_id: str, timeout: float = 6.0) -> list[str]:
     spec = BUILTIN.get(provider_id)
     if spec is None:
         return []
+    if spec.kind == "bedrock":
+        return _list_bedrock_models(timeout)
 
     base_url = _base_url_for(spec)
     api_key = _api_key_for(spec)
@@ -295,6 +764,13 @@ def status() -> list[dict]:
         # anything - ask whether it is running.
         if ready and spec.local:
             ready = _reachable(spec, base_url)
+        # Bedrock takes no key and defaults its region, so neither is
+        # evidence either. Ask the same question create_job asks, or the
+        # health banner says ready and the first Generate answers 503 -
+        # which is exactly what it did.
+        aws_reason = _aws_check()[1] if spec.kind == "bedrock" else ""
+        if spec.kind == "bedrock":
+            ready = not aws_reason
         with _keys_lock:
             from_session = spec.id in _session_keys or spec.id in _session_base_urls
         out.append({
@@ -307,8 +783,24 @@ def status() -> list[dict]:
             "key_from_session": from_session,
             "base_url": base_url,
             "ready": ready,
-            "hint": (f"Nothing is listening at {base_url}. {spec.hint}"
+            # Bedrock's live reason says which of a dozen things went
+            # wrong; the standing hint says only where to look. Prefer the
+            # one that answers the question.
+            "hint": (aws_reason if aws_reason
+                     else f"Nothing is listening at {base_url}. {spec.hint}"
                      if spec.local and not ready else spec.hint),
+            # The same sentence as a key the browser can look up in whatever
+            # language it is showing. `hint` stays as it is: it is also used
+            # in the server's own refusal messages, and it is the fallback
+            # for anything the browser dictionary has not got.
+            # No key for the live AWS reason: it is composed at the moment
+            # it is read, so a translated generic sentence would be shown in
+            # place of the one that names the actual fault. An untranslated
+            # answer beats a translated evasion.
+            "hint_key": ("" if aws_reason
+                         else "prov.hint.unreachable" if spec.local and not ready
+                         else f"prov.hint.{spec.id}"),
+            "hint_params": {"url": base_url, "id": spec.id},
             "default_generation_model": spec.default_generation_model,
             "default_judge_model": spec.default_judge_model,
         })
@@ -446,9 +938,15 @@ def repair_json(text: str) -> str:
 class OpenAICompatibleClient:
     """Presents the Anthropic client surface over /chat/completions."""
 
-    def __init__(self, config: LLMConfig, on_note=None):
+    def __init__(self, config: LLMConfig, on_note=None, on_delta=None):
         self.config = config
         self._on_note = on_note
+        self._coalescer = _Coalescer(
+            lambda kind, text: on_delta and on_delta(kind, text))
+        #: Cleared the first time the endpoint refuses a streamed request, so
+        #: a server that only answers in one piece is asked that way from
+        #: then on rather than paying for a failed stream every call.
+        self._stream_ok = True
 
     # -- surface ------------------------------------------------------------
 
@@ -468,14 +966,14 @@ class OpenAICompatibleClient:
             payload_messages, _ = _strip_images(payload_messages)
 
         try:
-            text, usage = self._post(target, payload_messages, max_tokens)
+            text, usage = self._post(target, payload_messages, max_tokens, role)
         except _VisionUnsupported:
             payload_messages, stripped = _strip_images(payload_messages)
             if stripped:
                 self._note(
                     f"{target} rejected the rendered image; the Judge is "
                     f"running on kernel metrics alone.")
-            text, usage = self._post(target, payload_messages, max_tokens)
+            text, usage = self._post(target, payload_messages, max_tokens, role)
 
         if _JSON_EXPECTED in system:
             text = repair_json(text)
@@ -502,35 +1000,267 @@ class OpenAICompatibleClient:
         return "judge" if system.startswith("You are the Validator Agent") \
             else "generation"
 
-    def _post(self, model: str, messages: list[dict],
-              max_tokens: int) -> tuple[str, _Usage]:
+    def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
+        return headers
 
-        body = {
+    def _body(self, model: str, messages: list[dict],
+              max_tokens: int) -> dict:
+        return {
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": 0,
         }
 
+    def _fail(self, status: int, detail: str, model: str) -> None:
+        if status == 400 and _VISION_ERROR.search(detail):
+            raise _VisionUnsupported(detail)
+        if status == 400:
+            full = _window_refusal(detail)
+            if full is not None:
+                raise full
+        if status in GATEWAY_STATUS:
+            raise _GatewayBusy(
+                f"{self.config.provider} returned {status} for "
+                f"model '{model}' - the endpoint in front of the model "
+                f"stopped waiting")
+        raise RuntimeError(
+            f"{self.config.provider} returned {status} for "
+            f"model '{model}': {detail}")
+
+    def _post(self, model: str, messages: list[dict], max_tokens: int,
+              role: str = "generation") -> tuple[str, _Usage]:
+        """Ask once, and ask again if the hop in front of the model gave up.
+
+        The retry wraps the whole attempt rather than just the unstreamed
+        call, because a tunnel that times out mid-stream is the same event
+        and must not be mistaken for an endpoint that cannot stream - that
+        reading turned one slow generation into a permanent downgrade.
+        """
+        last: Optional[_GatewayBusy] = None
+        for attempt in range(GATEWAY_ATTEMPTS):
+            try:
+                return self._post_fitted(model, messages, max_tokens,
+                                         role)
+            except _GatewayBusy as exc:
+                last = exc
+                if attempt + 1 >= GATEWAY_ATTEMPTS:
+                    break
+                pause = GATEWAY_BACKOFF[min(attempt, len(GATEWAY_BACKOFF) - 1)]
+                self._note(
+                    f"{exc}. Asking again in {pause:.0f}s "
+                    f"(attempt {attempt + 2} of {GATEWAY_ATTEMPTS}).")
+                time.sleep(pause)
+        assert last is not None
+        raise RuntimeError(
+            f"{last} - and again on {GATEWAY_ATTEMPTS} attempts. A slow "
+            f"endpoint behind a tunnel needs either a faster model or a "
+            f"direct URL; CADSMITH_GATEWAY_ATTEMPTS raises the count.")
+
+    def _post_fitted(self, model: str, messages: list[dict], max_tokens: int,
+                     role: str = "generation"
+                     ) -> tuple[str, _Usage]:
+        """Ask, shrinking the ceiling until it fits the window.
+
+        The endpoint reports the window and the prompt, so the first refit
+        is arithmetic rather than a guess. It is not the last word, though:
+        vLLM says the prompt "contains **at least** N input tokens", so a
+        ceiling computed from N can be refused again - and the first
+        version of this retried inside its own `except`, where a second
+        refusal escaped uncaught and took the run with it. Measured: two of
+        the sixty-one died that way, and two that had been producing a
+        solid stopped.
+
+        So it loops, taking the endpoint's newest numbers each time and
+        giving away a little more, and gives up with a sentence that says
+        which part does not fit.
+        """
+        asked = max_tokens
+        refits = 0
+        last: Optional[_ContextTooLong] = None
+        for _ in range(_CONTEXT_REFITS):
+            try:
+                return self._post_once(model, messages, asked, role)
+            except _ContextTooLong as full:
+                last = full
+                # Two bounds on how much room is left, and the smaller wins.
+                #
+                # The endpoint's own arithmetic is the first, and it is only
+                # a lower bound: vLLM says the prompt "contains **at least**
+                # N input tokens", so a ceiling computed from N can be
+                # refused again, and shaving a token off each time achieves
+                # nothing - measured, three refits went 16000 -> 15935 ->
+                # 15934 -> 15933 and gave up four minutes later with a
+                # sentence it had guessed. Halving is the second, and it is
+                # what guarantees the loop reaches an answer rather than
+                # creeping towards one.
+                #
+                # The refusal itself sharpens the first: a window that would
+                # not hold `asked` beside the prompt proves the prompt is
+                # larger than window - asked, whatever was reported.
+                bound = max(full.prompt_tokens, full.window - asked + 1)
+                arithmetic = full.window - bound - _CONTEXT_MARGIN
+                # Halving only once the arithmetic has itself been refused.
+                # Before that it gives the largest reply that can actually
+                # fit, and handing the Coder less than fits is the
+                # truncation this ceiling was raised to stop: a program cut
+                # off mid-function is a failed run, not a cheaper one.
+                room = (min(arithmetic, asked // 2) if refits
+                        else (arithmetic if arithmetic < asked
+                              else asked // 2))
+                refits += 1
+                if room < _CONTEXT_FLOOR:
+                    break
+                self._note(
+                    f"{asked} output tokens would not fit beside a "
+                    f"{full.prompt_tokens}-token prompt in a "
+                    f"{full.window}-token window; asking for {room}.")
+                asked = room
+        # Whatever the endpoint last said, in its own words. The sentence
+        # that used to end this call was written in advance and asserted
+        # which part did not fit, which is not something the loop knows.
+        raise RuntimeError(
+            f"{self.config.base_url} would not fit a reply beside this "
+            f"prompt: {last}" if last is not None else
+            f"{self.config.base_url} refused {_CONTEXT_REFITS} ceilings in "
+            f"a row as too large for its window.")
+
+    def _post_once(self, model: str, messages: list[dict], max_tokens: int,
+                   role: str = "generation") -> tuple[str, _Usage]:
+        if self._stream_ok:
+            try:
+                return self._post_streaming(model, messages, max_tokens, role)
+            except (_VisionUnsupported, _GatewayBusy):
+                raise
+            except _StreamUnsupported as exc:
+                self._stream_ok = False
+                self._note(
+                    f"{self.config.base_url} would not stream ({exc}); "
+                    f"asking for the whole reply at once instead.")
+        return self._post_whole(model, messages, max_tokens)
+
+    def _post_streaming(self, model: str, messages: list[dict],
+                        max_tokens: int, role: str) -> tuple[str, _Usage]:
+        """Read the reply as it is written.
+
+        Not for the look of it. A self-hosted endpoint is usually reached
+        through a reverse proxy or a tunnel, and those cut a request off
+        when the origin has sent nothing for a while - Cloudflare's limit is
+        100 seconds, and an 8B model writing a whole CadQuery script goes
+        past that without difficulty. It killed the Coder here with a 524
+        while the model was still working perfectly well. Streaming means
+        the first token arrives in a second or two and nothing in between is
+        ever idle, so the proxy has no reason to intervene.
+        """
+        body = self._body(model, messages, max_tokens)
+        body["stream"] = True
+        # Usage does not come with the chunks unless it is asked for. An
+        # endpoint that does not know the option ignores it, and the run
+        # simply reports no tokens for that call.
+        body["stream_options"] = {"include_usage": True}
+
+        parts: list[str] = []
+        reasoning: list[str] = []
+        usage = _Usage()
+        try:
+            with httpx.stream("POST",
+                              f"{self.config.base_url}/chat/completions",
+                              headers=self._headers(), json=body,
+                              timeout=REQUEST_TIMEOUT) as response:
+                if response.status_code >= 400:
+                    detail = response.read().decode("utf-8", "replace")[:600]
+                    if response.status_code in (400, 404, 422):
+                        # Could be the stream parameter, could be the
+                        # images. The vision message is the specific one,
+                        # so it wins; anything else is worth one retry
+                        # without streaming before giving up on the call.
+                        if _VISION_ERROR.search(detail):
+                            raise _VisionUnsupported(detail)
+                        # A window that will not hold the prompt and the
+                        # ceiling together has nothing to do with
+                        # streaming. Read as "cannot stream" it cost a
+                        # wasted request AND switched streaming off for the
+                        # rest of the session - losing the one thing that
+                        # keeps a tunnel from timing out.
+                        full = _window_refusal(detail)
+                        if full is not None:
+                            raise full
+                        raise _StreamUnsupported(f"{response.status_code}")
+                    self._fail(response.status_code, detail, model)
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    chunk = line[5:].strip()
+                    if not chunk or chunk == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(chunk)
+                    except json.JSONDecodeError:
+                        continue
+                    raw_usage = event.get("usage") or {}
+                    if raw_usage:
+                        usage = _Usage(
+                            input_tokens=int(raw_usage.get("prompt_tokens", 0) or 0),
+                            output_tokens=int(raw_usage.get("completion_tokens", 0) or 0))
+                    for choice in event.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        piece = delta.get("content") or ""
+                        if piece:
+                            parts.append(piece)
+                            self._coalescer.add(f"text:{role}", piece)
+                        thought = (delta.get("reasoning")
+                                   or delta.get("reasoning_content") or "")
+                        if thought:
+                            reasoning.append(thought)
+                            self._coalescer.add(f"thinking:{role}", thought)
+        except (_VisionUnsupported, _StreamUnsupported, RuntimeError):
+            raise
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                f"Could not reach {self.config.provider} at "
+                f"{self.config.base_url}: {exc}") from exc
+        finally:
+            self._coalescer.flush()
+
+        text = "".join(parts)
+        if not text.strip():
+            if reasoning:
+                raise RuntimeError(
+                    f"{self.config.provider} model '{model}' replied with "
+                    f"reasoning only and no content. The pipeline reads the "
+                    f"content field, so this model cannot be used for that "
+                    f"role.")
+            # Nothing at all came back. A server that acknowledges the
+            # stream parameter and then says nothing is not one to keep
+            # streaming to.
+            raise _StreamUnsupported("the stream carried no content")
+        return text, usage
+
+    def _post_whole(self, model: str, messages: list[dict],
+                    max_tokens: int) -> tuple[str, _Usage]:
         try:
             response = httpx.post(
                 f"{self.config.base_url}/chat/completions",
-                headers=headers, json=body, timeout=REQUEST_TIMEOUT)
+                headers=self._headers(),
+                json=self._body(model, messages, max_tokens),
+                timeout=REQUEST_TIMEOUT)
+        except (httpx.TimeoutException, httpx.NetworkError,
+                httpx.RemoteProtocolError) as exc:
+            # The same event from this end of the wire: the connection went
+            # away mid-generation. Worth asking again for the same reason.
+            raise _GatewayBusy(
+                f"Lost the connection to {self.config.provider} at "
+                f"{self.config.base_url}: {exc}") from exc
         except httpx.HTTPError as exc:
             raise RuntimeError(
                 f"Could not reach {self.config.provider} at "
                 f"{self.config.base_url}: {exc}") from exc
 
         if response.status_code >= 400:
-            detail = response.text[:600]
-            if response.status_code == 400 and _VISION_ERROR.search(detail):
-                raise _VisionUnsupported(detail)
-            raise RuntimeError(
-                f"{self.config.provider} returned {response.status_code} for "
-                f"model '{model}': {detail}")
+            self._fail(response.status_code, response.text[:600], model)
 
         payload = response.json()
         choices = payload.get("choices") or []
@@ -564,18 +1294,392 @@ class OpenAICompatibleClient:
                 pass
 
 
+class _Coalescer:
+    """Batch streamed deltas so the event log stays a log, not a token dump.
+
+    A 4000-token reply would otherwise become 4000 SSE frames, all of which the
+    sink keeps in memory and mirrors to events.jsonl. Flushing on a short
+    interval or a size threshold keeps the UI smooth while bounding the stream.
+    """
+
+    def __init__(self, sink, interval: float = 0.12, max_chars: int = 240):
+        self._sink = sink
+        self._interval = interval
+        self._max_chars = max_chars
+        self._buf: dict[str, list[str]] = {}
+        self._last: dict[str, float] = {}
+
+    def add(self, kind: str, text: str) -> None:
+        if not text:
+            return
+        buf = self._buf.setdefault(kind, [])
+        buf.append(text)
+        size = sum(len(x) for x in buf)
+        now = time.time()
+        if size >= self._max_chars or now - self._last.get(kind, 0.0) >= self._interval:
+            self.flush(kind)
+
+    def flush(self, kind: str = "") -> None:
+        for k in ([kind] if kind else list(self._buf)):
+            buf = self._buf.get(k)
+            if buf:
+                self._sink(k, "".join(buf))
+                self._buf[k] = []
+                self._last[k] = time.time()
+
+
+def _build_sdk_client(config: "LLMConfig"):
+    """The Anthropic SDK client for this configuration.
+
+    Bedrock and the first-party API expose the same Messages surface, so only
+    construction differs: Bedrock authenticates with the ambient AWS credential
+    chain and takes a region, the direct API takes a key.
+    """
+    if config.kind == "bedrock":
+        from anthropic import AnthropicBedrockMantle
+
+        region = config.base_url or os.getenv("AWS_REGION") or "us-east-1"
+        kwargs: dict[str, Any] = {"aws_region": region}
+        profile = (os.getenv("AWS_PROFILE") or "").strip()
+        # A placeholder copied out of documentation is not a profile name.
+        # Not passing it on does not neutralise it - boto3's own default
+        # session reads AWS_PROFILE regardless - so _aws_check refuses one
+        # before a run can start. This is belt and braces.
+        if profile and not (profile.startswith("<") and profile.endswith(">")):
+            kwargs["aws_profile"] = profile
+        return AnthropicBedrockMantle(**kwargs)
+
+    import anthropic
+
+    return anthropic.Anthropic(api_key=config.api_key)
+
+
+class ClaudeClient:
+    """Anthropic client surface that streams, and surfaces real reasoning.
+
+    Serves both the first-party API and Bedrock, which differ only in how the
+    SDK client is constructed.
+
+    Two things it adds over handing back the raw SDK object:
+
+    * **Role routing.** ``autofab.agents`` hardcodes a model id at each call
+      site. Like ``OpenAICompatibleClient``, this picks the generation or judge
+      model from the session's configuration, keyed on the agent's own system
+      prompt, so the app's model pickers apply on this path too.
+    * **Streaming with thinking.** Current Claude models think adaptively;
+      asking for ``display="summarized"`` returns that reasoning as it happens.
+      Streaming it out through ``on_delta`` is what lets the UI show the model
+      working rather than a spinner and a stage name.
+
+    Callers see the same non-streaming ``_Response`` the rest of the app
+    expects, so nothing downstream changes.
+    """
+
+    #: Thinking shares the output budget with the answer, and it is not a small
+    #: share: measured on Bedrock, Opus 5 spent an entire 4096-token ceiling
+    #: reasoning and emitted no answer at all, and Sonnet 5 did the same. A
+    #: ceiling sized for the script alone does not merely truncate the reply -
+    #: it can consume the whole budget before the reply starts.
+    MIN_TOKENS_WITH_THINKING = int(os.getenv("CADSMITH_MIN_THINKING_TOKENS", "24000"))
+
+    def __init__(self, config: "LLMConfig", on_note=None, on_delta=None):
+        self.config = config
+        self._on_note = on_note
+        self._client = _build_sdk_client(config)
+        self._thinking_ok = True   # cleared if the model rejects the parameter
+        #: Which id each role is actually being served by, once one has
+        #: answered, and the ids this endpoint has said it does not have.
+        self._serves: dict[str, str] = {}
+        self._refused: set[str] = set()
+        self._effort_ok = True     # cleared if it rejects the effort instead
+        self._coalescer = _Coalescer(
+            lambda kind, text: on_delta and on_delta(kind, text))
+
+    @property
+    def messages(self) -> "ClaudeClient":
+        return self
+
+    def _candidates(self, role: str) -> list[str]:
+        """Ids to try for this role, best first.
+
+        A configured model is the only one tried: somebody who typed an id
+        meant that id, and quietly answering with a different model is
+        worse than saying the one they asked for is not served.
+        """
+        asked = (self.config.judge_model if role == "judge"
+                 else self.config.generation_model)
+        if self.config.kind != "bedrock":
+            return [asked]
+        return bedrock_candidates("opus" if role == "judge" else "sonnet",
+                                  asked) or [asked]
+
+    def _serving(self, role: str) -> str:
+        """The id to use for this role now - the last one that answered."""
+        found = self._serves.get(role)
+        if found:
+            return found
+        candidates = self._candidates(role)
+        return candidates[0] if candidates else ""
+
+    def _next_candidate(self, role: str, after: str) -> str:
+        """The id to try when `after` came back unknown, or "".
+
+        Each refusal is remembered, so a session does not walk the same
+        dead id twice and a model that answers is used from then on.
+        """
+        self._refused.add(after)
+        for candidate in self._candidates(role):
+            if candidate not in self._refused:
+                self._serves[role] = candidate
+                return candidate
+        return ""
+
+    def create(self, *, model: str = "", max_tokens: int = 4096,
+               system: str = "", messages: Optional[list] = None,
+               **_: Any) -> _Response:
+        role = OpenAICompatibleClient._role_for(system)
+        target = self._serving(role)
+        payload = list(messages or [])
+        if role == "judge" and not self.config.judge_vision:
+            payload = _strip_anthropic_images(payload)
+
+        budget = max_tokens
+        if self._thinking_ok:
+            budget = max(budget, self.MIN_TOKENS_WITH_THINKING)
+
+        try:
+            return self._stream(target, system, payload, budget, role)
+        except Exception as exc:
+            if _NO_SUCH_MODEL.search(str(exc)) or \
+                    type(exc).__name__ == "NotFoundError":
+                # What a Bedrock account lists and what its Messages
+                # endpoint serves are two different namespaces, and nothing
+                # readable from here says which spelling of a model this
+                # account answers to. Measured twice on one account:
+                # `anthropic.claude-sonnet-5-5` 404s, and so does
+                # `us.anthropic.claude-sonnet-5-5`. Guessing a third time
+                # is not a plan, so the next candidate is tried and the one
+                # that answers is remembered for the rest of the session.
+                other = self._next_candidate(role, target)
+                if other:
+                    self._note(f"{target} is not served here; trying "
+                               f"{other}.")
+                    return self.create(model=other, max_tokens=max_tokens,
+                                       system=system, messages=messages)
+                raise
+            if (self._effort_ok and self.config.effort
+                    and _EFFORT_UNSUPPORTED.search(str(exc))):
+                # A model that thinks but takes no effort setting: keep the
+                # reasoning, drop the dial. Losing the run over a preference
+                # would be the wrong trade.
+                self._effort_ok = False
+                self._note(f"{target} does not take a reasoning effort; "
+                           f"continuing at its own default.")
+                return self._stream(target, system, payload, budget, role)
+            if self._thinking_ok and _THINKING_UNSUPPORTED.search(str(exc)):
+                # Older models on Bedrock (Claude 3, some 4.x) reject the
+                # parameter outright. Fall back rather than fail the run.
+                self._thinking_ok = False
+                self._note(f"{target} does not support streamed reasoning; "
+                           f"continuing without it.")
+                return self._stream(target, system, payload, max_tokens, role)
+            raise
+
+    # -- internals ----------------------------------------------------------
+
+    def _stream(self, target: str, system: str, messages: list,
+                max_tokens: int, role: str) -> _Response:
+        kwargs: dict[str, Any] = {
+            "model": target,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        }
+        if system:
+            kwargs["system"] = system
+        if self._thinking_ok:
+            # display="summarized" is what makes the reasoning readable: the
+            # default ("omitted") still returns a thinking block, but with an
+            # empty string in it.
+            kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+            # Effort governs how deeply the model reasons, and therefore both
+            # the wait and the share of the budget thinking takes. It rides on
+            # the run's own configuration, so one part can be answered at low
+            # effort and the next at high without restarting the server.
+            if self.config.effort and self._effort_ok:
+                kwargs["output_config"] = {"effort": self.config.effort}
+
+        thinking_parts: list[str] = []
+        with self._client.messages.stream(**kwargs) as stream:
+            for event in stream:
+                if getattr(event, "type", "") != "content_block_delta":
+                    continue
+                delta = getattr(event, "delta", None)
+                kind = getattr(delta, "type", "")
+                if kind == "thinking_delta":
+                    piece = getattr(delta, "thinking", "") or ""
+                    thinking_parts.append(piece)
+                    self._coalescer.add(f"thinking:{role}", piece)
+                elif kind == "text_delta":
+                    self._coalescer.add(f"text:{role}", getattr(delta, "text", "") or "")
+            final = stream.get_final_message()
+        self._coalescer.flush()
+
+        if getattr(final, "stop_reason", None) == "refusal":
+            detail = getattr(final, "stop_details", None)
+            raise RuntimeError(
+                f"{target} declined the request "
+                f"(category={getattr(detail, 'category', None)})")
+
+        text = "".join(
+            b.text for b in final.content if getattr(b, "type", "") == "text")
+        if getattr(final, "stop_reason", None) == "max_tokens":
+            if self._thinking_ok and not text.strip():
+                self._note(
+                    f"{target} used the whole {max_tokens}-token budget "
+                    f"reasoning and produced no answer. Raise "
+                    f"CADSMITH_MIN_THINKING_TOKENS, or drop Reasoning effort "
+                    f"to make it think less.")
+            else:
+                self._note(f"{target} hit max_tokens={max_tokens}; the reply "
+                           f"is truncated.")
+        if _JSON_EXPECTED in system:
+            text = repair_json(text)
+
+        usage = _Usage(
+            input_tokens=getattr(final.usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(final.usage, "output_tokens", 0) or 0,
+        )
+        return _Response(content=[_Block(text=text)], usage=usage)
+
+    def _note(self, message: str) -> None:
+        if self._on_note:
+            self._on_note(message)
+
+
+def _strip_anthropic_images(messages: list) -> list:
+    """Drop image blocks from Anthropic-shaped content."""
+    out = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, list):
+            kept = [b for b in content
+                    if not (isinstance(b, dict) and b.get("type") == "image")]
+            out.append({**m, "content": kept})
+        else:
+            out.append(m)
+    return out
+
+
+#: Model rejected the thinking parameter - the message differs by platform.
+_THINKING_UNSUPPORTED = re.compile(
+    r"thinking|extended.?thinking|budget_tokens|unsupported.*param",
+    re.IGNORECASE)
+
+#: Model took the thinking parameter but not the effort with it. Checked
+#: first, so a deployment that has yet to catch up on effort keeps its
+#: streamed reasoning instead of losing both.
+_EFFORT_UNSUPPORTED = re.compile(r"output_config|\beffort\b", re.IGNORECASE)
+
+
+#: An endpoint refusing a request because the window will not hold the
+#: prompt *and* the ceiling asked for. Every one of them says so with both
+#: numbers in it, which is enough to work out what to ask for instead.
+#: vLLM's wording is the first; the hosted services phrase it differently
+#: but all name the window and the input.
+_CONTEXT_FULL = re.compile(
+    r"maximum context length is (\d+) tokens.*?"
+    r"(?:prompt contains at least |input (?:length|tokens)[^0-9]{0,20})(\d+)",
+    re.IGNORECASE | re.DOTALL)
+
+#: The same refusal, said the other way, with the prompt left out:
+#: "max_tokens=200000 cannot be greater than max_model_len=32768". vLLM
+#: answers this when the ceiling alone is past the window and the one
+#: above when the two together are. Going unrecognised, it was fatal where
+#: its twin was merely refittable.
+_CEILING_PAST_WINDOW = re.compile(
+    r"max_tokens=(\d+) cannot be greater than max_model_len=(\d+)",
+    re.IGNORECASE)
+
+#: Left free for the reply after the clamp, so a prompt that grows by a few
+#: tokens between the refusal and the retry does not refuse again.
+_CONTEXT_MARGIN = 64
+
+#: How many times to shrink the ceiling before giving up. The endpoint's
+#: own "at least N input tokens" is a lower bound and can be out by a
+#: factor of two, which takes three or four halvings to close. Each refused
+#: attempt is a 400 the endpoint answers without generating anything, so
+#: the extra rounds cost far less than the run they save.
+_CONTEXT_REFITS = 6
+
+#: Below this a reply is not worth having, so say so instead of shrinking
+#: towards nothing.
+_CONTEXT_FLOOR = 256
+
+
+
+class _ContextTooLong(RuntimeError):
+    """The window will not hold the prompt and the ceiling together.
+
+    Carries what the endpoint said about itself, because the only useful
+    response is to ask for exactly what is left rather than to guess a
+    smaller number.
+    """
+
+    def __init__(self, window: int, prompt_tokens: int, detail: str) -> None:
+        super().__init__(detail)
+        self.window = window
+        self.prompt_tokens = prompt_tokens
+
+    def room_for_reply(self) -> int:
+        return self.window - self.prompt_tokens - _CONTEXT_MARGIN
+
+
+def _window_refusal(detail: str):
+    """``_ContextTooLong`` if this 400 is a window refusal, else ``None``.
+
+    Both of the endpoint's phrasings, read in one place because they were
+    read in two and only one of them was. The second names no prompt size,
+    so it is reported as zero: the arithmetic then caps the ceiling at the
+    window, and the next attempt draws the fuller message, which carries
+    the prompt.
+    """
+    found = _CONTEXT_FULL.search(detail)
+    if found:
+        return _ContextTooLong(int(found.group(1)), int(found.group(2)),
+                               detail)
+    found = _CEILING_PAST_WINDOW.search(detail)
+    if found:
+        return _ContextTooLong(int(found.group(2)), 0, detail)
+    return None
+
+
+class _GatewayBusy(RuntimeError):
+    """The hop in front of the model stopped waiting; the model did not.
+
+    Told apart from every other failure because it is the only one worth
+    asking again: the request was accepted, nothing about it was rejected,
+    and the generation was very likely still running when the tunnel closed
+    the connection.
+    """
+
+
 class _VisionUnsupported(RuntimeError):
     """The model refused an image; retry without one."""
 
 
-def build_client(config: LLMConfig, on_note=None):
+class _StreamUnsupported(RuntimeError):
+    """The endpoint would not stream; ask for the whole reply instead."""
+
+
+def build_client(config: LLMConfig, on_note=None, on_delta=None):
     """Return a client for this configuration.
 
-    For Anthropic that is the real SDK object, so the default path behaves
-    exactly as the published pipeline does.
+    ``on_delta(kind, text)`` receives streamed fragments as they arrive, where
+    kind is "thinking:<role>" or "text:<role>". Both backends produce them:
+    the OpenAI-compatible one streams because a self-hosted endpoint is
+    usually behind a proxy that cuts off a request the origin has been quiet
+    on, and showing the reply as it is written comes free with that.
     """
-    if config.kind == "anthropic":
-        import anthropic
-
-        return anthropic.Anthropic(api_key=config.api_key)
-    return OpenAICompatibleClient(config, on_note=on_note)
+    if config.kind in ("anthropic", "bedrock"):
+        return ClaudeClient(config, on_note=on_note, on_delta=on_delta)
+    return OpenAICompatibleClient(config, on_note=on_note, on_delta=on_delta)
