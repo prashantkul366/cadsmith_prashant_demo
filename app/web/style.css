@@ -1201,3 +1201,86 @@ html[lang="ja"] .speclabel,html[lang="ja"] .specwant{letter-spacing:0}
    answers. */
 .params-body.busy .prow input,.params-body.busy .prow-num{
   opacity:.55;pointer-events:none}
+
+/* ─── feature tree ──────────────────────────────────────────────────────
+   The history that made the part, as a list with indentation, which is
+   how every CAD package has drawn a tree for thirty years. Indentation is
+   a custom property so a row sets its own depth and the rule stays one
+   rule. */
+.tree-body { display: flex; flex-direction: column; gap: 2px; }
+
+.trow { padding-left: calc(var(--depth, 0) * 11px); }
+.trow.bad .trow-name { color: var(--bad, #a30000); }
+
+.trow-head {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 5px 6px; border: 0; border-radius: 5px;
+  background: none; color: inherit; font: inherit; text-align: left;
+  cursor: pointer;
+}
+.trow-head:hover { background: rgba(127, 127, 127, .12); }
+.trow-head[aria-expanded="true"] { background: rgba(127, 127, 127, .09); }
+
+.trow-name {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px;
+}
+/* How many numbers this feature has that can be changed - the one fact
+   that says whether a row is worth opening. */
+.trow-n {
+  font: 600 10px/1 ui-monospace, monospace; opacity: .5;
+  padding: 2px 4px; border-radius: 3px; background: rgba(127, 127, 127, .16);
+}
+.tbad { color: var(--bad, #a30000); font-weight: 700; }
+.toff {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  opacity: .6;
+}
+
+.ticon {
+  width: 9px; height: 9px; flex: none; border-radius: 2px;
+  background: currentColor; opacity: .45;
+}
+.ticon.sketch  { border-radius: 50%; }
+.ticon.body    { opacity: .7; }
+.ticon.datum   { opacity: .25; transform: rotate(45deg); }
+.ticon.dress   { border-radius: 50% 2px 50% 2px; }
+.ticon.pattern { background: none; box-shadow: inset 0 0 0 2px currentColor; }
+
+.tprops {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 4px 6px 8px 16px;
+}
+.tprop {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px;
+}
+.tprop-name {
+  flex: 1; min-width: 0; overflow: hidden; opacity: .72;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.tprop.ro .tprop-name { opacity: .45; }
+.tprop-ro {
+  font: 11px/1.4 ui-monospace, monospace; opacity: .5;
+  max-width: 52%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tprop-in {
+  width: 92px; flex: none; padding: 3px 6px; font: inherit;
+  border: 1px solid rgba(127, 127, 127, .35); border-radius: 4px;
+  background: transparent; color: inherit;
+}
+.tprop-in[type="checkbox"] { width: auto; }
+/* Whether the document took the change. Red is not "invalid input" - the
+   value was refused by the recompute and put back, and the toast says by
+   what. */
+.tprop-in.good { border-color: rgba(40, 150, 70, .8); }
+.tprop-in.bad  { border-color: var(--bad, #a30000); }
+
+.tsup {
+  margin-top: 4px; align-self: flex-start; padding: 3px 8px;
+  font: inherit; font-size: 11px; cursor: pointer;
+  border: 1px solid rgba(127, 127, 127, .35); border-radius: 4px;
+  background: transparent; color: inherit; opacity: .8;
+}
+.tsup:hover { opacity: 1; background: rgba(127, 127, 127, .12); }

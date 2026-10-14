@@ -59,6 +59,10 @@
             data-i18n-title="view.params" title="Parameters">
       <svg class="icn" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 10h18M9.5 10v9.5"/></svg>
     </button>
+    <button class="vsegb" data-view="tree" role="tab" aria-selected="false"
+            data-i18n-title="view.tree" title="Feature tree" disabled>
+      <svg class="icn" viewBox="0 0 24 24"><path d="M4 5h6M4 5v14h5M10 12H4M14 5h6M14 12h6M14 19h6"/></svg>
+    </button>
     <button class="vsegb" data-view="drawing" role="tab" aria-selected="false"
             data-i18n-title="view.drawing" title="Drawing" disabled>
       <svg class="icn" viewBox="0 0 24 24"><rect x="3" y="3.5" width="18" height="17" rx="2"/><path d="M7 9h7M7 13h4.5M7 17h2.5M14.5 17H17"/></svg>
@@ -400,6 +404,19 @@
         <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       <div class="rbody"><div class="params-body" id="paramsBody"></div></div>
+    </section>
+
+    <!-- The feature tree is a card rather than a view of the centre for
+         the same reason the parameters are: it is a set of controls for
+         the thing on screen, and watching the part change as you drag a
+         number is the whole point of having the tree at all. -->
+    <section class="rcard" id="cardTree" data-card="tree" hidden>
+      <button class="rhead" data-card-toggle>
+        <h2 data-i18n="tree.heading">Feature tree</h2>
+        <span class="eyebrow" id="treeDoc"></span>
+        <svg class="icn chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="rbody"><div class="tree-body" id="treeBody"></div></div>
     </section>
 
     <section class="rcard" id="cardProps" data-card="props" hidden>

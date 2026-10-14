@@ -404,6 +404,11 @@ async function loadDocuments() {
   // Nothing to choose between is not a choice: the row stays out of the way
   // until FreeCAD has something open.
   row.hidden = !found.available || !found.documents.length;
+  // The feature tree is a live document's tree. Without one there is
+  // nothing to show, so the segment is off rather than opening an empty
+  // card and leaving the reader to work out why.
+  const treeTab = $('#viewSeg .vsegb[data-view="tree"]');
+  if (treeTab) treeTab.disabled = !found.available || !found.documents.length;
 }
 
 /* ═══════════════════════ examples ═══════════════════════ */
@@ -2791,7 +2796,238 @@ $("#back3d").onclick = () => showView("model");
    button on the viewport toolbar. They are the same kind of choice, so they
    are now the same control, and the old ones still work underneath it. */
 
-const VIEWS = ["model", "code", "params", "drawing"];
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Feature tree — the history that made the part, not the solid that fell
+   out of it.
+
+   Read from the FreeCAD document the run is attached to, so what is on
+   this panel is what is in the engineer's own tree: the same objects, the
+   same labels, the same numbers. Editing a row writes to that document and
+   the part on screen is rebuilt from the answer, which is why the tree is
+   a card beside the model rather than a view that replaces it.
+
+   A value the part cannot be rebuilt with comes back refused with its
+   reason. That is shown on the row that caused it and the old value is put
+   back, because a panel that keeps a number the document rejected is
+   showing a part that does not exist.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+const TREE = { doc: "", rows: [], open: new Set(), busy: false };
+
+//: Which FreeCAD document the tree is of. The run already knows: it is the
+//: document the engineer pointed it at, or the one the run made.
+function treeDocument() {
+  return (S.freecadDocument || $("#optDocument")?.value || "").trim();
+}
+
+function treeIcon(type) {
+  if (/Sketch/.test(type)) return "sketch";
+  if (/Body|Part::Feature/.test(type)) return "body";
+  if (/Pad|Pocket|Revolution|Groove|Loft|Pipe/.test(type)) return "feature";
+  if (/Fillet|Chamfer|Draft|Thickness/.test(type)) return "dress";
+  if (/Pattern|Mirrored|Transform/.test(type)) return "pattern";
+  if (/Plane|Line|Point|Origin|Datum/.test(type)) return "datum";
+  return "object";
+}
+
+function treeField(object, property) {
+  const id = `${object}.${property.name}`;
+  const shown = property.shown || property.value;
+  if (!property.writable) {
+    return `<span class="tprop-ro" title="${esc(t("tree.readonly"))}"
+                  >${esc(shown)}</span>`;
+  }
+  if (property.editor === "boolean") {
+    return `<input class="tprop-in" type="checkbox" data-field="${esc(id)}"
+                   ${property.value ? "checked" : ""} />`;
+  }
+  if (property.editor === "choice") {
+    const options = (property.choices || []).map(choice =>
+      `<option${choice === property.value ? " selected" : ""}
+       >${esc(choice)}</option>`).join("");
+    return `<select class="tprop-in" data-field="${esc(id)}">${options}</select>`;
+  }
+  if (property.editor === "text") {
+    return `<input class="tprop-in" type="text" data-field="${esc(id)}"
+                   value="${esc(property.value ?? "")}" />`;
+  }
+  const step = property.editor === "integer" ? 1 : 0.1;
+  return `<input class="tprop-in" type="number" inputmode="decimal"
+                 data-field="${esc(id)}" step="${step}"
+                 value="${esc(property.value ?? "")}" />`;
+}
+
+function treeRow(row) {
+  const open = TREE.open.has(row.name);
+  // Only the properties worth a row. An object with forty of them and no
+  // way to tell which two matter is a tree nobody reads.
+  const shown = (row.properties || []).filter(p => !p.hidden);
+  const writable = shown.filter(p => p.writable);
+  const badge = row.error ? ' <span class="tbad">!</span>' : "";
+  const off = row.suppressed
+    ? ` <span class="toff">${esc(t("tree.suppressed"))}</span>` : "";
+  return `<div class="trow${row.error ? " bad" : ""}" data-name="${esc(row.name)}"
+               style="--depth:${Math.min(row.depth, 6)}">
+      <button class="trow-head" data-tree-toggle="${esc(row.name)}"
+              aria-expanded="${open}">
+        <span class="ticon ${treeIcon(row.type)}"></span>
+        <span class="trow-name" title="${esc(row.type)}">${esc(row.label)}</span>
+        <span class="trow-n">${writable.length}</span>${badge}${off}
+      </button>
+      ${open ? `<div class="tprops">${shown.map(p => `
+        <label class="tprop${p.writable ? "" : " ro"}">
+          <span class="tprop-name" title="${esc(p.type)}">${esc(p.name)}</span>
+          ${treeField(row.name, p)}
+        </label>`).join("")}
+        ${row.suppressible === false ? "" : `
+        <button class="tsup" data-tree-suppress="${esc(row.name)}">
+          ${esc(row.suppressed ? t("tree.restore") : t("tree.suppress"))}
+        </button>`}
+      </div>` : ""}
+    </div>`;
+}
+
+function renderTree() {
+  const body = $("#treeBody");
+  if (!body) return;
+  $("#treeDoc").textContent = TREE.doc || "";
+  if (!TREE.rows.length) {
+    body.innerHTML = `<div class="await"><span>${esc(t("tree.empty"))}</span></div>`;
+    return;
+  }
+  body.innerHTML = TREE.rows.map(treeRow).join("");
+}
+
+//: Opening the tree of a document nothing in this app built should still
+//: show the part. The engineer pointed at a document; "nothing built yet"
+//: is this app's state and not what is on their screen.
+async function showLiveDocument() {
+  if (S.jobId || !TREE.doc) return;
+  try {
+    await Viewer.load(API.freecadMesh(TREE.doc));
+    Viewer.fit(true);
+    showOverlay("none");
+  } catch (e) { /* a document with no solid in it yet is not an error */ }
+}
+
+async function loadTree() {
+  const document_ = treeDocument();
+  const body = $("#treeBody");
+  if (!document_) { TREE.rows = []; renderTree(); return; }
+  if (body) body.innerHTML =
+    `<div class="await"><span>${esc(t("tree.reading"))}</span></div>`;
+  try {
+    const got = await API.freecadTree(document_);
+    TREE.doc = got.document || document_;
+    TREE.rows = got.rows || [];
+    if (!TREE.open.size && TREE.rows.length) {
+      // Open the tips, which is what a person means by "the part", rather
+      // than everything - a body's origin has seven children nobody wants.
+      (got.tips || []).forEach(name => TREE.open.add(name));
+    }
+  } catch (error) {
+    TREE.rows = [];
+    if (body) body.innerHTML =
+      `<div class="await"><span>${esc(error.message)}</span></div>`;
+    return;
+  }
+  renderTree();
+  showLiveDocument();
+}
+
+$("#treeBody")?.addEventListener("click", event => {
+  const toggle = event.target.closest("[data-tree-toggle]");
+  if (toggle) {
+    const name = toggle.dataset.treeToggle;
+    TREE.open.has(name) ? TREE.open.delete(name) : TREE.open.add(name);
+    renderTree();
+    return;
+  }
+  const suppress = event.target.closest("[data-tree-suppress]");
+  if (suppress) sendSuppress(suppress.dataset.treeSuppress);
+});
+
+$("#treeBody")?.addEventListener("change", event => {
+  const field = event.target.closest("[data-field]");
+  if (field) sendTreeEdit(field);
+});
+
+async function sendTreeEdit(field) {
+  if (TREE.busy) return;
+  const [object, property] = field.dataset.field.split(".");
+  const value = field.type === "checkbox" ? field.checked
+    : field.type === "number" ? Number(field.value)
+      : field.value;
+  TREE.busy = true;
+  field.classList.remove("bad", "good");
+  try {
+    const answer = await API.freecadTreeEdit(TREE.doc, object,
+                                             { [property]: value });
+    if (answer.ok) {
+      field.classList.add("good");
+      toast(t("tree.changed"));
+      TREE.busy = false;
+      await afterTreeChange();
+    } else {
+      field.classList.add("bad");
+      // The reason FreeCAD gave, not a generic failure: "that value leaves
+      // the pocket unable to rebuild" is the sentence that tells somebody
+      // what to try instead.
+      toast(answer.why || Object.values(answer.refused || {})[0]
+            || t("tree.rolledback"));
+      await loadTree();
+    }
+  } catch (error) {
+    field.classList.add("bad");
+    toast(error.message);
+  } finally {
+    TREE.busy = false;
+  }
+}
+
+async function sendSuppress(name) {
+  if (TREE.busy) return;
+  const row = TREE.rows.find(r => r.name === name);
+  TREE.busy = true;
+  try {
+    const answer = await API.freecadTreeSuppress(TREE.doc, name,
+                                                 !row?.suppressed);
+    if (!answer.ok) toast(answer.why || t("tree.rolledback"));
+    else await afterTreeChange();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    TREE.busy = false;
+  }
+}
+
+//: A change to the tree changes the part, so the tree is re-read and the
+//: model re-fetched. Showing one without the other is how a panel and a
+//: viewport come to disagree about what the part is.
+async function afterTreeChange() {
+  await loadTree();
+  // The document has moved on from the saved version, so the viewport is
+  // pointed at the live document rather than at the artifact - otherwise
+  // the tree says one thing and the part on screen says another.
+  //
+  // Deliberately not awaited. Meshing a large solid takes as long as it
+  // takes, and holding the panel until it finishes made a slow export
+  // leave the tree permanently busy: the next edit was dropped on the
+  // floor by the guard with nothing on screen to say why. The numbers are
+  // the panel's job and the picture catches up.
+  refreshLiveView();
+}
+
+function refreshLiveView() {
+  if (!TREE.doc) return Promise.resolve();
+  return Viewer.load(API.freecadMesh(TREE.doc))
+    .then(() => Viewer.fit(false))
+    .catch(error => warnToast(error.message));
+}
+
+
+const VIEWS = ["model", "code", "params", "tree", "drawing"];
 
 function showView(which) {
   if (!VIEWS.includes(which)) which = "model";
@@ -2813,10 +3049,16 @@ function showView(which) {
   if (which === "drawing") openDrawing();
   if (which === "code") setStat();
   if (which === "params") chooseParamView("params");
+  if (which === "tree") {
+    showCard("tree", true);
+    setCardOpen("tree", true);
+    loadTree();
+  }
   $$("#viewSeg .vsegb").forEach(button => {
-    // "params" opens a card without changing the centre, so it flashes
-    // rather than latches: the centre is still the model.
-    const on = which === "params"
+    // "params" and "tree" open a card without changing the centre, so they
+    // flash rather than latch: the centre is still the model, which is the
+    // point of both of them.
+    const on = (which === "params" || which === "tree")
       ? button.dataset.view === "model"
       : button.dataset.view === which;
     button.classList.toggle("on", on);

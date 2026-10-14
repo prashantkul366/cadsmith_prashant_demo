@@ -144,6 +144,11 @@ for obj in doc.Objects:
         "visible": bool(getattr(obj, "Visibility", True)),
         "touched": bool(obj.State and "Touched" in obj.State),
         "error": "Invalid" in (obj.State or []),
+        # Only a PartDesign feature can be taken out of the recompute, so
+        # the panel is told which rows may offer it rather than finding
+        # out by being refused.
+        "suppressible": hasattr(obj, "Suppressed"),
+        "suppressed": bool(getattr(obj, "Suppressed", False)),
         "properties": described(obj),
     })
 

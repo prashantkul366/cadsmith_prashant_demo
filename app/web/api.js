@@ -38,6 +38,39 @@ const API = (() => {
        which is an ordinary state and not an error. */
     freecadDocuments: () => json("/api/freecad/documents"),
 
+    /* The feature tree of one open document: the history that made the
+       part, with every number still attached to the feature that used it.
+       503 when FreeCAD is not running, which the panel says in words. */
+    freecadTree: (document, verbose) =>
+      json(`/api/freecad/documents/${encodeURIComponent(document)}/tree`
+           + (verbose ? "?verbose=true" : "")),
+
+    /* Setting a property is an ordinary request that can come back
+       refused: a value the part cannot be rebuilt with is an answer, not
+       an error, and it arrives with the reason beside it. */
+    freecadTreeEdit: (document, name, values) =>
+      json(`/api/freecad/documents/${encodeURIComponent(document)}`
+           + `/tree/${encodeURIComponent(name)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values }),
+      }),
+
+    /* The open document's solid, meshed. A URL rather than a fetch
+       because the viewer loads it the same way it loads a version's STL,
+       and the query stops a browser showing the part as it was. */
+    freecadMesh: (document) =>
+      `/api/freecad/documents/${encodeURIComponent(document)}/mesh`
+      + `?at=${Date.now()}`,
+
+    freecadTreeSuppress: (document, name, suppressed) =>
+      json(`/api/freecad/documents/${encodeURIComponent(document)}`
+           + `/tree/${encodeURIComponent(name)}/suppress`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ suppressed }),
+      }),
+
     /* The key is posted once and held in server memory. It is never stored,
        never logged, and never sent back — the reply says only whether the
        provider is usable now. */

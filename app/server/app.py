@@ -22,6 +22,7 @@ from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
+    Response,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +33,7 @@ from .drawing import ensure_dxf, ensure_sheet
 from .edits import Change, describe_parameters, parameters
 from . import builder as builder_mod
 from . import freecad_run
+from . import tree as tree_mod
 from .jobs import (FREECAD_DEFAULT, JobManager, JobOptions, STATUS_DONE,
                    STATUS_ERROR)
 
@@ -709,6 +711,85 @@ def freecad_documents() -> JSONResponse:
         return JSONResponse({"available": False, "documents": []})
     return JSONResponse({"available": True,
                          "documents": freecad_run.open_documents(bridge)})
+
+
+@app.get("/api/freecad/documents/{document}/tree")
+def freecad_tree(document: str, verbose: bool = False) -> JSONResponse:
+    """The feature tree of one open document, as rows to draw.
+
+    The whole point of working in FreeCAD rather than regenerating a script
+    is that the history is there: this is that history, with every number
+    still attached to the feature that used it.
+    """
+    bridge = _live_freecad()
+    got = tree_mod.read(bridge, document, verbose=verbose)
+    if not got.get("ok"):
+        raise HTTPException(status_code=502,
+                            detail=got.get("why") or "FreeCAD would not "
+                                                     "describe that document")
+    return JSONResponse({**got, "rows": tree_mod.outline(got)})
+
+
+@app.post("/api/freecad/documents/{document}/tree/{name}")
+async def freecad_tree_edit(document: str, name: str,
+                            request: Request) -> JSONResponse:
+    """Change properties on one object, and say what the part did.
+
+    A refusal is a 200 with its reason, not an error: a value that will not
+    rebuild is an ordinary answer to an ordinary question, and the panel
+    shows it beside the field the person was dragging.
+    """
+    body = await request.json()
+    values = body.get("values")
+    if not isinstance(values, dict) or not values:
+        raise HTTPException(status_code=400,
+                            detail="send {\"values\": {property: value}}")
+    return JSONResponse(tree_mod.edit(_live_freecad(), document, name, values))
+
+
+@app.post("/api/freecad/documents/{document}/tree/{name}/suppress")
+async def freecad_tree_suppress(document: str, name: str,
+                                request: Request) -> JSONResponse:
+    """Take a feature out of the recompute, or put it back."""
+    body = await request.json()
+    return JSONResponse(tree_mod.suppress(_live_freecad(), document, name,
+                                          bool(body.get("suppressed", True))))
+
+
+@app.get("/api/freecad/documents/{document}/mesh")
+def freecad_mesh(document: str) -> Response:
+    """The open document's solid, meshed, for the viewer.
+
+    Not the saved version's STL: the point of editing the tree is that the
+    document has moved on from the version, and a viewport showing the
+    artifact would be showing the part as it was before the change.
+    """
+    bridge = _live_freecad()
+    try:
+        blob = bridge.fetch(document, "stl")
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return Response(content=blob, media_type="model/stl",
+                    headers={"Cache-Control": "no-store"})
+
+
+def _live_freecad():
+    """The bridge, or the reason there is nothing to talk to.
+
+    Every tree route needs the same two sentences, and a panel that says
+    "502" where it could say "FreeCAD is not running" is a panel that sends
+    somebody to the logs.
+    """
+    if not FREECAD_DEFAULT:
+        raise HTTPException(status_code=503,
+                            detail="this server is not set up to drive "
+                                   "FreeCAD")
+    bridge = freecad_run.bridge_from_env()
+    if not bridge.alive(timeout=2.0):
+        raise HTTPException(status_code=503,
+                            detail="FreeCAD is not running, or its CADSmith "
+                                   "addon is not started")
+    return bridge
 
 
 @app.get("/api/providers")
