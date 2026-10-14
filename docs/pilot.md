@@ -53,6 +53,25 @@ overlap each other and cross the view, and some features get no callout at
 all because the leader count is capped. A drawing nobody can read is not a
 drawing, and this is the thing YMRI will judge the tool on.
 
+Placement is now measured rather than judged by eye. `app/tools/placement`
+counts the things that make a sheet unreadable - dimension lines crossing,
+a line drawn over its own view, a value written over another value or over
+a leader, anything off the frame, and a stack not ordered shortest-nearest
+as ISO 129-1 asks. Across the 80 parts in the library:
+
+| | sheets with nothing wrong | faults |
+|---|---|---|
+| as it was | 54 of 80 | 37 |
+| shortest nearest the view | 71 of 80 | 12 |
+| stacks squeezed to fit the frame | 76 of 80 | 4 |
+| leaders out of the dimension margins | 78 of 80 | 3 |
+| leader text moved onto clear paper | **80 of 80** | **0** |
+
+What that number is not: a claim that the drawings are good. It says
+nothing is written over anything and nothing is off the page. Whether the
+right dimensions are there at all is the open question, and the one their
+own drawings will answer better than we can.
+
 That work is in progress and is the priority. It has three parts:
 
 1. **Selection** - which dimensions a reader needs to make the part, and

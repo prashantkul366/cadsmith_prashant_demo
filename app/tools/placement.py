@@ -139,39 +139,46 @@ def judge(sheet):
     return faults
 
 
-rows, totals = [], collections.Counter()
-WHERE = pathlib.Path(sys.argv[3] if len(sys.argv) > 3 else "app/runs")
-# The same rule `sheets` uses for what there is to draw, imported rather
-# than written again: two tools that disagree about which files are parts
-# produce two reports nobody can line up.
-for name, step, prompt in (sheets.latest(WHERE)
-                           if WHERE.is_dir() and any(WHERE.glob("*/meta.json"))
-                           else sheets.solids(WHERE)):
-    try:
-        threads = getattr(drawing, "_threads", None)
-        sheet = drawing.plan_sheet(drawing._project(step),
-                                   threads(prompt) if threads else None)
-    except Exception as exc:
-        rows.append({"step": str(step), "built": False,
-                     "why": f"{type(exc).__name__}: {exc}"})
-        continue
-    faults = judge(sheet)
-    totals.update(faults)
-    rows.append({"step": name, "built": True, "faults": dict(faults)})
+def main() -> int:
+    """Lay every part out and count what cannot be read."""
+    rows, totals = [], collections.Counter()
+    WHERE = pathlib.Path(sys.argv[3] if len(sys.argv) > 3 else "app/runs")
+    # The same rule `sheets` uses for what there is to draw, imported rather
+    # than written again: two tools that disagree about which files are parts
+    # produce two reports nobody can line up.
+    for name, step, prompt in (sheets.latest(WHERE)
+                               if WHERE.is_dir() and any(WHERE.glob("*/meta.json"))
+                               else sheets.solids(WHERE)):
+        try:
+            threads = getattr(drawing, "_threads", None)
+            sheet = drawing.plan_sheet(drawing._project(step),
+                                       threads(prompt) if threads else None)
+        except Exception as exc:
+            rows.append({"step": str(step), "built": False,
+                         "why": f"{type(exc).__name__}: {exc}"})
+            continue
+        faults = judge(sheet)
+        totals.update(faults)
+        rows.append({"step": name, "built": True, "faults": dict(faults)})
 
-built = [r for r in rows if r.get("built")]
-clean = [r for r in built if not r["faults"]]
-print(f"{len(built)} sheets laid out, {len(clean)} with no placement fault "
-      f"({100 * len(clean) // max(len(built), 1)}%)")
-print(f"{sum(totals.values())} faults in all\n")
-for kind, n in totals.most_common():
-    on = sum(1 for r in built if r["faults"].get(kind))
-    print(f"  {n:>5d}  {kind:24s} on {on:>3d} sheets")
-print()
-worst = sorted(built, key=lambda r: -sum(r["faults"].values()))[:6]
-for r in worst:
-    if sum(r["faults"].values()):
-        print(f"  {sum(r['faults'].values()):>3d}: {r['step'][:24]:24s} "
-              f"{r['faults']}")
-json.dump(rows, open(sys.argv[2] if len(sys.argv) > 2
-                     else "placement.json", "w"), indent=1)
+    built = [r for r in rows if r.get("built")]
+    clean = [r for r in built if not r["faults"]]
+    print(f"{len(built)} sheets laid out, {len(clean)} with no placement fault "
+          f"({100 * len(clean) // max(len(built), 1)}%)")
+    print(f"{sum(totals.values())} faults in all\n")
+    for kind, n in totals.most_common():
+        on = sum(1 for r in built if r["faults"].get(kind))
+        print(f"  {n:>5d}  {kind:24s} on {on:>3d} sheets")
+    print()
+    worst = sorted(built, key=lambda r: -sum(r["faults"].values()))[:6]
+    for r in worst:
+        if sum(r["faults"].values()):
+            print(f"  {sum(r['faults'].values()):>3d}: {r['step'][:24]:24s} "
+                  f"{r['faults']}")
+    json.dump(rows, open(sys.argv[2] if len(sys.argv) > 2
+                         else "placement.json", "w"), indent=1)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

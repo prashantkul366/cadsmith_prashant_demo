@@ -885,6 +885,10 @@ PATTERN_TOL = 0.05
 #: note rather than growing a third and a fourth leader into the margin.
 MAX_ROUND_CALLOUTS = 2
 
+#: How much further out a radius leader goes than a hole's, where a view
+#: has both. Enough that the two texts are read as two.
+ROUND_CLEAR = 13.0
+
 #: How many cut-out groups get dimensioned on one view. Capped for the
 #: same reason the leaders are: a sheet covered in the same number is not
 #: more informative than a sheet carrying it once.
@@ -1151,6 +1155,80 @@ def _path_profile(view: dict) -> dict:
     spans = sorted({round(abs(u), 3) for u, _ in points if abs(u) > PATH_TOL})
     widths = spans[:-1] if len(spans) > 1 else spans
     return {"level": level, "widths": widths, "datum": datum}
+
+
+#: Roughly how wide one character of ISO 3098 text is at TEXT height.
+#: Only used to keep two pieces of text off each other, where being a
+#: little generous costs a millimetre of paper and being mean costs a
+#: number somebody cannot read.
+CHAR_W = 2.1
+
+#: How far a leader is pushed out to find clear paper, and how many tries.
+NUDGE, NUDGE_TRIES = 4.0, 6
+
+
+def _text_box(at: tuple, text: str, anchor_start: bool = True,
+              vertical: bool = False) -> tuple:
+    """Where a piece of text lands, as a box on the sheet."""
+    width = max(len(text), 1) * CHAR_W
+    x, y = at
+    if vertical:            # rotated to read from the right of the sheet
+        return (x - TEXT, y - width / 2.0, x + TEXT / 2.0, y + width / 2.0)
+    left = x if anchor_start else x - width
+    return (left, y - TEXT, left + width, y)
+
+
+def _hits(a: tuple, b: tuple, gap: float = 0.4) -> bool:
+    return (a[0] < b[2] + gap and b[0] < a[2] + gap
+            and a[1] < b[3] + gap and b[1] < a[3] + gap)
+
+
+def _declutter(plan: dict) -> None:
+    """Move a leader's text off anything already written there.
+
+    Which direction a leader leaves in is decided by what it points at -
+    a radius lies along the radius that made it - so the only freedom
+    left is how far out it goes. Fixed angles and fixed reaches got this
+    most of the way: 54 sheets of 80 laid out cleanly to begin with, 78
+    after. The last few are the ones where no fixed rule was ever going
+    to be right, because whether two things collide depends on the part.
+
+    So it is checked rather than predicted. Each leader is pushed out
+    along its own direction until its value is on clear paper, which is
+    what a draughtsman does with the one that landed badly.
+    """
+    taken = []
+    for dim in plan.get("dimensions") or []:
+        (x1, y1), (x2, y2) = dim["p1"], dim["p2"]
+        off = dim["offset"]
+        if dim["vertical"]:
+            at = (x1 + off, (y1 + y2) / 2.0 - 2.0)
+        else:
+            at = ((x1 + x2) / 2.0, (y1 + y2) / 2.0 + off - 1.4)
+        label = dim.get("label") or _num(dim["measure"])
+        taken.append(_text_box(at, label, True, dim["vertical"]))
+        if not dim["vertical"]:
+            # Centred, not anchored at the middle point.
+            taken[-1] = (at[0] - max(len(label), 1) * CHAR_W / 2.0,
+                         at[1] - TEXT,
+                         at[0] + max(len(label), 1) * CHAR_W / 2.0, at[1])
+
+    for call in plan.get("callouts") or []:
+        label = call.get("label") or ""
+        if not label:
+            continue
+        angle = call.get("angle", 0.0)
+        step = (math.cos(angle) * NUDGE, -math.sin(angle) * NUDGE)
+        for _ in range(NUDGE_TRIES):
+            ex, ey = call["elbow"]
+            shoulder = call["shoulder"]
+            box = _text_box((ex + shoulder, ey - 1.6), label, shoulder > 0)
+            if not any(_hits(box, other) for other in taken):
+                break
+            call["elbow"] = (ex + step[0], ey + step[1])
+        taken.append(_text_box((call["elbow"][0] + call["shoulder"],
+                                call["elbow"][1] - 1.6), label,
+                               call["shoulder"] > 0))
 
 
 def _order_ladders(plan: dict, floor: Optional[float] = None) -> None:
@@ -1540,11 +1618,14 @@ def plan_view(name: str, view: dict, scale: float, dimension: str,
     # its left, so a leader that leaves from a bottom or left corner lands on
     # them - which is how a sheet ends up with a radius written across an
     # extension line.
-    corners = ((1, 1), (-1, 1), (1, -1), (-1, -1))
-    if plan["callouts"]:
-        # The holes leave up-right first and down-right second, so a round
-        # that also starts up-right writes its radius across a diameter.
-        corners = ((-1, 1), (-1, -1), (1, 1), (1, -1))
+    # Right-hand corners only, for the same reason the hole leaders go
+    # right: the margin below the view carries the horizontal ladder and
+    # the margin left of it carries the vertical one. Sending a radius
+    # into either writes it across a dimension - measured on four sheets
+    # in the library, where "25" was written over "3x R2.75" because the
+    # rounds were being pushed left to get out of the holes' way. Two
+    # corners is enough because MAX_ROUND_CALLOUTS is two.
+    corners = ((1, 1), (1, -1))
     for index, group in enumerate(rounds[:MAX_ROUND_CALLOUTS]):
         pull = corners[index % len(corners)]
         arc = max(group["members"],
@@ -1553,10 +1634,20 @@ def plan_view(name: str, view: dict, scale: float, dimension: str,
         mx, my = to_sheet(arc["mu"], arc["mv"])
         reach = math.hypot(mx - ox, my - oy) or 1.0
         cos_a, sin_a = (mx - ox) / reach, -(my - oy) / reach
-        # An outer round is already on the outline, so its leader only has to
-        # clear the view; an inner one has to cross the wall first.
+        # An outer round is already on the outline, so its leader only has
+        # to clear the view; an inner one has to cross the wall first.
+        #
+        # Then it is taken further out than a hole's leader goes, because
+        # both now leave on the same side. They have to: the margin below
+        # the view carries the horizontal ladder and the margin to its
+        # left carries the vertical one, so a leader sent into either
+        # writes its radius across a dimension. Sharing a side and
+        # differing in reach is the arrangement where neither lands on
+        # the other nor on a number.
         run = max(9.0, _escape(mx, my, cos_a, -sin_a,
                                left, top, right, bottom) + 5.0)
+        if plan["callouts"]:
+            run += ROUND_CLEAR
         plan["callouts"].append({
             "kind": "radius",
             "centre": (ox, oy), "radius": arc["r"] * scale,
@@ -1586,6 +1677,7 @@ def plan_view(name: str, view: dict, scale: float, dimension: str,
         unique.append(dim)
     plan["dimensions"] = unique
     _order_ladders(plan, floor)
+    _declutter(plan)
 
     # Under everything the view actually carries, which is not the same as
     # under where the rows were going to be: the stack is squeezed to fit
