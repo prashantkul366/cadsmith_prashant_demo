@@ -4,18 +4,47 @@ Branched from `claude/freecad-mcp` after the YMRI meeting. The MCP road is
 the one this work continues: a parametric CAD document that stays open and
 gets worked on, rather than a script that gets regenerated.
 
-What was asked for, in the order it was said:
+## What the meeting settled
 
-1. **NX integration, and a check that the integration is there.**
-2. **A 3D-to-2D converter.**
-3. **Local models**, because the parts are confidential.
-4. **An app over MCP** with an editable feature tree, a view of the part,
-   and modifications made by asking for them.
-5. **NX, Teamcenter and the rest of that chain** figured out.
+The order of work is not what this branch assumed when it started, so it
+is written down here plainly.
 
-Choosing which dimensions a drawing should carry is explicitly *not* part
-of this branch. It is a problem of its own and it is being worked on
-separately; what belongs here is leaving the seam for it.
+**First deliverable: a locally deployable 3D-to-2D drawing generator.**
+YMRI spend a lot of their time making drawings, and that is the part of
+the tool they are most interested in. It is to run at their site, on their
+data, and it is the first thing to be demonstrated.
+
+**Then NX.** The demo is to be given in the NX environment; YMRI engineers
+want an integrated tool, not a standalone one, and that means NX and
+eventually Teamcenter. YMSLI is to confirm what integration is possible.
+
+**Then the trial.** Once NX integration and the privacy question are
+settled, the demo is installed at YMRI and **4-5 engineers use it for a
+month**. A review follows, and their feedback defines the research
+activities for the IITD project.
+
+**Editability is the research thread, not the first demo.** YMRI need the
+generated models to be editable, and said plainly that STEP and STL do not
+carry enough to edit. That is what the feature-tree work on this branch is
+for, and it is also what Prof. Sarangi's work on recovering a tree from
+STEP and STL is for. It is a three-year project with annual milestones -
+not the thing being shown first.
+
+**They will sign an NDA so their drawings can be used for training.** That
+changes what is possible: the question "which dimensions belong on this
+sheet" stops being a matter of our judgement about ISO and becomes a
+question their own drawings can answer. Worth knowing what to ask for -
+drawings paired with the models they were made from, enough of them, and a
+spread of part families rather than one.
+
+**The application they named is motorcycle exterior panels.** Worth saying
+early rather than after a demo: those are large freeform surfaces, and the
+tool vocabulary here is prismatic - pads, pockets, revolves, lofts. The
+drawing side cares much less, because it projects whatever solid it is
+given, but a panel's drawing is mostly profiles, sections and a datum
+scheme rather than holes and depths.
+
+---
 
 ---
 

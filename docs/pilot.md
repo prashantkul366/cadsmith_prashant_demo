@@ -1,159 +1,109 @@
-# The two-week pilot
+# The demo YMRI engineers will run
 
-What YMRI engineers get, what we are trying to learn from them using it,
-and what is deliberately not in it yet.
+Four or five engineers, a month, at their site, on their data. This is what
+has to be true before that starts, in the order the meeting put it.
 
-The thing being piloted is an assistant that works in the CAD document the
-engineer already has open. Two ways in, one document: the **feature tree**,
-edited the way any CAD package is edited, and **asking in words**. Both go
-through the same code, so a number dragged in the panel and a number set by
-asking take the same path, get the same recompute, and are backed out by
-the same undo.
-
-This runs on FreeCAD. The NX plugin for **NX 2412.5000** is the step after,
-and the pilot is how we find out what it should do before anyone writes it.
+The first thing to be shown is **3D to 2D**: a drawing made from a solid.
+That is the part of the tool YMRI are most interested in, because drawing
+creation is where their time goes. Everything else on this branch - the
+feature tree, changing a part by asking - is the research thread behind the
+IITD project, and is not what gets demonstrated first.
 
 ---
 
-## How the pilot is run, given that they use NX
+## The one decision that unblocks the timeline
 
-The engineers in the pilot have NX, not FreeCAD. That is not a detail to
-work around later: it decides the shape of the two weeks, because the
-thing they would install does not exist yet and the thing that exists runs
-on CAD they do not have.
+**The drawing generator does not need NX integration to be useful at
+YMRI.** It takes a solid and gives back a drawing. NX writes STEP; the
+generator reads STEP; it writes DXF, which NX reads back. Nothing in that
+loop needs an NX licence, an NX plugin, or a Siemens API.
 
-Three shapes were on the table. What each costs and what each buys:
+That matters because the sequence as it stands is "confirm NX integration,
+then build the demo, then install it", and NX integration is the step with
+the most unknowns in it - the NX release, the Teamcenter release, whether
+automation is licensed on those machines, and whether a listener can be
+hosted inside a running NX at all. If the first demo waits on all of that,
+the month-long trial waits on it too.
 
-**Sessions on one machine, driven with them.** FreeCAD and the app run on
-one machine; engineers bring their own parts and their own changes, and we
-work through them together, a few sessions each over the two weeks.
-Nothing to install, nothing to support, and the recording of what they
-*asked for* - which is the whole input to the NX plugin - is complete.
-What it does not get is unsupervised use, so it will not find the things
-people only hit when nobody is watching.
+A file-in, file-out drawing generator can be installed and used while that
+is still being worked out. It is also honest about what it is: the
+integrated version is better, and this is the version that can be in an
+engineer's hands sooner.
 
-**A shared server they open in a browser.** One machine runs FreeCAD and
-the app; five to ten engineers use it from their desks. Documents are
-already per-user - everything in this app is keyed by document name - so
-they do not collide. What they do collide over is time: runs go through a
-single worker (`max_workers=1` in `jobs.py`), and that is not an oversight,
-because FreeCAD serves every call from one GUI thread. Tree edits are
-fast and fine. A build or a prompted change is tens of seconds, and behind
-four other people it is minutes. Making that comfortable means a pool of
-FreeCAD processes, which is real work and is not the thing we are trying
-to learn.
+What it costs: the drawing is made from the solid, so it carries no NX
+part attributes, no Teamcenter metadata and no title block of theirs
+unless we are given one. Those are worth asking for early, because a
+drawing that does not look like their drawings will be judged on that
+before anybody reads a dimension.
 
-**Installing FreeCAD on their machines.** Gets unsupervised use, costs
-every engineer an install of CAD they will never use again, and asks IT
-for an exception for a two-week trial.
+---
 
-The first is what the two weeks are for. The second is worth doing only if
-unsupervised use turns out to matter more than throughput; the third only
-if IT makes it easy. None of them is the NX plugin, and none of them
-should be: what engineers ask for over two weeks is what the plugin should
-do, and building it first would be guessing.
+## What has to be good before four engineers see it
 
-## Before you start
+The numbers on the sheets are right. Measured across the 208 solids built
+from the 61-prompt library: every number printed on every sheet is
+traceable to a measurement of the solid it was drawn from, on both
+renderers. That was not true two days ago - the audit found three real
+faults and they are fixed.
 
-Run the preflight. It checks each layer separately so a failure names what
-is broken rather than appearing later as a run that hangs:
+What is not yet good enough is **which** dimensions appear and **where**
+they sit. On a simple part the sheet is clean. On a dense one - a plate
+with a hundred holes, a heat sink with two hundred pins - dimensions
+overlap each other and cross the view, and some features get no callout at
+all because the leader count is capped. A drawing nobody can read is not a
+drawing, and this is the thing YMRI will judge the tool on.
+
+That work is in progress and is the priority. It has three parts:
+
+1. **Selection** - which dimensions a reader needs to make the part, and
+   which are noise. Their own drawings, once the NDA is in place, answer
+   this better than our reading of ISO does.
+2. **Placement** - ISO 129-1 order, nothing crossing, each dimension in
+   the view that shows the feature's true shape.
+3. **Sufficiency** - whether the sheet carries enough to make the part at
+   all, which is a different question from whether every number on it is
+   true.
+
+---
+
+## Confidentiality
+
+Nothing has to leave their network. The CAD kernel and the catalogue are
+local already; the model endpoint can be Ollama, LM Studio, vLLM or
+llama.cpp through `CADSMITH_LLM_BASE_URL`. The drawing generator needs no
+model at all - it is geometry in and geometry out - which makes the first
+deliverable the easiest one to clear with their IT.
+
+---
+
+## Before they start
 
 ```
 python -m app.tools.doctor
 ```
 
-Everything it reports comes with the fix beside it. The FreeCAD section is
-the one that matters on this road — connection, addon, a script run and
-read back, the documents open, the feature tree, and an export. If the
-first line fails, nothing above it can work.
-
-**What has to be running**
-
-1. **FreeCAD**, with the MCP addon workbench started (*Start RPC Server*).
-   The app talks to it over XML-RPC on port 9875 by default;
-   `CADSMITH_FREECAD_HOST` and `CADSMITH_FREECAD_PORT` move it.
-2. **A model endpoint.** For confidential work this is a local one and
-   nothing leaves your network: Ollama and LM Studio have their own
-   entries, and `CADSMITH_LLM_BASE_URL` points at vLLM, llama.cpp or
-   anything else OpenAI-compatible. The app never needs an outside
-   service; the catalogue and the CAD kernel are local already.
-
-   The pilot is sized for a **Qwen around 8B**, and has to stay usable at
-   4B. That is why a change to an existing part is offered thirteen tools
-   rather than twenty-six: same tools, same names, 60% less schema to read
-   before choosing among them. It is also why the Python escape hatch is
-   not in that list - a model that cannot be trusted with twenty-six tools
-   cannot be trusted with the one that bypasses all of them.
-3. **The app**: `./app/run_app.sh`, then open the address it prints.
+Checks each layer separately so a failure names what is broken. The
+FreeCAD section matters only for the parts of the tool that drive FreeCAD;
+the drawing generator does not.
 
 ---
 
-## What to try
+## What we want back after the month
 
-Work in your own parts. The point of two weeks is what *your* parts do to
-it, not what our test parts do.
-
-**Start from a document you already have open.** The picker under the
-prompt lists what FreeCAD has open; choose one and the assistant works in
-it rather than making its own.
-
-**The feature tree.** Open it from the toolbar (the tree icon). It shows
-the document's own history — the pad, the sketch it came from, the pocket
-cut into it — with every number that can still be changed. Change one and
-the part on screen rebuilds. A value the part cannot be rebuilt with is
-refused, says why, and puts the old one back.
-
-**Asking.** "Open the mounting holes to 11", "lose the corner fillets",
-"add a 6 mm rib down the middle". The assistant reads the same tree you are
-looking at, so it sees what you changed by hand.
-
-**Undo** is in the tree's header, and it is FreeCAD's own undo stack: it
-backs out a change made by asking, one made in the panel, and one you made
-in FreeCAD yourself.
-
-**Drawings** (the sheet icon) project the part and dimension it. Every
-number on the sheet is a measurement of the solid — that is checked across
-the whole test library — but *which* dimensions appear, and where they sit
-on a busy part, is the piece of work we are doing next. Tell us what is
-missing rather than assuming we think it is finished.
+- **Which drawings they would have sent out as-is**, and which they
+  redrew.
+- **What they had to add by hand** - that is the selection problem, stated
+  by the people who know.
+- **What was wrong**, as against merely missing.
+- **The parts it was no use on at all.** Those tell us the most.
 
 ---
 
-## What we want back
+## What is not in the first demo, on purpose
 
-The useful thing is not "it worked" or "it didn't". It is:
-
-- **What you asked for and what you got**, where those differed.
-- **What you had to do by hand** afterwards, and whether the tree let you.
-- **Anything it refused** that you think it should have done.
-- **Anything it did** that it should have refused.
-- **The parts it was no use on at all** — those tell us the most.
-
-Every run is recorded under `app/runs/` with the prompt, the steps and the
-resulting document. Nothing is sent anywhere. If you want to send a run
-back to us, send that run's folder; if the geometry is confidential, the
-`meta.json` and `events.jsonl` in it carry what happened without carrying
-the part.
-
----
-
-## What is not in this yet, on purpose
-
-- **NX.** This pilot is FreeCAD. What it teaches us about what engineers
-  actually ask for is what the NX 2412.5000 plugin should do; building the
-  plugin first would be guessing.
-- **Teamcenter.** No check-in, no check-out, no item revisions. Work on
-  files.
-- **Which dimensions a drawing should carry.** Separate piece of work, in
-  progress.
+- **NX and Teamcenter integration.** Being worked out in parallel; see
+  `docs/ymri.md`.
 - **Assemblies.** One part at a time.
-- **Sketch constraints.** The tree reaches a feature's numbers, not the
-  constraints inside its sketch. Say if that is what you keep needing.
-
-## Known rough edges
-
-- Datum planes and origins show in the tree the way they do before
-  FreeCAD's own tree hides them.
-- A property driven by an expression shows its value, not the expression.
-- Undo only reaches changes made since the document was opened, because
-  that is as far as FreeCAD's own stack goes.
+- **Their title block and drawing standard**, until we are given them.
+- **Anything learned from their drawings.** That needs the NDA and the
+  data first.
