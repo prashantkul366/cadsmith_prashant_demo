@@ -1592,8 +1592,31 @@ print(obj.Name)
                               features_now=changed["after"])
 
 
-def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
-    """The tools, in the order a model should reach for them."""
+#: The tools a model needs to change a part that already exists, as
+#: against building one from nothing. Every one of them is in the full
+#: set; this is a shorter list, not a different vocabulary.
+#:
+#: The reason it exists is the size of model this has to run on. A 4B or
+#: 8B model given twenty-six tools and their descriptions spends most of
+#: its context reading about tools it will not use, and chooses worse
+#: among the ones it will. Editing is the pilot's main loop - the part is
+#: already there and somebody wants it different - so it gets a list it
+#: can hold in its head.
+EDITING = (
+    "read_tree", "set_property", "find_features", "resize_hole", "drill",
+    "add_fillet", "add_chamfer", "suppress_feature", "remove_feature",
+    "undo_change", "set_size", "move", "list_objects",
+)
+
+
+def toolbox_for(session: Session, allow_python: bool = True,
+                scope: str = "build") -> Toolbox:
+    """The tools, in the order a model should reach for them.
+
+    `scope` is "build" for making a part from nothing and "edit" for
+    changing one that is already there. The second is a subset of the
+    first: same tools, same names, fewer of them.
+    """
     number = {"type": "number"}
     text = {"type": "string"}
     point = {"type": "array", "items": {"type": "number"},
@@ -1925,4 +1948,10 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
             parameters={"type": "object", "properties": {"code": text},
                         "required": ["code"]},
             run=session.run_python))
+    if scope == "edit":
+        # Ordered as EDITING lists them rather than as the full set does:
+        # the first tool a model reads is the one it reaches for, and for
+        # a change to an existing part that is reading the tree.
+        by_name = {tool.name: tool for tool in tools}
+        tools = [by_name[name] for name in EDITING if name in by_name]
     return Toolbox(tools)

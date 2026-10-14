@@ -246,6 +246,26 @@ def main() -> int:
     session = freecad_tools.Session(bridge)
     box = freecad_tools.toolbox_for(session)
 
+    # The editing list is what a small model is given when it is changing a
+    # part rather than building one. Two things have to hold: every name in
+    # it is a real tool, and it is enough on its own - a model that can read
+    # the tree and cannot change it is worse than no model.
+    editing = freecad_tools.toolbox_for(session, scope="edit")
+    check("every tool named for editing exists",
+          all(name in box.tools for name in freecad_tools.EDITING),
+          str([n for n in freecad_tools.EDITING if n not in box.tools]))
+    check("and the list is shorter than the full one",
+          0 < len(editing.tools) < len(box.tools),
+          f"{len(editing.tools)} of {len(box.tools)}")
+    check("it can read the part and change it",
+          {"read_tree", "set_property", "undo_change"} <= set(editing.tools),
+          ", ".join(sorted(editing.tools)))
+    # run_python is the way round every refusal in the list. A model that
+    # cannot be trusted with twenty-six tools cannot be trusted with the
+    # one that bypasses them.
+    check("and it is not handed the Python escape hatch",
+          "run_python" not in editing.tools, ", ".join(editing.tools))
+
     print("The tools are offered in the order a model should reach for them")
     names = list(box.tools)
     check("the catalogue comes before the primitives",

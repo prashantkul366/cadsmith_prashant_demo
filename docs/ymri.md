@@ -86,10 +86,26 @@ dataset does not necessarily check out the item revision — which is exactly
 the kind of detail that decides an integration and must come from their
 environment.
 
-**What to ask YMRI for before building anything:** which NX release, which
-Teamcenter release, whether `run_journal` is licensed for automation on the
-machines this would run on, and whether the parts live in Teamcenter or on
-disk. Those four answers decide the whole shape.
+**The target is NX 2412.5000.** Still to establish from their side: the
+Teamcenter release, whether `run_journal` is licensed for automation on
+the machines this would run on, and whether the parts live in Teamcenter
+or on disk.
+
+**One thing that shapes the plugin and should be settled first.**
+`run_journal` is a batch runner: a process per call. This app assumes a
+session - a document that stays open between calls - and that assumption
+is what makes "change this, now change that" work at all. So the NX plugin
+cannot be `run_journal` driven; it needs a listener hosted inside a running
+NX session, the way the FreeCAD addon is. `run_journal` is the right tool
+for the integration *check* and the wrong one for the interactive loop.
+That reading comes from how the batch runner is described rather than from
+Siemens' own documentation, so it is the first thing to confirm.
+
+**Who has what.** The engineers in the pilot run NX; FreeCAD is on our
+side only, for building and showing this. That means the two weeks cannot
+be "install this and use it" unless FreeCAD goes onto their machines -
+see `docs/pilot.md` for the three shapes that leaves and what each one
+buys.
 
 **The integration check.** "Does NX integration work here" should be a
 thing that runs and prints, not a conversation. It belongs next to the
@@ -130,6 +146,19 @@ any OpenAI-compatible endpoint: Ollama and LM Studio have entries of their
 own, and `custom` takes `CADSMITH_LLM_BASE_URL` for vLLM, llama.cpp or
 anything else served locally. Nothing in the pipeline is specific to a
 hosted model.
+
+The pilot is sized for a **Qwen around 8B**, and must stay usable at 4B.
+That size of model is the reason the tool surface is now scoped: changing
+an existing part offers thirteen tools instead of twenty-six - the same
+tools, 60% less schema - because a 4B model given twenty-six spends its
+context reading about tools it will not use and chooses worse among the
+ones it will. The `run_python` escape hatch is deliberately not in that
+list.
+
+What has not been measured, and should be before the pilot: whether a
+model that size calls these tools correctly at all. There is no local
+model on this machine to try it against. It is the single biggest risk to
+the asking half of the demo, and the tree half does not depend on it.
 
 For confidentiality the thing to establish is not whether it runs — it does
 — but what leaves the machine. Worth stating plainly to YMRI: with a local

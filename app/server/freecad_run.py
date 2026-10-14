@@ -629,7 +629,11 @@ def amend(ctx: RunContext, base_dir: Path, instruction: str, client: Any,
     name = builder.reopen(bridge, document_file)
     session = freecad_tools.Session(bridge, name)
     session.declared = declared_from(record)
-    box = freecad_tools.toolbox_for(session)
+    # The part is already there and somebody wants it different, which is a
+    # smaller job than building one: the shorter list is the same tools,
+    # and it is what makes this reachable by the size of model that can run
+    # on an engineer's own machine.
+    box = freecad_tools.toolbox_for(session, scope="edit")
 
     usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
 

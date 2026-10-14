@@ -15,6 +15,44 @@ and the pilot is how we find out what it should do before anyone writes it.
 
 ---
 
+## How the pilot is run, given that they use NX
+
+The engineers in the pilot have NX, not FreeCAD. That is not a detail to
+work around later: it decides the shape of the two weeks, because the
+thing they would install does not exist yet and the thing that exists runs
+on CAD they do not have.
+
+Three shapes were on the table. What each costs and what each buys:
+
+**Sessions on one machine, driven with them.** FreeCAD and the app run on
+one machine; engineers bring their own parts and their own changes, and we
+work through them together, a few sessions each over the two weeks.
+Nothing to install, nothing to support, and the recording of what they
+*asked for* - which is the whole input to the NX plugin - is complete.
+What it does not get is unsupervised use, so it will not find the things
+people only hit when nobody is watching.
+
+**A shared server they open in a browser.** One machine runs FreeCAD and
+the app; five to ten engineers use it from their desks. Documents are
+already per-user - everything in this app is keyed by document name - so
+they do not collide. What they do collide over is time: runs go through a
+single worker (`max_workers=1` in `jobs.py`), and that is not an oversight,
+because FreeCAD serves every call from one GUI thread. Tree edits are
+fast and fine. A build or a prompted change is tens of seconds, and behind
+four other people it is minutes. Making that comfortable means a pool of
+FreeCAD processes, which is real work and is not the thing we are trying
+to learn.
+
+**Installing FreeCAD on their machines.** Gets unsupervised use, costs
+every engineer an install of CAD they will never use again, and asks IT
+for an exception for a two-week trial.
+
+The first is what the two weeks are for. The second is worth doing only if
+unsupervised use turns out to matter more than throughput; the third only
+if IT makes it easy. None of them is the NX plugin, and none of them
+should be: what engineers ask for over two weeks is what the plugin should
+do, and building it first would be guessing.
+
 ## Before you start
 
 Run the preflight. It checks each layer separately so a failure names what
@@ -39,6 +77,13 @@ first line fails, nothing above it can work.
    entries, and `CADSMITH_LLM_BASE_URL` points at vLLM, llama.cpp or
    anything else OpenAI-compatible. The app never needs an outside
    service; the catalogue and the CAD kernel are local already.
+
+   The pilot is sized for a **Qwen around 8B**, and has to stay usable at
+   4B. That is why a change to an existing part is offered thirteen tools
+   rather than twenty-six: same tools, same names, 60% less schema to read
+   before choosing among them. It is also why the Python escape hatch is
+   not in that list - a model that cannot be trusted with twenty-six tools
+   cannot be trusted with the one that bypasses all of them.
 3. **The app**: `./app/run_app.sh`, then open the address it prints.
 
 ---
