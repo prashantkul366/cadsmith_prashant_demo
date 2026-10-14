@@ -76,6 +76,35 @@ deliverable the easiest one to clear with their IT.
 
 ---
 
+## Running the drawing generator
+
+Put the solids in a folder and point it at one:
+
+```
+python -m app.tools.sheets  <folder of STEP files>  <folder for drawings>
+```
+
+Each solid comes back as two files and one line:
+
+* **`<name>.dxf`** - the drawing, with real DIMENSION entities. This is
+  the deliverable: NX opens it, measures it and edits it.
+* **`<name>.svg`** - the same drawing as a picture, to look at quickly.
+* a line saying how many numbers the sheet carries and whether every one
+  of them is a measurement of the solid, with any that are not.
+
+`index.html` in that folder lists them all, worst first.
+
+Nothing in that loop needs FreeCAD, a model, a licence or a network. It is
+geometry in and geometry out, which is what makes it the easiest part of
+this to clear with their IT and the first thing that can be in an
+engineer's hands.
+
+One thing to know about scale: a sheet drawn at 1:5 holds geometry at a
+fifth of the part, and the true size is carried on each dimension. Any CAD
+reading the DXF properly shows the part's own sizes - 300 where the plate
+is 300. It is called out here because a reader that ignores that shows 60,
+and the difference is silent.
+
 ## Before they start
 
 ```
