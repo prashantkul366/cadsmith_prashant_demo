@@ -647,6 +647,45 @@ def main() -> int:
               str(sorted(round(e.get_measurement(), 4)
                          for e in reopened.modelspace()
                          if e.dxftype() == "DIMENSION")))
+        print("\nThe order dimensions are stacked in")
+        # ISO 129-1 4.3. Not decoration: a long dimension nearer the view
+        # than a short one makes the short one's extension lines cross the
+        # long one's dimension line, which is the crossing the rule exists
+        # to prevent. Measured across the library, a third of sheets had
+        # at least one stack in the order the part happened to be read in.
+        stacked = {"box": (10.0, 10.0, 110.0, 60.0), "dimensions": [
+            {"p1": (10.0, 60.0), "p2": (110.0, 60.0), "offset": 10.0,
+             "vertical": False, "measure": 100.0},
+            {"p1": (10.0, 60.0), "p2": (30.0, 60.0), "offset": 18.0,
+             "vertical": False, "measure": 20.0},
+            {"p1": (10.0, 60.0), "p2": (60.0, 60.0), "offset": 26.0,
+             "vertical": False, "measure": 50.0}]}
+        rows_before = sorted(d["p1"][1] + d["offset"] for d in
+                             stacked["dimensions"])
+        drawing._order_ladders(stacked)                 # noqa: SLF001
+        by_row = sorted(stacked["dimensions"],
+                        key=lambda d: d["p1"][1] + d["offset"])
+        check("the shortest dimension ends up nearest the view",
+              [d["measure"] for d in by_row] == [20.0, 50.0, 100.0],
+              str([d["measure"] for d in by_row]))
+        # The sheet must not grow a row or change height to get there.
+        check("and it uses the rows it already had",
+              sorted(d["p1"][1] + d["offset"]
+                     for d in stacked["dimensions"]) == rows_before,
+              str(sorted(d["p1"][1] + d["offset"]
+                         for d in stacked["dimensions"])))
+        # Left of the view, "nearest" counts the other way.
+        side = {"box": (10.0, 10.0, 110.0, 60.0), "dimensions": [
+            {"p1": (10.0, 60.0), "p2": (10.0, 10.0), "offset": -10.0,
+             "vertical": True, "measure": 50.0},
+            {"p1": (10.0, 60.0), "p2": (10.0, 45.0), "offset": -18.0,
+             "vertical": True, "measure": 15.0}]}
+        drawing._order_ladders(side)                    # noqa: SLF001
+        nearest = max(side["dimensions"],
+                      key=lambda d: d["p1"][0] + d["offset"])
+        check("which on the left of the view is the larger x",
+              nearest["measure"] == 15.0, str(nearest["measure"]))
+
         # The deliverable YMRI were promised first: a solid from somebody
         # else's CAD, with no request behind it and no geometry report
         # beside it, becoming a drawing their CAD can open. Nothing here
@@ -675,6 +714,13 @@ def main() -> int:
                         and not isinstance(e.get_measurement(), tuple)})
         check("and the DXF says the part's own sizes, not the drawn ones",
               300.0 in shown and 25.0 in shown and 11.0 in shown, str(shown))
+        # A title block reading 0 x 0 x 0 is read as a broken tool before
+        # anybody reads a dimension, and that is what a solid with no
+        # geometry report beside it used to produce.
+        check("and the title block carries the size it measured",
+              "300 x 300 x 25" in svg.replace("&#215;", "x"),
+              next((line for line in svg.split("<") if " x " in line
+                    and "0 x 0" in line), "") or "measured")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

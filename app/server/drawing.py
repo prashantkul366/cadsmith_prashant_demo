@@ -1153,6 +1153,85 @@ def _path_profile(view: dict) -> dict:
     return {"level": level, "widths": widths, "datum": datum}
 
 
+def _order_ladders(plan: dict) -> None:
+    """Shortest dimension nearest the view, as ISO 129-1 asks (4.3).
+
+    The dimensions of one view are drawn in a stack - one below it, one to
+    its left - and each is put on the next free row as it is decided on.
+    That is the order they were *thought of* in, which is the order the
+    part was read in and not an order anybody reads a drawing in. It left
+    a 300 mm overall between a 12 mm pitch and a 40 mm position on a third
+    of the sheets in the library.
+
+    The rule is not decoration. A long dimension nearer the view than a
+    short one makes the short one's extension lines cross the long one's
+    dimension line, which is the crossing ISO is trying to prevent by
+    asking for the order in the first place.
+
+    The rows themselves do not move: the same positions are used, handed
+    to the dimensions in order of length. So a sheet keeps its spacing and
+    its height, and only which number sits on which line changes.
+    """
+    left, top, right, bottom = plan["box"]
+    for vertical in (False, True):
+        stack = [d for d in plan["dimensions"] if d["vertical"] is vertical]
+        if len(stack) < 2:
+            continue
+
+        def line_at(dim: dict) -> float:
+            """Where this dimension's line is drawn, along the axis it
+            is stacked on."""
+            return (dim["p1"][0] if vertical else dim["p1"][1]) + dim["offset"]
+
+        def away(at: float) -> float:
+            """How far that is from the view it belongs to."""
+            return abs(at - (left if vertical else bottom))
+
+        rows = _fit_rows(sorted((line_at(dim) for dim in stack), key=away),
+                         vertical)
+        for dim, at in zip(sorted(stack, key=lambda d: abs(d["measure"])),
+                           rows):
+            base = dim["p1"][0] if vertical else dim["p1"][1]
+            dim["offset"] = at - base
+
+
+#: The least room a value needs to be read on its own line. Two lines of
+#: ISO 3098 text with nothing between them touch; this leaves a gap.
+DIM_STEP_MIN = 5.0
+
+
+def _fit_rows(rows: list[float], vertical: bool) -> list[float]:
+    """Keep a tall stack of dimensions inside the drawing frame.
+
+    A part with a lot of features wants more rows than there is paper
+    below it, and the rows that did not fit were drawn off the frame -
+    which is not a dimension that is hard to read, it is a dimension that
+    is not on the sheet. Measured across the library: eight sheets.
+
+    The stack is squeezed instead, down to a floor where two values still
+    read as two values. Dropping a row would be the alternative, and the
+    outermost row is the overall length, which is the last thing a drawing
+    should lose.
+    """
+    if len(rows) < 2:
+        return rows
+    first, last = rows[0], rows[-1]
+    limit = ((FRAME_L + TEXT + 3.0) if vertical and last < first
+             else (FRAME_R - TEXT - 3.0) if vertical
+             else (FRAME_B - TEXT - 3.0) if last > first
+             else FRAME_T + TEXT + 3.0)
+    room = limit - first
+    wanted = last - first
+    if not wanted or abs(wanted) <= abs(room):
+        return rows
+    # Squeeze proportionally, but never below the floor: a sheet that is
+    # inside the frame and unreadable has not solved anything.
+    span = len(rows) - 1
+    step = max(abs(room) / span, DIM_STEP_MIN)
+    direction = 1.0 if wanted > 0 else -1.0
+    return [first + direction * step * i for i in range(len(rows))]
+
+
 def plan_view(name: str, view: dict, scale: float, dimension: str,
               callouts: Optional[dict] = None) -> dict:
     """Where everything in one view goes, without drawing any of it.
@@ -1491,6 +1570,7 @@ def plan_view(name: str, view: dict, scale: float, dimension: str,
         seen.add(key)
         unique.append(dim)
     plan["dimensions"] = unique
+    _order_ladders(plan)
 
     below = bottom + (DIM_OFFSET + level * DIM_STEP + 10.0
                      if ("width" in dimension or level) else 5.0)
@@ -1756,6 +1836,38 @@ def _finish_symbol(x: float, y: float, ra: float) -> list[str]:
     ]
 
 
+def measured_from(views: dict, geometry: dict) -> dict:
+    """The part's overall size, where nothing else has supplied it.
+
+    A solid exported from somebody else's CAD arrives with no geometry
+    report beside it, and the title block was printing "0 x 0 x 0" - which
+    an engineer reads as a broken tool before they read a single
+    dimension. The views were projected from that solid and already know
+    how big it is, so the block says what was measured rather than
+    nothing.
+
+    Anything the caller did supply is left alone: a measurement taken off
+    the solid by the kernel is better than one taken off its shadow.
+    """
+    if (geometry.get("bounding_box") or {}).get("xlen"):
+        return geometry
+    # Each view spans two of the three axes, and between them the three
+    # orthographic views span all of them.
+    spans: dict = {}
+    for name, axes in (("FRONT", "xz"), ("TOP", "xy"), ("LEFT", "yz")):
+        view = views.get(name)
+        if not view:
+            continue
+        umin, vmin, umax, vmax = view["bbox"]
+        spans.setdefault(axes[0], umax - umin)
+        spans.setdefault(axes[1], vmax - vmin)
+    if not spans:
+        return geometry
+    return {**geometry,
+            "bounding_box": {f"{axis}len": round(spans.get(axis, 0.0), 3)
+                             for axis in "xyz"}}
+
+
 def _title_block(prompt: str, geometry: dict, job_id: str, version: int,
                  scale: float, lang: str = "en") -> list[str]:
     """An ISO 7200 title block: who, what, which sheet, and at what scale."""
@@ -1923,8 +2035,10 @@ def build_sheet(step_path: Path, geometry: dict, prompt: str, job_id: str,
                 version: int, projection: Optional[Path] = None,
                 spec: Any = None, lang: str = "en") -> str:
     """Compose the drawing as a standalone SVG document."""
-    sheet = plan_sheet(_project(step_path, cache=projection,
-                                section=worth_sectioning(geometry)),
+    views = _project(step_path, cache=projection,
+                     section=worth_sectioning(geometry))
+    geometry = measured_from(views, geometry)
+    sheet = plan_sheet(views,
                        hole_callouts(geometry.get("holes_as_meant"), spec))
     scale = sheet["scale"]
 
@@ -2071,8 +2185,10 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
             "app/requirements-app.txt. The sheet shown in the app is SVG and "
             "does not need it.") from exc
 
-    sheet = plan_sheet(_project(step_path, cache=projection,
-                                section=worth_sectioning(geometry)),
+    views = _project(step_path, cache=projection,
+                     section=worth_sectioning(geometry))
+    geometry = measured_from(views, geometry)
+    sheet = plan_sheet(views,
                        hole_callouts(geometry.get("holes_as_meant"), spec))
     scale = sheet["scale"]
 
