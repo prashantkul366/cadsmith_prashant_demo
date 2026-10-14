@@ -37,6 +37,7 @@ import re
 from typing import Any, Optional
 
 from app.server import freecad
+from app.server import tree as tree_mod
 from app.server.toolbox import Tool, ToolError, Toolbox
 
 #: FreeCAD types worth naming. Not a limit - ``run_python`` reaches the rest -
@@ -690,6 +691,78 @@ print(result.Name)
             {"name": o.get("Name"), "type": o.get("TypeId") or o.get("Type"),
              "label": o.get("Label")}
             for o in self.bridge.objects(self.document)]}
+
+    # -- the feature tree, the same one the panel shows ---------------------
+    #
+    # The point of these three is that the model and the engineer are
+    # working on one document through one set of code. A number the
+    # engineer drags in the tree panel and a number the model sets here
+    # take the same path, get the same recompute, and are rolled back by
+    # the same rule - so neither can leave the other looking at a part
+    # that is not there.
+
+    def read_tree(self, name: str = "") -> dict:
+        """The document's features and the numbers that made them."""
+        got = tree_mod.read(self.bridge, self.document)
+        if not got.get("ok"):
+            raise ToolError(got.get("why") or "FreeCAD would not describe "
+                                              "this document")
+        rows = tree_mod.outline(got)
+        if name:
+            rows = [r for r in rows
+                    if name.lower() in (r["name"].lower(), r["label"].lower())]
+            if not rows:
+                raise ToolError(
+                    f"there is no feature called {name!r}. The document has: "
+                    + ", ".join(r["label"] for r in tree_mod.outline(got))[:300])
+        # Only what can be changed, and only from the features: a model
+        # given forty read-only rows per object spends its context on
+        # placement matrices.
+        return {"document": got.get("document"), "features": [
+            {"name": r["name"], "label": r["label"], "type": r["type"],
+             "depth": r["depth"],
+             "suppressed": r.get("suppressed", False),
+             "properties": {p["name"]: p["value"] for p in r["properties"]
+                            if p.get("writable")}}
+            for r in rows]}
+
+    def set_property(self, object_name: str, property_name: str,
+                     value: Any) -> dict:
+        """Change one number on one feature of the tree.
+
+        The way out for anything the other tools do not reach. They are
+        better where they fit - `resize_hole` knows what a hole is - and
+        this is what makes a pad's Length or a pattern's Occurrences
+        reachable at all.
+        """
+        answer = tree_mod.edit(self.bridge, self.document, object_name,
+                               {property_name: value})
+        if not answer.get("ok"):
+            raise ToolError(
+                answer.get("why")
+                or (f"{object_name}.{property_name}: "
+                    + "; ".join(f"{k}: {v}" for k, v
+                                in (answer.get("refused") or {}).items()))
+                or "FreeCAD would not take that")
+        return self._measured(changed=f"{object_name}.{property_name}",
+                              to=value)
+
+    def suppress_feature(self, name: str, suppressed: bool = True) -> dict:
+        """Take a feature out of the rebuild, or put it back."""
+        answer = tree_mod.suppress(self.bridge, self.document, name,
+                                   suppressed)
+        if not answer.get("ok"):
+            raise ToolError(answer.get("why")
+                            or f"{name} could not be suppressed")
+        return self._measured(suppressed=name if suppressed else "",
+                              restored="" if suppressed else name)
+
+    def undo_change(self, steps: int = 1) -> dict:
+        """Back out the last change, this app's or the engineer's own."""
+        answer = tree_mod.undo(self.bridge, self.document, steps)
+        if not answer.get("ok"):
+            raise ToolError(answer.get("why") or "there was nothing to undo")
+        return self._measured(undone=answer.get("undone"))
 
     def declare_parameter(self, name: str, label: str, object_name: str,
                           property_name: str, scale: float = 1.0) -> dict:
@@ -1717,6 +1790,59 @@ def toolbox_for(session: Session, allow_python: bool = True) -> Toolbox:
                  "spacing": point},
                  "required": ["name", "count", "spacing"]},
              run=session.pattern_linear),
+        Tool(name="read_tree",
+             description=(
+                 "The document's feature tree: every feature, what made "
+                 "it, and the numbers that can still be changed. Read this "
+                 "before changing an existing part - it is the same tree "
+                 "the engineer has in front of them, including anything "
+                 "they changed by hand, so it is the only honest account "
+                 "of what the part is now. Give a name to look at one "
+                 "feature instead of all of them."),
+             parameters={"type": "object", "properties": {
+                 "name": {**text, "description": "one feature, by its name "
+                                                 "or its label"}}},
+             run=session.read_tree),
+        Tool(name="set_property",
+             description=(
+                 "Change one number on one feature of the tree - a pad's "
+                 "Length, a pattern's Occurrences, a pocket's depth. Use "
+                 "the tool that knows what the feature is where there is "
+                 "one (resize_hole for a hole, set_size for a shape); this "
+                 "is how everything else is reached. A value the part "
+                 "cannot be rebuilt with is refused and put back, so it is "
+                 "safe to try one."),
+             parameters={"type": "object", "properties": {
+                 "object_name": {**text, "description": "the feature, as "
+                                                        "read_tree names it"},
+                 "property_name": {**text, "description": "the property, as "
+                                                          "read_tree names it"},
+                 "value": {"description": "the new value"}},
+                 "required": ["object_name", "property_name", "value"]},
+             run=session.set_property),
+        Tool(name="suppress_feature",
+             description=(
+                 "Take a feature out of the rebuild without deleting it, "
+                 "or put it back - what a person does to ask 'what would "
+                 "this be like without the chamfer'. Only a PartDesign "
+                 "feature can be; hiding is not the same thing, because a "
+                 "hidden pocket is still cut."),
+             parameters={"type": "object", "properties": {
+                 "name": text,
+                 "suppressed": {"type": "boolean",
+                                "description": "false puts it back"}},
+                 "required": ["name"]},
+             run=session.suppress_feature),
+        Tool(name="undo_change",
+             description=(
+                 "Back out the last change to the document - one this app "
+                 "made or one the engineer made in FreeCAD. Use it when a "
+                 "change turned out to be wrong, rather than trying to "
+                 "work out the old value and set it back."),
+             parameters={"type": "object", "properties": {
+                 "steps": {"type": "integer",
+                           "description": "how many changes to back out"}}},
+             run=session.undo_change),
         Tool(name="list_objects",
              description="What is in the document, with the names to use.",
              parameters={"type": "object", "properties": {}},

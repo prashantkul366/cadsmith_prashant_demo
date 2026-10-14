@@ -168,6 +168,11 @@ obj = doc.getObject(%(object)r)
 wanted = json.loads(%(values)r)
 answer = {"object": %(object)r, "set": {}, "refused": {}}
 
+# Undo in FreeCAD is per transaction, and a document with no transactions
+# has nothing to undo. An engineer trying things needs to be able to back
+# out of one, so every change this module makes is one.
+doc.UndoMode = 1
+
 if obj is None:
     answer["why"] = "there is no object called " + %(object)r
     print("CADSMITH_TREE " + json.dumps(answer))
@@ -176,6 +181,7 @@ else:
     # numbers that are only valid together - a hole moved and resized to
     # stay inside the part - are not rejected one at a time.
     was = {}
+    doc.openTransaction(%(label)r)
     for name, value in wanted.items():
         if name not in obj.PropertiesList:
             answer["refused"][name] = "no such property"
@@ -218,6 +224,11 @@ else:
             answer["why"] = ("that value leaves " + ", ".join(broken[:3])
                              + " unable to rebuild")
             answer["set"] = {}
+            doc.abortTransaction()
+        else:
+            doc.commitTransaction()
+    if not answer["set"]:
+        doc.abortTransaction()
     answer["ok"] = bool(answer["set"]) and not answer.get("rolled_back")
     print("CADSMITH_TREE " + json.dumps(answer))
 '''
@@ -229,6 +240,7 @@ import FreeCAD
 doc = FreeCAD.getDocument(%(document)r)
 obj = doc.getObject(%(object)r)
 answer = {"object": %(object)r, "suppressed": %(state)r}
+doc.UndoMode = 1
 if obj is None:
     answer["why"] = "there is no object called " + %(object)r
 elif not hasattr(obj, "Suppressed"):
@@ -238,11 +250,15 @@ elif not hasattr(obj, "Suppressed"):
     answer["why"] = (obj.TypeId + " cannot be suppressed; only a PartDesign "
                      "feature can be taken out of the recompute")
 else:
+    doc.openTransaction(%(label)r)
     obj.Suppressed = %(state)r
     doc.recompute()
     broken = [o.Name for o in doc.Objects if "Invalid" in (o.State or [])]
     answer["broken"] = broken
     answer["ok"] = not broken
+    doc.commitTransaction() if not broken else doc.abortTransaction()
+    if broken:
+        doc.recompute()
 print("CADSMITH_TREE " + json.dumps(answer))
 '''
 
@@ -289,7 +305,9 @@ def edit(bridge: Any, document: str, name: str, values: dict,
          timeout: float = 120.0) -> dict:
     """Set properties on one object, and say whether the part survived."""
     script = _EDIT % {"document": document, "object": name,
-                      "values": json.dumps(values)}
+                      "values": json.dumps(values),
+                      # What FreeCAD's own Edit > Undo menu will say.
+                      "label": f"CADSmith: {name}"}
     try:
         printed = bridge.run(script, timeout=timeout)
     except Exception as error:
@@ -301,12 +319,56 @@ def suppress(bridge: Any, document: str, name: str, state: bool = True,
              timeout: float = 120.0) -> dict:
     """Take a feature out of the recompute, or put it back."""
     script = _SUPPRESS % {"document": document, "object": name,
-                          "state": bool(state)}
+                          "state": bool(state),
+                          "label": f"CADSmith: suppress {name}"}
     try:
         printed = bridge.run(script, timeout=timeout)
     except Exception as error:
         return {"ok": False, "why": f"{type(error).__name__}: {error}"}
     return _answer(printed, "suppressing a feature")
+
+
+_UNDO = r'''
+import json
+import FreeCAD
+
+doc = FreeCAD.getDocument(%(document)r)
+answer = {"undone": []}
+# What the stack holds before anything is taken off it, so the answer can
+# say what was backed out rather than only that something was.
+available = list(getattr(doc, "UndoNames", []) or [])
+for _ in range(max(1, %(steps)d)):
+    if not getattr(doc, "UndoCount", 0):
+        break
+    answer["undone"].append(
+        (list(getattr(doc, "UndoNames", []) or []) or [""])[0])
+    doc.undo()
+doc.recompute()
+answer["left"] = int(getattr(doc, "UndoCount", 0))
+answer["was"] = available[:6]
+answer["ok"] = bool(answer["undone"])
+if not answer["ok"]:
+    answer["why"] = ("there is nothing to undo in this document - FreeCAD "
+                     "only remembers changes made since it was opened")
+print("CADSMITH_TREE " + json.dumps(answer))
+'''
+
+
+def undo(bridge: Any, document: str, steps: int = 1,
+         timeout: float = 120.0) -> dict:
+    """Back out the last change, the way the engineer's own Undo does.
+
+    FreeCAD's undo stack is per transaction, so this reaches changes this
+    app made - each one is a transaction - and anything the engineer did
+    in FreeCAD itself. It does not reach a change made before the document
+    was opened, which is worth saying rather than failing silently.
+    """
+    script = _UNDO % {"document": document, "steps": int(steps)}
+    try:
+        printed = bridge.run(script, timeout=timeout)
+    except Exception as error:
+        return {"ok": False, "why": f"{type(error).__name__}: {error}"}
+    return _answer(printed, "undoing a change")
 
 
 def outline(tree: dict) -> list[dict]:

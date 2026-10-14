@@ -18,6 +18,7 @@ Run:  .venv/bin/python -m app.tests.test_tree
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -27,7 +28,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.server import tree  # noqa: E402
+from app.server import freecad_tools, tree  # noqa: E402
+from app.server.toolbox import ToolError  # noqa: E402
 
 CANDIDATES = [os.environ.get("CADSMITH_FREECADCMD", ""),
               "freecadcmd", "FreeCADCmd",
@@ -108,9 +110,35 @@ class Bridge:
             done = subprocess.run([self.binary, script.name],
                                   capture_output=True, text=True,
                                   timeout=timeout)
-            return done.stdout + done.stderr
+            printed = done.stdout + done.stderr
         finally:
             os.unlink(script.name)
+        self._keep(printed)
+        return printed
+
+    def _keep(self, printed: str) -> None:
+        """Carry an accepted change into the next call.
+
+        A live FreeCAD holds the document between calls; freecadcmd is a
+        fresh process each time. Without this, a tool that changes a number
+        and then measures the part measures the part before the change,
+        and a check on what it measured would be checking the harness.
+        """
+        for line in printed.splitlines():
+            if not line.startswith("CADSMITH_TREE "):
+                continue
+            try:
+                answer = json.loads(line[len("CADSMITH_TREE "):])
+            except json.JSONDecodeError:
+                continue
+            for name, value in (answer.get("set") or {}).items():
+                self.then(f"doc.getObject({answer['object']!r})."
+                          f"{name} = {value!r}")
+                self.then("doc.recompute()")
+
+    def measure(self, document: str):
+        from app.server import freecad as freecad_mod
+        return freecad_mod.Bridge.measure(self, document)
 
     def then(self, code: str) -> "Bridge":
         """Carry a change forward, since each call is a fresh process.
@@ -244,6 +272,83 @@ def main() -> int:
     check("and a sketch says plainly that it cannot be",
           not cannot.get("ok") and "cannot be suppressed" in
           (cannot.get("why") or ""), str(cannot.get("why"))[:80])
+
+    print("\nBacking a change out again")
+    # Each call is a fresh FreeCAD, so the change to undo has to be made in
+    # the same process. It is made the way this module makes one - inside a
+    # transaction - because a document with no transactions has an empty
+    # undo stack and would pass a weaker check for the wrong reason.
+    changed = ("doc.UndoMode = 1\n"
+               "doc.openTransaction('CADSmith: Plate')\n"
+               "doc.getObject('Plate').Length = 20.0\n"
+               "doc.recompute()\n"
+               "doc.commitTransaction()\n")
+    backed = tree.undo(Bridge(binary, SETUP).then(changed), "Part")
+    check("the last change is undone", backed.get("ok"),
+          backed.get("why") or str(backed.get("undone")))
+    check("and it says which change that was",
+          any("Plate" in str(name) for name in (backed.get("undone") or [])),
+          str(backed.get("undone")))
+    restored = tree.read(
+        Bridge(binary, SETUP).then(changed
+                                   + "doc.undo()\ndoc.recompute()\n"), "Part")
+    length = next((p for p in next(o for o in restored["objects"]
+                                   if o["name"] == "Plate")["properties"]
+                   if p["name"] == "Length"), None)
+    check("the pad is back to what it was",
+          length is not None and abs(float(length["value"]) - 12.0) < 1e-6,
+          str(length and length["value"]))
+    nothing = tree.undo(Bridge(binary, SETUP), "Part")
+    check("a document with nothing to undo says so, rather than failing",
+          not nothing.get("ok") and "nothing to undo" in
+          (nothing.get("why") or ""), str(nothing.get("why"))[:60])
+
+    print("\nThe same tree, as the model sees it")
+    # The claim being checked is that asking and dragging are one path.
+    # These are the tools the model calls; they go through the module the
+    # panel goes through, so a part cannot end up in a state one of them
+    # believes in and the other does not.
+    def session():
+        return freecad_tools.Session(Bridge(binary, SETUP), "Part")
+
+    seen = session().read_tree()
+    labels = [f["label"] for f in seen["features"]]
+    check("it is given the features by name", "Plate" in labels,
+          ", ".join(labels[:6]))
+    plate = next(f for f in seen["features"] if f["label"] == "Plate")
+    check("with the numbers it may change, and not the rest",
+          "Length" in plate["properties"] and "Shape" not in plate["properties"],
+          ", ".join(sorted(plate["properties"])[:6]))
+    one = session().read_tree("Plate")
+    check("and one feature on request", len(one["features"]) == 1,
+          str(len(one["features"])))
+    try:
+        session().read_tree("Flange")
+        check("a name the part does not have is refused", False, "it was not")
+    except ToolError as error:
+        # The list matters: a model told only "no such feature" guesses
+        # again, and a model told what there is picks from it.
+        check("a name the part does not have is refused, with what there is",
+              "Plate" in str(error), str(error)[:70])
+
+    grew = session().set_property("Plate", "Length", 20.0)
+    check("a number it sets changes the part",
+          abs((grew.get("part_now") or [{}])[0].get("size_mm", [0, 0, 0])[2]
+              - 20.0) < 1e-6,
+          str((grew.get("part_now") or [{}])[0].get("size_mm")))
+    try:
+        session().set_property("Plate", "Length", 0.0)
+        check("and one the part cannot be rebuilt with is refused",
+              False, "it was taken")
+    except ToolError as error:
+        check("and one the part cannot be rebuilt with is refused",
+              "rebuild" in str(error), str(error)[:70])
+    try:
+        session().undo_change()
+        check("nothing to undo is said plainly", False, "it claimed to undo")
+    except ToolError as error:
+        check("nothing to undo is said plainly",
+              "nothing to undo" in str(error), str(error)[:60])
 
     print("\n" + "=" * 58)
     print("ALL CHECKS PASSED" if not failures else f"{failures} CHECK(S) FAILED")
