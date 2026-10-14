@@ -64,10 +64,23 @@ $env:CADSMITH_FREECAD_TOKEN = ""     # only if the addon asks for one
 
 Each layer reports on its own line with its fix beside it: Python,
 packages, the CAD kernel, rendering, the model backend, **FreeCAD**, and
-the port. The FreeCAD section goes all the way through - connection,
+the port. It checks whichever backend is actually configured and says
+which one and why; `--provider bedrock` forces it. The FreeCAD section goes all the way through - connection,
 addon, a script run and read back, the documents you have open, the
 feature tree, and an export - so if something is wrong it names the layer
 rather than surfacing later as a run that hangs.
+
+## 5a. A note if the repository lives in OneDrive
+
+Two things follow from that, and neither is a fault in the app:
+
+* **Everything it writes syncs.** `app\runs\` holds every part built,
+  its STEP, its STL and its drawing. In a OneDrive folder those go to the
+  cloud. For anything confidential, keep the checkout outside OneDrive -
+  `C:\dev\cadsmith` or similar.
+* **It is slower.** The first kernel operation took 32 seconds on a
+  OneDrive path against about 2 on a local disk. The CAD kernel writes
+  temporary files constantly, and every one of them is a sync event.
 
 ## 6. Start it
 

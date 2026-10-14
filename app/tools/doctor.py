@@ -191,6 +191,34 @@ def check_rendering() -> None:
         fail("offscreen render", "produced no image")
 
 
+def _which_provider(args, providers) -> tuple:
+    """Which backend this preflight should check, and why that one.
+
+    It used to check whatever the default was whether or not anything was
+    configured, so a machine with Bedrock signed in and working was told
+    three times that `custom` had no base URL and to fix it before
+    starting the app. Nothing was wrong with the machine.
+
+    A preflight's job is to check the thing that will actually be used, so
+    an unasked-for choice follows what is configured.
+    """
+    if args.provider:
+        return args.provider, "you asked for it"
+    named = os.getenv("CADSMITH_PROVIDER", "")
+    if named:
+        return named, "CADSMITH_PROVIDER says so"
+    ready = [entry["id"] for entry in providers.status() if entry["ready"]]
+    if len(ready) == 1:
+        return ready[0], "the only one configured"
+    if ready:
+        if providers.DEFAULT_PROVIDER in ready:
+            return (providers.DEFAULT_PROVIDER,
+                    f"the default, and one of {len(ready)} configured")
+        return ready[0], f"first of {len(ready)} configured"
+    return (providers.DEFAULT_PROVIDER,
+            "nothing is configured, so this is what the app would try")
+
+
 def check_configuration(args) -> dict:
     section("Configuration")
     try:
@@ -219,6 +247,15 @@ def check_configuration(args) -> dict:
                  "Fine if you set variables another way.")
     except Exception:
         warn("python-dotenv unavailable", "", "Environment variables still work.")
+
+    try:
+        from app.server import providers
+    except Exception as exc:
+        fail("import app.server.providers", str(exc))
+        return {}
+
+    chosen, why = _which_provider(args, providers)
+    args.provider = chosen
 
     interesting = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CADSMITH_LLM_API_KEY",
                    "CADSMITH_LLM_BASE_URL", "OLLAMA_BASE_URL",
@@ -257,12 +294,6 @@ def check_configuration(args) -> dict:
              "use the keys. Editing .env does not change a terminal that "
              "already has the variable.")
 
-    try:
-        from app.server import providers
-    except Exception as exc:
-        fail("import app.server.providers", str(exc))
-        return {}
-
     # Only the provider you actually selected can be a problem; the others
     # being unconfigured is the normal case, not a caveat.
     print()
@@ -271,6 +302,9 @@ def check_configuration(args) -> dict:
             ok(f"provider {entry['id']}", f"ready - {entry['base_url'] or 'SDK'}")
         else:
             print(f"  {DIM}....  provider {entry['id']}  not configured{RESET}")
+
+    print()
+    ok(f"checking provider '{chosen}'", why)
 
     config = providers.resolve(
         provider_id=args.provider,
@@ -636,7 +670,8 @@ def check_port(args) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--provider", default=os.getenv("CADSMITH_PROVIDER", "custom"))
+    # Empty means "work it out": see _which_provider.
+    parser.add_argument("--provider", default="")
     parser.add_argument("--generation-model", default="")
     parser.add_argument("--judge-model", default="")
     parser.add_argument("--timeout", type=float, default=30.0,
