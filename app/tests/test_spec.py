@@ -333,6 +333,29 @@ def main() -> int:
           stated_mod.requirements("4 off 8.5mm holes")["hole_count"] == 4,
           str(stated_mod.requirements("4 off 8.5mm holes")["hole_count"]))
 
+    # A part built as several bodies comes back from STEP as a compound,
+    # and a solid classifier built on a compound answers for whichever
+    # solid it happened to latch onto. Measured on a real bracket: four
+    # full-sweep O13 faces in the file, one hole reported, and an engineer
+    # told their part did not match the request.
+    print("\nHoles in a part that is more than one body")
+    holed = (cq.Workplane("XY").box(200, 100, 20)
+             .faces(">Z").workplane()
+             .pushPoints([(-60, 0), (60, 0)]).hole(13))
+    beside = cq.Workplane("XY").box(60, 60, 20).translate((300, 0, 0))
+    together = cq.Compound.makeCompound([holed.val(), beside.val()])
+    apart = work / "two_bodies.step"
+    cq.exporters.export(together, str(apart))
+    counted = spec.measure_step(apart)
+    check("every body is asked about, not just the first",
+          counted["num_holes"] == 2, str(counted["holes"]))
+    # And one solid still answers the way it always did.
+    alone = work / "one_body.step"
+    cq.exporters.export(holed.val(), str(alone))
+    check("and a part that is one body is unchanged",
+          spec.measure_step(alone)["num_holes"] == 2,
+          str(spec.measure_step(alone)["holes"]))
+
     shutil.rmtree(work, ignore_errors=True)
 
     print(f"\n{'=' * 58}")

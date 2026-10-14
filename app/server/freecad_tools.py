@@ -356,6 +356,47 @@ def _outline(sketch, pieces):
 #
 # A comment and not a docstring: this function is source inside a string
 # that is itself delimited by triple quotes, and a docstring ends it.
+# Features that take a solid and give back that solid changed. Following
+# these forward is how a name keeps meaning the part rather than the part
+# as it was several operations ago.
+_CARRIES_ON = (
+    "Part::Cut", "Part::Fuse", "Part::Common", "Part::MultiFuse",
+    "Part::MultiCommon", "Part::Chamfer", "Part::Fillet", "Part::Thickness",
+    "Part::Mirroring", "Part::Refine",
+)
+
+
+# The part this object has become.
+#
+# Four holes asked for in "Plate" made four Part::Cut features whose Base
+# was all the same original Plate, because that is what the name still
+# resolved to after the first one. The result was four overlapping
+# bodies, each the plate with one hole, a volume four times the part, and
+# a gate that correctly said the part did not match the request.
+#
+# A tool is told the name of a part; it means the part now.
+def _latest(obj):
+    seen = set()
+    while obj is not None:
+        carried = None
+        for user in (getattr(obj, "InList", None) or []):
+            if user.Name in seen or user.TypeId not in _CARRIES_ON:
+                continue
+            # Only where this object is what the feature was built FROM.
+            # The cutter of a Part::Cut is also in its InList and is not
+            # the part becoming anything.
+            base = getattr(user, "Base", None)
+            shapes = getattr(user, "Shapes", None) or []
+            if base is obj or any(shape is obj for shape in shapes):
+                carried = user
+                break
+        if carried is None:
+            return obj
+        seen.add(carried.Name)
+        obj = carried
+    return obj
+
+
 def _both_ways(feature, midplane):
     if hasattr(feature, "SideType"):
         feature.SideType = "Two sides" if midplane else "One side"
@@ -572,7 +613,7 @@ class Session:
         self.bridge.run(f"""
 import FreeCAD
 doc = FreeCAD.getDocument({self.document!r})
-obj = doc.getObject({name!r})
+obj = _latest(doc.getObject({name!r}))
 if obj is None:
     raise RuntimeError("no object called {name}")
 obj.Placement = FreeCAD.Placement(
@@ -588,7 +629,7 @@ doc.recompute()
         self.bridge.run(f"""
 import FreeCAD
 doc = FreeCAD.getDocument({self.document!r})
-obj = doc.getObject({name!r})
+obj = _latest(doc.getObject({name!r}))
 if obj is None:
     raise RuntimeError("no object called {name}")
 obj.Placement = FreeCAD.Placement(
@@ -674,7 +715,7 @@ if len(tools) > 1:
     tool.Shapes = tools
     doc.recompute()
 result = doc.addObject("Part::Cut", "Result")
-result.Base = doc.getObject({base!r})
+result.Base = _latest(doc.getObject({base!r}))
 result.Tool = tool
 doc.recompute()
 print(result.Name)
@@ -837,7 +878,7 @@ print(result.Name)
         made = self._copies(f"""
 import FreeCAD, json
 doc = FreeCAD.getDocument({self.document!r})
-src = doc.getObject({name!r})
+src = _latest(doc.getObject({name!r}))
 centre = FreeCAD.Vector({centre[0]}, {centre[1]}, {centre[2]})
 spindle = FreeCAD.Vector{self.AXES[axis.upper()]}
 made = []
@@ -868,7 +909,7 @@ doc.recompute()
         made = self._copies(f"""
 import FreeCAD, json
 doc = FreeCAD.getDocument({self.document!r})
-src = doc.getObject({name!r})
+src = _latest(doc.getObject({name!r}))
 step = FreeCAD.Vector({step[0]}, {step[1]}, {step[2]})
 made = []
 for i in range(1, {int(count)}):
@@ -945,7 +986,7 @@ doc.recompute()
 
         made = self._build(f"""
 import Part
-target = doc.getObject({target!r})
+target = _latest(doc.getObject({target!r}))
 box = target.Shape.BoundBox
 reach = 2.0 * max(box.XLength, box.YLength, box.ZLength, 1.0)
 at = FreeCAD.Vector({float(at[0])}, {float(at[1])}, {float(at[2])})
@@ -1238,7 +1279,7 @@ made = [out.Name]
             raise ToolError(f"there is no object called {name!r}")
         made = self._build(f"""
 import Part
-target = doc.getObject({name!r})
+target = _latest(doc.getObject({name!r}))
 shape = target.Shape
 face = _face_towards(shape, {open_face!r})
 if face is None:
@@ -1499,7 +1540,7 @@ print(obj.Name)
             raise ToolError("there is nothing built yet to break the edges of")
         target = self.built[-1]
         made = self._build(f"""
-target = doc.getObject({target!r})
+target = _latest(doc.getObject({target!r}))
 if target is None:
     raise RuntimeError("there is no object called {target} any more")
 count = len(target.Shape.Edges)

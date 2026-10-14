@@ -152,6 +152,28 @@ def bores(solid: Any) -> list[float]:
     from OCP.gp import gp_Pnt
     from OCP.TopAbs import TopAbs_State
 
+    found: list[float] = []
+
+    # One classifier per solid, and only that solid's own faces put to it.
+    # A part built as several bodies - a base, a plate, two gussets - comes
+    # back from STEP as a compound, and a classifier built on a compound
+    # answers for whichever solid it latched onto. Measured on a bracket
+    # with four O13 holes through its vertical plate: four full-sweep
+    # cylindrical faces in the file, one hole reported, and a gate that
+    # told the engineer their part did not match the request.
+    for part in (solid.Solids() or [solid]):
+        found.extend(_bores_of(part))
+    return sorted(found)
+
+
+def _bores_of(solid: Any) -> list[float]:
+    """The bores of one solid, classified against that solid alone."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.GeomAbs import GeomAbs_SurfaceType
+    from OCP.gp import gp_Pnt
+    from OCP.TopAbs import TopAbs_State
+
     classifier = BRepClass3d_SolidClassifier(solid.wrapped)
     found: list[float] = []
 
