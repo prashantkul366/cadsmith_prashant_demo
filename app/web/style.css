@@ -1284,3 +1284,14 @@ html[lang="ja"] .speclabel,html[lang="ja"] .specwant{letter-spacing:0}
   background: transparent; color: inherit; opacity: .8;
 }
 .tsup:hover { opacity: 1; background: rgba(127, 127, 127, .12); }
+
+/* An action in a card header, beside the heading rather than inside the
+   body: it acts on the card's whole subject, not on one row of it. The
+   header is itself a toggle, so this stops the click reaching it. */
+.rhead-act {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin-left: 6px; border-radius: 4px;
+  opacity: .6; cursor: pointer;
+}
+.rhead-act:hover { opacity: 1; background: rgba(127, 127, 127, .18); }
+.rhead-act .icn { width: 14px; height: 14px; }

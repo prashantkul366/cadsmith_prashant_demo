@@ -756,6 +756,22 @@ async def freecad_tree_suppress(document: str, name: str,
                                           bool(body.get("suppressed", True))))
 
 
+@app.post("/api/freecad/documents/{document}/undo")
+async def freecad_undo(document: str, request: Request) -> JSONResponse:
+    """Back out the last change, whoever made it.
+
+    The engineer's own FreeCAD undo and this app's are the same stack, so
+    this backs out a change made by asking, a change made in the tree
+    panel, and a change they made in FreeCAD themselves.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return JSONResponse(tree_mod.undo(_live_freecad(), document,
+                                      int(body.get("steps") or 1)))
+
+
 @app.get("/api/freecad/documents/{document}/mesh")
 def freecad_mesh(document: str) -> Response:
     """The open document's solid, meshed, for the viewer.

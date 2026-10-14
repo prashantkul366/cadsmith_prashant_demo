@@ -252,6 +252,8 @@ const I18N = (function () {
     "tree.rolledback":  ["Refused: the part could not be rebuilt with that",
                          "拒否：その値では部品を再計算できません"],
     "tree.changed":     ["Changed", "変更しました"],
+    "tree.undo":        ["Undo the last change", "直前の変更を元に戻す"],
+    "tree.undone":      ["Undone: {what}", "元に戻しました：{what}"],
     "params.none": [
       "This script declares no dimensions of its own, so there is nothing to "
       + "adjust here. The editor below can still ask for a change in words.",

@@ -2986,6 +2986,35 @@ async function sendTreeEdit(field) {
   }
 }
 
+//: Undo is the same stack FreeCAD's own Edit menu uses, so this backs
+//: out a change made by asking, one made in this panel, and one the
+//: engineer made in FreeCAD. It sits in the tree's header because that is
+//: where the changes it reverses are made.
+async function undoTreeChange() {
+  if (TREE.busy || !TREE.doc) return;
+  TREE.busy = true;
+  try {
+    const answer = await API.freecadUndo(TREE.doc, 1);
+    if (!answer.ok) {
+      toast(answer.why || t("tree.rolledback"));
+    } else {
+      toast(t("tree.undone", { what: (answer.undone || [])[0] || "" }));
+      TREE.busy = false;
+      await afterTreeChange();
+    }
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    TREE.busy = false;
+  }
+}
+
+$("#treeUndo")?.addEventListener("click", event => {
+  // The header is a toggle; undoing must not also collapse the card.
+  event.stopPropagation();
+  undoTreeChange();
+});
+
 async function sendSuppress(name) {
   if (TREE.busy) return;
   const row = TREE.rows.find(r => r.name === name);

@@ -539,6 +539,90 @@ def _advice(error: str) -> str:
     return ""
 
 
+def check_freecad(args) -> None:
+    """Whether the CAD this app drives is actually drivable from here.
+
+    Everything on this road goes through FreeCAD, so a pilot that cannot
+    reach it has nothing to try. Each step is its own line because they
+    fail for different reasons and have different fixes: FreeCAD not
+    running, the addon not started, the addon on another port, a FreeCAD
+    too busy to answer, a document with nothing in it.
+    """
+    section("FreeCAD")
+    if args.skip_freecad:
+        warn("freecad", "skipped")
+        return
+    try:
+        from app.server import freecad, freecad_run, tree
+    except Exception as error:                       # noqa: BLE001
+        fail("freecad module", str(error)[:120])
+        return
+
+    bridge = freecad_run.bridge_from_env()
+    where = f"{bridge.host}:{bridge.port}"
+    if not bridge.alive(timeout=4.0):
+        fail("connection", f"nothing answering at {where}",
+             "Open FreeCAD, choose the MCP Addon workbench and click Start "
+             "RPC Server. If it is on another machine or port, set "
+             "CADSMITH_FREECAD_HOST and CADSMITH_FREECAD_PORT.")
+        return
+    ok("connection", where)
+
+    try:
+        status = bridge.status()
+        ok("addon", str(status.get("version") or "running"))
+    except freecad.FreeCADError as error:
+        warn("addon", str(error)[:90])
+
+    # A round trip through FreeCAD's own interpreter. Everything else -
+    # the tools, the tree, the drawing - is this one call with a longer
+    # script, so if it fails nothing above it can work.
+    try:
+        printed = bridge.run("print('CADSMITH_OK')", timeout=20.0)
+        if "CADSMITH_OK" in printed:
+            ok("running a script", "FreeCAD ran it and the answer came back")
+        else:
+            fail("running a script", (printed or "").strip()[:90],
+                 "The addon accepted the call but printed nothing this "
+                 "server could read. Check the addon's token setting.")
+    except freecad.FreeCADError as error:
+        fail("running a script", str(error)[:120])
+        return
+
+    try:
+        documents = bridge.documents()
+    except freecad.FreeCADError as error:
+        fail("documents", str(error)[:90])
+        return
+    if not documents:
+        warn("documents", "none open",
+             "Open or make a document in FreeCAD. The app can make its own, "
+             "but a pilot usually wants to work in a part you already have.")
+        return
+    ok("documents", ", ".join(documents[:4]))
+
+    # The tree is what the panel and the model both read, so it is checked
+    # on a real document rather than assumed from the connection working.
+    first = documents[0]
+    got = tree.read(bridge, first, timeout=30.0)
+    if not got.get("ok"):
+        fail("feature tree", str(got.get("why"))[:110])
+    else:
+        writable = sum(1 for o in got.get("objects") or []
+                       for p in o.get("properties") or [] if p.get("writable"))
+        ok("feature tree",
+           f'{len(got.get("objects") or [])} objects in {first}, '
+           f"{writable} numbers that can be changed")
+
+    try:
+        blob = bridge.fetch(first, "stl", timeout=60.0)
+        ok("export", f"{len(blob) // 1024} KB of mesh from {first}")
+    except (freecad.FreeCADError, Exception) as error:   # noqa: BLE001
+        warn("export", str(error)[:90],
+             "The viewer shows the open document by exporting it. A "
+             "document with no solid in it yet is the usual reason.")
+
+
 def check_port(args) -> None:
     section("Server port")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -560,6 +644,7 @@ def main() -> int:
                              "The app itself waits far longer.")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--skip-models", action="store_true")
+    parser.add_argument("--skip-freecad", action="store_true")
     args = parser.parse_args()
 
     print("CADSmith preflight")
@@ -571,6 +656,7 @@ def main() -> int:
     check_rendering()
     resolved = check_configuration(args)
     check_models(args, resolved)
+    check_freecad(args)
     check_port(args)
 
     print("\n" + "=" * 58)

@@ -63,6 +63,13 @@ const API = (() => {
       `/api/freecad/documents/${encodeURIComponent(document)}/mesh`
       + `?at=${Date.now()}`,
 
+    freecadUndo: (document, steps) =>
+      json(`/api/freecad/documents/${encodeURIComponent(document)}/undo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ steps: steps || 1 }),
+      }),
+
     freecadTreeSuppress: (document, name, suppressed) =>
       json(`/api/freecad/documents/${encodeURIComponent(document)}`
            + `/tree/${encodeURIComponent(name)}/suppress`, {
