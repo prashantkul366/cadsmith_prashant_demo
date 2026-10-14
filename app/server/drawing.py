@@ -51,6 +51,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
+from app.server import features
 from app.server import i18n
 
 # ---------------------------------------------------------------------------
@@ -884,6 +885,11 @@ PATTERN_TOL = 0.05
 #: note rather than growing a third and a fourth leader into the margin.
 MAX_ROUND_CALLOUTS = 2
 
+#: How many cut-out groups get dimensioned on one view. Capped for the
+#: same reason the leaders are: a sheet covered in the same number is not
+#: more informative than a sheet carrying it once.
+MAX_CUTOUTS = 3
+
 
 def _hole_patterns(circles: list[dict]) -> list[dict]:
     """Same-size circles, grouped the way a drawing would call them out.
@@ -1352,6 +1358,52 @@ def plan_view(name: str, view: dict, scale: float, dimension: str,
             positioned += 1
             if positioned >= 2:
                 break
+
+    # Everything cut into the outline that is not round. A slit, a slot, a
+    # pocket and a window all project as a closed loop inside the boundary,
+    # and until features.py chained the projector's loose edges back into
+    # loops nothing downstream could see one: they were drawn and never
+    # dimensioned. On the flexible strip this was found on, the five slits
+    # were on the page and their 0.5 by 10 was not.
+    #
+    # Size and position, like a hole, and in the same ladder so a cut-out's
+    # width never lands on a pitch. Identical cut-outs are one dimension
+    # and a count - five slits are "5\u00d7 0.5", which is what ISO 129-1
+    # asks and the difference between a sheet somebody reads and a sheet
+    # covered in the same number.
+    #
+    # Never on the pictorial view. An isometric is a picture of the part,
+    # not a measured projection of it: a 10 mm hole on one reads 5.773,
+    # which is 10 over root 3, which is the foreshortening and not a
+    # dimension of anything.
+    cut = [] if name == "ISO" else features.cutouts(view)
+    for group in features.groups(cut)[:MAX_CUTOUTS]:
+        gmin_u, gmin_v, gmax_u, gmax_v = group["bbox"]
+        ax, ay = to_sheet(gmin_u, gmin_v)
+        bx, by = to_sheet(gmax_u, gmax_v)
+        # The same multiplication sign the hole leaders use. Two spellings
+        # of one thing on one sheet is how "3x 0.5" came to be read as a
+        # 3 mm length: a count is recognised by the sign it is closed up
+        # to, and an ASCII x is not that sign.
+        count = f"{group['count']}\u00d7 " if group["count"] > 1 else ""
+        plan["dimensions"].append({
+            "p1": (ax, ay), "p2": (bx, ay), "offset": below_line(ay),
+            "vertical": False, "measure": group["w"],
+            "label": f"{count}{_num(group['w'])}"})
+        plan["dimensions"].append({
+            "p1": (ax, ay), "p2": (ax, by), "offset": left_line(ax),
+            "vertical": True, "measure": group["h"],
+            "label": f"{count}{_num(group['h'])}"})
+        level += 1
+        # Where the row of them starts and how far apart they are. One
+        # pitch says where all five are; five positions say it five times.
+        if group["pitch_u"] and len(group["members"]) > 1:
+            px, _ = to_sheet(group["members"][0]["u"], gmin_v)
+            qx, _ = to_sheet(group["members"][1]["u"], gmin_v)
+            plan["dimensions"].append({
+                "p1": (px, ay), "p2": (qx, ay), "offset": below_line(ay),
+                "vertical": False, "measure": group["pitch_u"]})
+            level += 1
 
     # Leaders, largest first and capped: a drawing that calls out every
     # circle on a gear is unreadable, and the ones that matter are the big

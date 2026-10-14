@@ -285,7 +285,13 @@ def main() -> int:
               not btop["centre_lines"], f'{len(btop["centre_lines"])} line(s)')
         measures = sorted(round(d["measure"], 2) for d in btop["dimensions"])
         check("nor is a fillet centre dimensioned from the datum",
-              measures == [40.0], str(measures))
+              not ({5.0, 35.0, 55.0} & set(measures)), str(measures))
+        # The cavity, on the other hand, is a feature and wants dimensions:
+        # a 60 x 40 box filleted R5 and shelled 2 thick is 56 x 36 inside,
+        # and somebody has to machine that. It is the kind of thing the
+        # sheet carried nothing about until cut-outs were dimensioned.
+        check("while the shelled cavity is",
+              36.0 in measures and 56.0 in measures, str(measures))
 
         # The awkward shapes the kernel hands over, checked directly: one
         # hole is often two half-edges, and one fillet is the same quarter
@@ -641,6 +647,34 @@ def main() -> int:
               str(sorted(round(e.get_measurement(), 4)
                          for e in reopened.modelspace()
                          if e.dxftype() == "DIMENSION")))
+        # The deliverable YMRI were promised first: a solid from somebody
+        # else's CAD, with no request behind it and no geometry report
+        # beside it, becoming a drawing their CAD can open. Nothing here
+        # may depend on this app having built the part.
+        print("\nA solid from another CAD, with nothing else known about it")
+        from app.tools import sheets                    # noqa: PLC0415
+        bare = (cq.Workplane("XY").box(300.0, 300.0, 25.0)
+                .faces(">Z").workplane().hole(11.0))
+        far = work / "from_nx.step"
+        cq.exporters.export(bare, str(far))
+        svg = drawing.build_sheet(far, {}, "", "from_nx", 0)
+        check("it draws without a prompt or a geometry report",
+              svg.startswith("<svg") and len(svg) > 2000, f"{len(svg)} bytes")
+        check("and a file with no vN folder is version 0, not an error",
+              sheets.version_of(far) == 0, str(sheets.version_of(far)))
+        out = work / "from_nx.dxf"
+        drawing.build_dxf(far, {}, "", "from_nx", 0).saveas(out)
+        got = ezdxf.readfile(out)
+        # Scaled sheets are where this goes wrong quietly: the geometry is
+        # drawn at 1:5, so a reader that ignores DIMLFAC sees 60 where the
+        # plate is 300. What the engineer's CAD shows is the product.
+        shown = sorted({round(e.get_measurement()
+                              * float(e.override().get("dimlfac", 1.0)), 2)
+                        for e in got.modelspace()
+                        if e.dxftype() == "DIMENSION"
+                        and not isinstance(e.get_measurement(), tuple)})
+        check("and the DXF says the part's own sizes, not the drawn ones",
+              300.0 in shown and 25.0 in shown and 11.0 in shown, str(shown))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

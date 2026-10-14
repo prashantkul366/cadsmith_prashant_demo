@@ -1,4 +1,11 @@
-"""Save the drawing of every part this app has built, and check each one.
+"""Make a drawing from a solid, and say whether it can be trusted.
+
+Point it at a folder of STEP files and it writes a drawing for each one -
+an SVG to look at and a DXF another CAD system opens - with an index page
+listing them. That is the whole of the 3D-to-2D tool: a solid in, a
+drawing out, no model, no network, nothing that leaves the machine.
+
+It also reads this app's own run folders, which is where it started.
 
 A sheet nobody looks at is not a drawing, so this writes them all out as
 files with an index page that opens in a browser, each labelled with the
@@ -168,6 +175,36 @@ def untraceable(sheet: dict, views: dict) -> list[float]:
                               for r in real)})
 
 
+#: What a solid arrives as. STEP because that is what every CAD writes and
+#: what NX writes; BREP because the kernel's own format costs nothing to
+#: support once STEP is handled.
+SOLIDS = (".step", ".stp", ".STEP", ".STP", ".brep")
+
+
+def version_of(step: Path) -> int:
+    """Which iteration this solid is, where that is a thing it has.
+
+    A STEP file from somebody else's CAD has no version; this app's runs
+    keep each one in a vN folder. The title block carries whichever is
+    true rather than refusing the file that has neither.
+    """
+    name = step.parent.name
+    return int(name[1:]) if name[:1] == "v" and name[1:].isdigit() else 0
+
+
+def solids(where: Path) -> list[tuple[str, Path, str]]:
+    """Solids to draw, from a file or a folder of them.
+
+    No prompt and no geometry: a STEP file from somebody else's CAD is a
+    solid and nothing more, so the sheet is made from what can be measured
+    off it rather than from what a request said it should be.
+    """
+    found = ([where] if where.is_file()
+             else sorted(f for f in where.rglob("*")
+                         if f.suffix in SOLIDS and f.name != "model.step"))
+    return [(f.stem, f, "") for f in found]
+
+
 def latest(runs: Path) -> list[tuple[str, Path, str]]:
     """The last version of each run, with the request that made it."""
     out = []
@@ -185,11 +222,19 @@ def latest(runs: Path) -> list[tuple[str, Path, str]]:
 
 
 def main() -> int:
-    runs = Path(sys.argv[1] if len(sys.argv) > 1 else "app/runs")
+    where = Path(sys.argv[1] if len(sys.argv) > 1 else "app/runs")
     into = Path(sys.argv[2] if len(sys.argv) > 2 else "app/runs/_sheets")
     into.mkdir(parents=True, exist_ok=True)
+    # A folder of this app's runs, or a folder of solids from anywhere
+    # else. Decided by what is in it rather than by a flag, because the
+    # answer is always obvious from looking.
+    parts = latest(where) if where.is_dir() and any(
+        where.glob("*/meta.json")) else solids(where)
+    if not parts:
+        print(f"nothing to draw in {where}")
+        return 1
     rows = []
-    for run_id, step, prompt in latest(runs):
+    for run_id, step, prompt in parts:
         try:
             geometry = json.loads(
                 (step.parent / "geometry.json").read_text(encoding="utf-8"))
@@ -203,7 +248,7 @@ def main() -> int:
             sheet = drawing.plan_sheet(
                 views, threads(prompt) if threads else None)
             svg = drawing.build_sheet(step, geometry, prompt, run_id,
-                                      int(step.parent.name.lstrip("v") or 0))
+                                      version_of(step))
         except Exception as error:                    # noqa: BLE001
             rows.append({"id": run_id, "prompt": prompt, "file": None,
                          "why": f"{type(error).__name__}: {error}"})
@@ -211,6 +256,15 @@ def main() -> int:
             continue
         name = f"{run_id}.svg"
         (into / name).write_text(svg, encoding="utf-8")
+        # The DXF is the deliverable, not the picture: it carries real
+        # DIMENSION entities, so the CAD that opens it can measure and
+        # edit what it was given rather than trace over an image.
+        try:
+            drawing.build_dxf(step, geometry, prompt, run_id,
+                              version_of(step)).saveas(into / f"{run_id}.dxf")
+        except Exception as error:                    # noqa: BLE001
+            print(f"  {run_id}  no DXF: {type(error).__name__}: {error}",
+                  flush=True)
         odd = untraceable(sheet, views)
         rows.append({"id": run_id, "prompt": prompt, "file": name,
                      "numbers": len(printed(sheet)), "odd": odd,
