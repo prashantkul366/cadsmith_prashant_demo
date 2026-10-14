@@ -347,6 +347,22 @@ def _outline(sketch, pieces):
                             FreeCAD.Vector(0, 0, 1), r), a0, a1), False)
 
 
+# Pad to both sides of the sketch, in whichever way this FreeCAD says.
+# Midplane was replaced by SideType in FeatureExtrude, and setting it
+# writes a deprecation warning to the Report view for every feature on
+# every build - a wall of yellow in front of the engineer, who reasonably
+# reads it as something being wrong with their part. Both spellings are
+# handled because which one exists depends on their FreeCAD.
+#
+# A comment and not a docstring: this function is source inside a string
+# that is itself delimited by triple quotes, and a docstring ends it.
+def _both_ways(feature, midplane):
+    if hasattr(feature, "SideType"):
+        feature.SideType = "Two sides" if midplane else "One side"
+    else:
+        feature.Midplane = bool(midplane)
+
+
 def _check(feature, complaint):
     shape = getattr(feature, "Shape", None)
     if shape is None or shape.isNull() or shape.Volume <= 1e-9:
@@ -1110,7 +1126,7 @@ body.addObject(pad)
 pad.Profile = sketch
 pad.Length = {float(depth)}
 pad.Reversed = _reversed({plane.upper()!r})
-pad.Midplane = {bool(midplane)}
+_both_ways(pad, {bool(midplane)})
 doc.recompute()
 _check(pad, "the outline would not pad - it may cross itself or not close")
 made = [body.Name, sketch.Name, pad.Name]

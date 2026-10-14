@@ -60,6 +60,20 @@ EDITABLE = {
     "App::PropertyPercent": "integer",
 }
 
+#: Properties whose *value* costs real time to fetch. A Shape has to be
+#: materialised to be read, and a document of twenty features holds twenty
+#: of them - which is how reading the tree of a real part came to take
+#: longer than building it. The type is reported; the value is not
+#: fetched, because nothing was ever going to be done with it but turn it
+#: into the word "Shape".
+HEAVY = {
+    "Part::PropertyPartShape", "App::PropertyPythonObject",
+    "Mesh::PropertyMeshKernel", "Part::PropertyGeometryList",
+    "Sketcher::PropertyConstraintList", "App::PropertyLinkList",
+    "App::PropertyLinkSubList", "App::PropertyXLinkSubList",
+    "App::PropertyVectorList", "App::PropertyMatrixList",
+}
+
 #: Properties every object carries that say nothing about the design.
 #: Kept out of the default listing because a tree where the first six rows
 #: are the same six rows on every object is a tree nobody scrolls.
@@ -77,6 +91,7 @@ doc = FreeCAD.getDocument(%(document)r)
 verbose = %(verbose)r
 housekeeping = set(json.loads(%(housekeeping)r))
 editable = json.loads(%(editable)r)
+heavies = set(json.loads(%(heavy)r))
 
 
 def printable(value):
@@ -100,20 +115,28 @@ def described(obj):
             continue
         try:
             kind = obj.getTypeIdOfProperty(name)
-            raw = getattr(obj, name)
         except Exception:
             continue
+        # The type decides whether the value is worth fetching, and the
+        # type is cheap. Asking for the value first is what made this slow.
+        heavy = kind in heavies
+        raw = None
+        if not heavy:
+            try:
+                raw = getattr(obj, name)
+            except Exception:
+                continue
         # 2 is hidden, 1 is read-only, in FreeCAD's editor mode bitmask.
         try:
             mode = set(obj.getEditorMode(name) or [])
         except Exception:
             mode = set()
+        # No property group: nothing reads it, and it is one more call
+        # per property across a document that can hold hundreds.
         row = {
             "name": name,
             "type": kind,
-            "group": (obj.getGroupOfProperty(name) or "") if hasattr(
-                obj, "getGroupOfProperty") else "",
-            "value": printable(raw),
+            "value": kind.rsplit(":", 1)[-1] if heavy else printable(raw),
             "editor": editable.get(kind),
             "writable": kind in editable and "ReadOnly" not in mode,
             "hidden": "Hidden" in mode,
@@ -123,7 +146,7 @@ def described(obj):
                 row["choices"] = list(obj.getEnumerationsOfProperty(name))
             except Exception:
                 row["choices"] = []
-        unit = getattr(raw, "UserString", None)
+        unit = None if heavy else getattr(raw, "UserString", None)
         if unit:
             row["shown"] = str(unit)
         rows.append(row)
@@ -279,7 +302,7 @@ def _answer(printed: str, what: str) -> dict:
 
 
 def read(bridge: Any, document: str, verbose: bool = False,
-         timeout: float = 60.0) -> dict:
+         timeout: float = 150.0) -> dict:
     """The whole tree of one document.
 
     `verbose` keeps the properties every object carries - placement,
@@ -291,6 +314,7 @@ def read(bridge: Any, document: str, verbose: bool = False,
         "verbose": bool(verbose),
         "housekeeping": json.dumps(sorted(HOUSEKEEPING)),
         "editable": json.dumps(EDITABLE),
+        "heavy": json.dumps(sorted(HEAVY)),
     }
     try:
         printed = bridge.run(script, timeout=timeout)
