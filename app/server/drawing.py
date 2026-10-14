@@ -1153,7 +1153,7 @@ def _path_profile(view: dict) -> dict:
     return {"level": level, "widths": widths, "datum": datum}
 
 
-def _order_ladders(plan: dict) -> None:
+def _order_ladders(plan: dict, floor: Optional[float] = None) -> None:
     """Shortest dimension nearest the view, as ISO 129-1 asks (4.3).
 
     The dimensions of one view are drawn in a stack - one below it, one to
@@ -1188,7 +1188,7 @@ def _order_ladders(plan: dict) -> None:
             return abs(at - (left if vertical else bottom))
 
         rows = _fit_rows(sorted((line_at(dim) for dim in stack), key=away),
-                         vertical)
+                         vertical, floor)
         for dim, at in zip(sorted(stack, key=lambda d: abs(d["measure"])),
                            rows):
             base = dim["p1"][0] if vertical else dim["p1"][1]
@@ -1199,8 +1199,12 @@ def _order_ladders(plan: dict) -> None:
 #: ISO 3098 text with nothing between them touch; this leaves a gap.
 DIM_STEP_MIN = 5.0
 
+#: Kept under the lowest dimension for the view's name.
+LABEL_ROOM = 14.0
 
-def _fit_rows(rows: list[float], vertical: bool) -> list[float]:
+
+def _fit_rows(rows: list[float], vertical: bool,
+              floor: Optional[float] = None) -> list[float]:
     """Keep a tall stack of dimensions inside the drawing frame.
 
     A part with a lot of features wants more rows than there is paper
@@ -1216,9 +1220,15 @@ def _fit_rows(rows: list[float], vertical: bool) -> list[float]:
     if len(rows) < 2:
         return rows
     first, last = rows[0], rows[-1]
+    # Below the view the stack shares its room with the view's own name,
+    # which has to go under everything: a label squeezed in between two
+    # dimension lines reads as a third dimension.
+    bottom_limit = min(FRAME_B - TEXT - 3.0,
+                       (floor - LABEL_ROOM) if floor is not None
+                       else FRAME_B - TEXT - 3.0)
     limit = ((FRAME_L + TEXT + 3.0) if vertical and last < first
              else (FRAME_R - TEXT - 3.0) if vertical
-             else (FRAME_B - TEXT - 3.0) if last > first
+             else bottom_limit if last > first
              else FRAME_T + TEXT + 3.0)
     room = limit - first
     wanted = last - first
@@ -1491,7 +1501,12 @@ def plan_view(name: str, view: dict, scale: float, dimension: str,
         # Leaders go right, because position dimensions go below and left.
         # Two things sharing the same margin is how a sheet ends up with a
         # hole size written across a pitch.
-        angle = math.radians((45, -45, 135)[index])
+        # Up-right, down-right, straight up. Never up-left: the left
+        # margin carries the vertical ladder and the margin below carries
+        # the horizontal one, and a leader sent into either writes its
+        # diameter across a dimension somebody is reading. That is what
+        # put "O9" on top of "200" on the shaker plate.
+        angle = math.radians((45, -45, 90)[index])
         cos_a, sin_a = math.cos(angle), math.sin(angle)
         # Start from the member furthest along the leader's own direction, so
         # it leaves from the outside of the group rather than crossing it.
@@ -1570,11 +1585,25 @@ def plan_view(name: str, view: dict, scale: float, dimension: str,
         seen.add(key)
         unique.append(dim)
     plan["dimensions"] = unique
-    _order_ladders(plan)
+    _order_ladders(plan, floor)
 
-    below = bottom + (DIM_OFFSET + level * DIM_STEP + 10.0
-                     if ("width" in dimension or level) else 5.0)
-    plan["label_at"] = (cx, min(below + 5.0, floor))
+    # Under everything the view actually carries, which is not the same as
+    # under where the rows were going to be: the stack is squeezed to fit
+    # the frame after it is ordered, so an estimate made before that put
+    # the view's name through the last dimension on a dense part.
+    lowest = max([dim["p1"][1] + dim["offset"]
+                  for dim in plan["dimensions"] if not dim["vertical"]]
+                 + [bottom], default=bottom)
+    below = lowest + (10.0 if ("width" in dimension or level) else 5.0)
+    # The cell floor is where a view would like to end, not a wall. A
+    # stack that needs more room than the cell has is squeezed to a floor
+    # where two values still read as two, and past that the name goes
+    # under the last dimension anyway - a little into the next cell's
+    # margin, which is empty, rather than between two dimension lines
+    # where it reads as a third one.
+    plan["label_at"] = (cx, min(below + 5.0,
+                                max(floor, lowest + LABEL_ROOM),
+                                FRAME_B - 6.0))
     return plan
 
 
