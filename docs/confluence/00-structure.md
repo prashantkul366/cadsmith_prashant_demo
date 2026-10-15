@@ -25,10 +25,11 @@ Text 2 CAD
 │   │   └── 💻 Tech Expo PPT (JP)
 │   └── 📁 Poster
 │       └── 💡 Tech Expo 2026 Poster | 15-05
-└── 📄 Roadmap | Next Steps                   14-roadmap.md
+├── 📄 Roadmap | Next Steps                   14-roadmap.md
+└── 📄 Timeline & Effort                      15-timeline-and-effort.md ← new
 ```
 
-## Three changes to the plan, and why
+## Four changes to the plan, and why
 
 **Attribution & Licensing is not optional.** The agent pipeline and the
 100-prompt benchmark are Carnegie Mellon's work, published as
@@ -44,6 +45,8 @@ matters for one specific reason: the "61 of 61 prompts built clean"
 figure was measured on the FreeCAD branch, and it must not be quoted as
 expo evidence. `07-evidence.md` says which numbers may be used and where
 each came from.
+
+**A timeline page, measured rather than remembered.** Commit history across all nine branches, converted to IST, with effort recovered from the gaps between commits and cross-checked against a surviving session log. It is the page to hand anybody who asks what this cost.
 
 **Scope needs the cost estimate and the catalogue in it.** Your draft
 listed the pipeline, the sliders and the outputs, but not the

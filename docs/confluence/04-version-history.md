@@ -56,17 +56,28 @@ an application.
 - Text read and written as UTF-8 rather than the locale codec — without
   which Japanese on a Windows machine is mojibake.
 
-## V3 — Backend made diagnosable
+## V3 — Measured, graded, and diagnosable
 
-No new features. This version exists because a model backend that fails
-for an unclear reason costs an afternoon, and on a stand it costs the
-demo.
+Two kinds of work in one day, 21 September.
 
-It says which AWS identity is actually in use, whether the variables
-reached the process, where each one came from — shell or file — and why
-Bedrock cannot run when it cannot, rather than announcing itself ready and
-failing at the first prompt. It also stopped the preflight rejecting a
-model id that was already correct.
+**The checks got sharper.** A rejected attempt learned to explain itself
+by measurement rather than only by the Judge's opinion. The app learned to
+say *where* the holes are and not just how many. What a part is made of
+and how closely it has to be held became things the plan can state and
+the checks can test. The request's own numbers are held fixed, so a
+dimension the engineer gave cannot drift. Results were graded by
+difficulty and by the edit chain an engineer actually works in — and
+**the first run against a real model was recorded here**, Qwen3-VL-8B
+over the tiered prompt set, which is the evaluation the Evidence page
+reports.
+
+**And the backend became diagnosable**, because one that fails for an
+unclear reason costs an afternoon, and on a stand it costs the demo. It
+now says which AWS identity is actually in use, whether the variables
+reached the process, where each one came from — shell or file — whether a
+global or a regional profile was chosen, and why Bedrock cannot run when
+it cannot, rather than announcing itself ready and failing at the first
+prompt.
 
 ## V4 — The UI refresh
 
