@@ -34,6 +34,7 @@ from .edits import Change, describe_parameters, parameters
 from . import builder as builder_mod
 from . import freecad_run
 from . import tree as tree_mod
+from . import nxturn
 from .jobs import (FREECAD_DEFAULT, JobManager, JobOptions, STATUS_DONE,
                    STATUS_ERROR)
 
@@ -711,6 +712,39 @@ def freecad_documents() -> JSONResponse:
         return JSONResponse({"available": False, "documents": []})
     return JSONResponse({"available": True,
                          "documents": freecad_run.open_documents(bridge)})
+
+
+@app.post("/api/nx/turn")
+async def nx_turn(request: Request) -> JSONResponse:
+    """One turn of the conversation with an engineer working in NX.
+
+    The plugin inside NX posts what the engineer asked for, the part's
+    feature tree, and what happened to last turn's operations. The answer
+    is the operations to perform next, each already checked - so an
+    operation that cannot work costs a turn here rather than reaching
+    somebody's part.
+
+    Nothing in this process touches NX. The plugin performs the work on
+    NX's own thread, which is the only place NX Open may be called from.
+    """
+    body = await request.json()
+    prompt = str(body.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400,
+                            detail="prompt is what the engineer asked for")
+    config = providers.resolve(provider_id=str(body.get("provider") or "")
+                               or None)
+    problems = providers.problems(config)
+    if problems:
+        raise HTTPException(status_code=503, detail="; ".join(problems))
+    try:
+        return JSONResponse(nxturn.turn(
+            providers.build_client(config), config.generation_model, prompt,
+            body.get("tree") or {}, body.get("results"),
+            body.get("asked_before")))
+    except Exception as error:
+        raise HTTPException(status_code=502,
+                            detail=f"{type(error).__name__}: {error}") from error
 
 
 @app.get("/api/freecad/documents/{document}/tree")
