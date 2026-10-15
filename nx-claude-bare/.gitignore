@@ -1,0 +1,5 @@
+# A transcript names the part and quotes its tree. It stays on the
+# machine that produced it.
+bare-transcript.txt
+*-transcript.txt
+__pycache__/
