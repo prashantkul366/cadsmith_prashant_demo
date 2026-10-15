@@ -73,8 +73,8 @@ split between them in proportion to its commits.
 
 | IST date | Day | Window | Hours | Commits | What was done |
 |---|---|---|---|---|---|
-| 30 Aug | Sat | 22:57–00:50 | 2.2 | 14 | **The first app, in one sitting.** App scaffolding, zero-touch pipeline instrumentation, job manager, HTTP server, the front end — STL viewer, live pipeline, plan and verdict panels. Natural-language edits and replay. OpenAI, Ollama and any OpenAI-compatible backend. PowerShell launcher and Windows notes. **An engineering drawing sheet from real orthographic projections** — it was there from the first night. Upstream credit added to the README |
-| 31 Aug | Sun | 10:11–11:33 | 1.7 | 10 | Hardening. A preflight that fails fast instead of hanging. Trust the OS certificate store, for networks that inspect TLS. Find a venv named either way. Clear the previous run's panels. Fix the active stage escaping its container. A mock provider |
+| 30 Aug | Sun | 22:57–00:50 | 2.2 | 14 | **The first app, in one sitting.** App scaffolding, zero-touch pipeline instrumentation, job manager, HTTP server, the front end — STL viewer, live pipeline, plan and verdict panels. Natural-language edits and replay. OpenAI, Ollama and any OpenAI-compatible backend. PowerShell launcher and Windows notes. **An engineering drawing sheet from real orthographic projections** — it was there from the first night. Upstream credit added to the README |
+| 31 Aug | Mon | 10:11–11:33 | 1.7 | 10 | Hardening. A preflight that fails fast instead of hanging. Trust the OS certificate store, for networks that inspect TLS. Find a venv named either way. Clear the previous run's panels. Fix the active stage escaping its container. A mock provider |
 | 7 Sep | Mon | 15:56–22:42 | 3.9 | 13 | **Bedrock, and the two apps merged.** Bedrock backend streaming the model's real reasoning. Catalogue, grounding, measured checks and the spend ceiling brought together. Japanese added, with the model kept reading English. UTF-8 instead of the locale codec. Token budget sized for thinking. A one-call check that the live SDK streams what the app expects, plus a model/config sweep. *Also, in the first repository: the Bedrock backend and the IoU/analyzer fixes, merged as PR #1 at 12:55* |
 | 14 Sep | Mon | 09:17–15:16 | 2.2 | 5 | **The drawing became an engineering drawing**, lettered like one, with DXF through ezdxf. A parameters view on the code panel. The catalogue made to work when nothing else is configured |
 | 15 Sep | Tue | 11:17–12:10 | 1.2 | 2 | The drawing built when the part is, not when someone asks. Reasoning effort on the panel, variable per run |
@@ -96,7 +96,7 @@ split between them in proportion to its commits.
 **The expo was built in 11 working days and about 28 hours**, across
 30 Aug → 25 Sep. The first working application — viewer, live pipeline,
 plan and verdict panels, multi-provider backend and an orthographic
-drawing sheet — existed after **one 2.2-hour sitting on a Saturday
+drawing sheet — existed after **one 2.2-hour sitting on a Sunday
 night**.
 
 **The work was bursty, not steady.** 15 working days inside a 47-day
