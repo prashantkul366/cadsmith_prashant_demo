@@ -25,6 +25,7 @@ is no pip in NX and on a corporate machine there is not going to be.
 
 | | |
 |---|---|
+| `whichpython.py` | which interpreter NX will use. Four lines, changes nothing. |
 | `hello.py`  | one Bedrock call, no NX. **Run this first.** |
 | `bare.py`   | the journal. Run it inside NX. |
 | `nxside.py` | the only file that touches NX: five tools. |
