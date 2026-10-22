@@ -1,11 +1,23 @@
 > **Provenance.** The CADSmith pipeline in `autofab/`, the benchmark in
 > `data/`, and everything below this note are the work of Jesse Barkley, Rumi
 > Loghmani and Amir Barati Farimani (Carnegie Mellon University) — see
-> [the paper](https://arxiv.org/abs/2603.26512) and the upstream repository,
-> [Ashutosh-Chauhan3025/CADSmith](https://github.com/Ashutosh-Chauhan3025/CADSmith).
+> [the paper](https://arxiv.org/abs/2603.26512) and the authors' repository,
+> [jabarkle/CADSmith](https://github.com/jabarkle/CADSmith), from which this
+> repository is forked.
+>
 > This repository adds a web application in [`app/`](app/) around that
-> pipeline, which is itself unmodified. See [`app/README.md`](app/README.md)
-> to run it.
+> pipeline. **The pipeline is no longer unmodified:** three commits here changed
+> `autofab/` — UTF-8 handling (`9745b29`), material and tolerance in the spec
+> plus assembly results (`b7903c8`), and holding the request's own numbers fixed
+> while no longer passing API keys to generated code (`c467040`). Together about
+> 315 lines added and 56 removed across `agents.py`, `executor.py` and
+> `pipeline.py`. Earlier wording in this file said the pipeline was untouched;
+> that was wrong. See [`docs/compliance.md`](docs/compliance.md).
+>
+> **The authors' repository carries no licence file**, so the default is all
+> rights reserved. Attribution is not permission. Written permission from the
+> authors is needed before this is used beyond evaluation.
+> See [`app/README.md`](app/README.md) to run it.
 
 # CADSmith
 

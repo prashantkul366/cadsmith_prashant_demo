@@ -3,6 +3,12 @@
 For YMSLI to take to YMRI. Written to be argued with: every claim says
 where it came from, and the ones that are assumptions say so.
 
+> **See also [`compliance.md`](compliance.md)**, which answers "how much
+> compliance does this need" for NX and for YMC, and records four things
+> found while checking the licensing question - including a credential
+> published in a public repository and the fact that the research code
+> this is built on carries no licence.
+
 **What I can and cannot tell you.** I can tell you what the software
 allows and where the technical risks are. I cannot tell you what Yamaha's
 policies permit - I have not seen them, and nobody outside your IT and
@@ -41,30 +47,39 @@ nothing; it writes a report of what the API offers.
 
 ---
 
-## 2. Licensing - the first hard gate
+## 2. Licensing
 
-From Siemens community and vendor sources, **not** from Siemens' licence
-terms, which should be confirmed with your reseller:
+> **Corrected.** This section previously framed the question as signed
+> versus unsigned applications, with an author licence needed per seat to
+> run unsigned code. That is the rule for **compiled** NX Open
+> applications and does not describe what we are shipping, which is a
+> journal. The current reading is below; the full version, with the
+> sources, is in [`compliance.md`](compliance.md).
+
+From Siemens community sources, **not** from Siemens' licence terms,
+which should be confirmed with your reseller:
 
 | | |
 |---|---|
-| Running a **signed** NX Open application | No separate runtime licence. Needs Gateway plus whatever modules the code exercises. |
-| Running **unsigned** code | Needs an **author** licence, per seat. |
-| Authoring and distributing Python NX Open code | A Python author feature (NX30115) or the Toolkits bundle (NX30106). |
+| **Running** a Python journal | No technical barrier. A Gateway licence can execute one, given the module licences its operations need. |
+| **Authoring and distributing** Python NX Open code | Siemens' stated position is that the legal conditions apply even though nothing enforces them: the Python Author feature (NX30115) or the Toolkits bundle (NX30106). |
+| **Signing** | For compiled applications. Not applicable to a journal. |
 
-**The question that decides the cost of the whole pilot:** is the
-delivered plugin **signed**? Signed, four or five engineers run it on the
-seats they already have. Unsigned, each of them needs an author licence.
-That is the difference between "install it" and a purchase order, and it
-should be settled before anyone budgets this.
+**The shape of the risk is not cost, it is audit.** The journal will run
+whether or not the authoring licence is held, so an unlicensed-authoring
+finding surfaces at a Siemens licence audit rather than at install time.
+Yamaha is the size of customer that gets audited.
 
 Ask the Siemens account manager, verbatim:
 
-> We are developing an NX Open application in Python for internal use at
-> Yamaha. (a) Which author licence do we need to develop it? (b) Can
-> Siemens sign it so end users run it on standard execute licences, and
-> what does that process involve? (c) Does running it count against any
-> module licence beyond Gateway?
+> We are writing NX Open code in Python as journals, for internal use at
+> Yamaha, and distributing them to a handful of our own engineers. (a)
+> Does that require the Python Author feature (NX30115) or the Toolkits
+> bundle (NX30106), or is a Gateway/execute licence sufficient for both
+> writing and running them? (b) Does distributing journals internally
+> count as distribution under our agreement? (c) Which module licences
+> must a seat hold for a journal that edits expressions and suppresses
+> features?
 
 ---
 

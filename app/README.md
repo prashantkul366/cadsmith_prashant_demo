@@ -10,11 +10,25 @@ the kernel exported, the dimensions are the kernel's own measurements, the code
 is what the Coder agent wrote, and the verdict is the Judge's. Nothing is
 simulated and no progress bar runs on a timer.
 
-## Nothing in the research code changed
+## What changed in the research code, and what did not
 
-`autofab/`, `scripts/`, `data/`, `run.py` and `requirements.txt` are untouched.
-The published pipeline and its benchmark numbers stay reproducible; this app is
-a layer around them.
+`scripts/`, `data/`, `run.py` and `requirements.txt` are untouched. **`autofab/`
+is not** — three commits changed it, and an earlier version of this section
+wrongly said nothing had:
+
+| Commit | What it changed |
+|---|---|
+| `9745b29` | Read and write text as UTF-8 instead of the locale codec |
+| `b7903c8` | Material and tolerance carried in the spec; a result may be an assembly |
+| `c467040` | The request's own numbers held fixed; API keys no longer passed to generated code |
+
+About 315 lines added and 56 removed, across `agents.py`, `executor.py` and
+`pipeline.py`. **The published benchmark numbers should therefore be re-run
+before they are quoted as reproducible against this checkout**, or quoted from
+the authors' paper with their own repository named as the source.
+
+The design intent below still holds — the app layer itself adds no edits — but
+the three commits above sit underneath it.
 
 Observability without edits works in three ways: `Pipeline` builds its executor
 and validator as instance attributes, so instrumented subclasses are swapped in
