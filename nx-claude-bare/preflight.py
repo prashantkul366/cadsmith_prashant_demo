@@ -278,17 +278,19 @@ def reach_section(host):
 
 # ------------------------------------------------------- credentials, disk
 def credentials_section():
-    head("6. AWS credentials (presence only - no values are read)")
+    head("6. AWS credentials (presence only - never read, never printed)")
     env = [n for n in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
                        "AWS_SESSION_TOKEN", "AWS_PROFILE")
            if os.environ.get(n)]
     where = os.path.expanduser(
         os.environ.get("AWS_SHARED_CREDENTIALS_FILE", "~/.aws/credentials"))
     on_disk = os.path.isfile(where)
-    # Either route is enough, so this is one check and not two - a
-    # missing file is not a failure when the environment carries them.
-    check("credentials available", bool(env) or on_disk,
-          "" if (env or on_disk) else "neither environment nor file")
+    # Reported, never failed. On the machine being surveyed the keys are
+    # usually absent on purpose - they belong to whoever runs the real
+    # test, not to the engineer lending their NX seat - and a red FAIL
+    # for an expected absence makes the whole report look worse than it
+    # is.
+    say("  [--  ] credentials are not needed for this check")
     say("       environment: %s" % (", ".join(env) if env else "none set"))
     say("       file:        %s" % (where if on_disk else "not present"))
     say("       region:      %s" % region())
@@ -298,8 +300,9 @@ def credentials_section():
         say("       will NOT reach the journal. The file is the safer route")
         say("       on a machine where NX stays running: `aws configure`.")
     if not env and not on_disk:
-        say("       Run `aws configure`, or copy a credentials file into")
-        say("       place, before the real run.")
+        say("       None present, which is expected if the keys belong to")
+        say("       somebody else. They are only needed for the real run,")
+        say("       not for this survey.")
 
 
 def disk_section(here):
