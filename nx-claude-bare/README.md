@@ -25,8 +25,8 @@ is no pip in NX and on a corporate machine there is not going to be.
 
 | | |
 |---|---|
-| `whichpython.py` | which interpreter NX will use. Four lines, changes nothing. |
-| `hello.py`  | one Bedrock call, no NX. **Run this first.** |
+| `preflight.py` | **run this first.** Will this machine run it at all? Checks NX, Python, the certificate trust store, proxy settings, whether AWS is reachable through corporate TLS inspection, credentials and disk. Changes nothing. |
+| `hello.py`  | one Bedrock call, no NX. |
 | `bare.py`   | the journal. Run it inside NX. |
 | `nxside.py` | the only file that touches NX: five tools. |
 | `bedrock.py`| builds one Bedrock request and parses the reply. |
@@ -65,11 +65,11 @@ If the model id comes back 404, that is this account not being able to
 call that exact id — usually the version or the prefix, not a typo. Set
 `BARE_MODEL` to whichever id already works on this account.
 
-Worth doing twice: once with any Python 3, and once with NX's own
-interpreter from the NX installation's `NXBIN` directory. NX's
-interpreter is the one that has to make the call, and its TLS and proxy
-settings are the ones in question. If you cannot find it, skip the second
-run — the journal will tell you soon enough.
+On a locked-down machine there may be no Python installed at all and no
+way to install one. That is what `preflight.py` is for: run it as an NX
+journal instead, using NX's own interpreter — which is the one that has
+to make the call, and whose TLS and proxy settings are the ones actually
+in question.
 
 ## Step 2 — in NX
 
