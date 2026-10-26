@@ -4,6 +4,5 @@ bare-transcript.txt
 *-transcript.txt
 __pycache__/
 # Names the machine, its proxy and its paths.
-preflight-report.txt
-preflight-write-test.tmp
-nxcheck-report.txt
+check-write-test.tmp
+check-report.txt

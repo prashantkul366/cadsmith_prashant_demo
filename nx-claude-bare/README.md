@@ -25,13 +25,13 @@ is no pip in NX and on a corporate machine there is not going to be.
 
 | | |
 |---|---|
-| `nxcheck.py` | **run this first, on the NX machine.** One file, one run, both questions: does NX here support what we are building, and will this machine let it reach a model. Changes nothing, needs no AWS keys. |
+| `check.py` | **run this first, on the NX machine.** One file, one run, both questions: does NX here support what we are building, and will this machine let it reach a model. Changes nothing, needs no AWS keys. |
 | `hello.py`  | one Bedrock call, no NX. |
 | `bare.py`   | the journal. Run it inside NX. |
 | `nxside.py` | the only file that touches NX: five tools. |
 | `bedrock.py`| builds one Bedrock request and parses the reply. |
 | `sigv4.py`  | signs it, with the standard library alone. |
-| `check.py`  | checks that run with no NX and no AWS account. |
+| `selftest.py` | developer checks that run with no NX and no AWS account. |
 | `prompt.txt`| the task. Edit this. |
 
 ## Step 1 — before NX
@@ -139,7 +139,7 @@ again. That is the experiment.
 ## check.py
 
 ```
-python check.py
+python selftest.py
 ```
 
 Everything that can be verified without NX and without an AWS account:
