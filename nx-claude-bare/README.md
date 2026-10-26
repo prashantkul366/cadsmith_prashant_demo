@@ -25,8 +25,7 @@ is no pip in NX and on a corporate machine there is not going to be.
 
 | | |
 |---|---|
-| `nxcheck.py` | **run this first, on the NX machine.** Does NX here support what we are building? Reads the feature tree and the expressions, reports which API names this release actually has, and checks the write path. **No network at all.** Changes nothing. |
-| `preflight.py` | **run this first.** Will this machine run it at all? Checks NX, Python, the certificate trust store, proxy settings, whether AWS is reachable through corporate TLS inspection, credentials and disk. Changes nothing. |
+| `nxcheck.py` | **run this first, on the NX machine.** One file, one run, both questions: does NX here support what we are building, and will this machine let it reach a model. Changes nothing, needs no AWS keys. |
 | `hello.py`  | one Bedrock call, no NX. |
 | `bare.py`   | the journal. Run it inside NX. |
 | `nxside.py` | the only file that touches NX: five tools. |
