@@ -159,12 +159,17 @@ WRITE_PATH = [
     ("work.Expressions", "Edit", "change an expression's value"),
     ("work.Features", "SuppressFeatures", "take a feature out"),
     ("work.Features", "UnsuppressFeatures", "put it back"),
-    ("work.Features", "DeleteFeatures", "remove it"),
     ("session", "SetUndoMark", "make the change reversible"),
     ("session.UpdateManager", "DoUpdate", "rebuild the part"),
     ("session.UpdateManager", "AddToDeleteList",
      "the other way to delete: mark it, then update"),
+    ("work.Features", "DeleteFeatures", "remove a feature directly"),
 ]
+
+#: A method that is absent is only a problem if nothing replaces it.
+#: Measured on NX v2412.0.0.5001: FeatureCollection has no
+#: DeleteFeatures, and UpdateManager.AddToDeleteList is how it is done.
+COVERED_BY = {"DeleteFeatures": "AddToDeleteList"}
 
 NX_FAILURES = []        # blocking problems on the NX side
 NET_FAILURES = []       # blocking problems on the machine / network side
@@ -353,6 +358,19 @@ def expression_half(work):
         say("  patterns before concluding anything - and send the report")
         say("  either way.")
 
+    nameless = [(str(ask(o, "Name")[1] or ""), ask(o, "Value")[1])
+                for o in expressions
+                if not str(ask(o, "Description")[1] or "").strip()]
+    if nameless:
+        say()
+        say("  The %d that do NOT say what they drive:" % len(nameless))
+        for name, value in nameless[:8]:
+            say("       %-10s = %s" % (name, short(value, 20)))
+        say("       These are usually sketch dimensions. The tool can")
+        say("       still edit them by name, but it cannot know what they")
+        say("       control, so it cannot act on a request like 'make it")
+        say("       wider' unless the width is a feature expression.")
+
     say()
     mark(len(numeric) > 0, "plain numbers we could safely edit",
          "%d of %d (%d formula-driven, the rest not numeric)"
@@ -370,6 +388,7 @@ def expression_half(work):
 def write_path_half(session, work):
     head("4. Would a change go through")
     say("  Checked for existence only. Nothing here is called.")
+    present = {}
     scope = {"session": session}
     for key, getter in (("session.UpdateManager", lambda: session.UpdateManager),
                         ("work.Expressions", lambda: work.Expressions),
@@ -388,9 +407,19 @@ def write_path_half(session, work):
             found = callable(getattr(holder, method))
         except Exception:
             found = False
+        present[method] = found
         mark(found, "%s.%s" % (owner, method), why)
         if not found:
-            NX_FAILURES.append("%s.%s is missing" % (owner, method))
+            present[method] = False
+            # Only blocking if nothing else covers it. On 2412
+            # DeleteFeatures is absent and AddToDeleteList is present,
+            # which is the documented route and good enough.
+            covered = COVERED_BY.get(method)
+            if covered and present.get(covered, True):
+                say("       not blocking: %s covers it on this release"
+                    % covered)
+            else:
+                NX_FAILURES.append("%s.%s is missing" % (owner, method))
             # Do not guess a second time - ask the object what it has.
             stem = ""
             for letter in method[1:]:
