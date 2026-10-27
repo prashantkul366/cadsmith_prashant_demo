@@ -320,6 +320,86 @@ def nx_python(arguments):
     return answer
 
 
+# --------------------------------------------------------------------
+# the preview: say what is about to happen, before it happens
+# --------------------------------------------------------------------
+
+#: The tools that change the part. Everything else is read-only and
+#: needs no approval.
+WRITES = ("set_expression", "suppress_feature", "delete_feature",
+          "nx_python")
+
+
+def describe(name, arguments):
+    """One line an engineer can read, for one proposed operation."""
+    arguments = arguments or {}
+    if name == "set_expression":
+        return "set %s to %s" % (arguments.get("name"),
+                                 arguments.get("value"))
+    if name == "suppress_feature":
+        off = arguments.get("suppressed", True)
+        return "%s %s" % ("suppress" if off else "unsuppress",
+                          arguments.get("name"))
+    if name == "delete_feature":
+        return "DELETE the feature %s" % arguments.get("name")
+    if name == "nx_python":
+        code = str(arguments.get("code", "")).strip().splitlines()
+        first = code[0] if code else ""
+        return "run %d line(s) of NX Open code, beginning: %s" % (
+            len(code), first[:60])
+    if name == "read_tree":
+        return "read the feature tree (changes nothing)"
+    return "%s %s" % (name, arguments)
+
+
+def _affirmative(NXOpen):
+    """The value this NX uses for "yes", found by name rather than guessed.
+
+    The integer a message box returns is not something to hardcode from
+    memory: guess it wrong one way and every change is refused, guess it
+    wrong the other way and every change is approved without being read.
+    So the enum is looked up by name, and if it cannot be found this
+    returns None and the caller does not pretend to have asked.
+    """
+    for holder in ("NXMessageBox", "MessageBox"):
+        box = getattr(NXOpen, holder, None)
+        if box is None:
+            continue
+        for group in ("DialogResponse", "Response", "DialogResponseType"):
+            enum = getattr(box, group, None)
+            if enum is None:
+                continue
+            for word in ("Yes", "Ok", "OK", "First"):
+                value = getattr(enum, word, None)
+                if value is not None:
+                    return value
+    return None
+
+
+def approve(lines):
+    """Show the plan and ask. True, False, or None if it could not ask.
+
+    None is not a yes. The caller decides what to do with it and says so
+    out loud; nothing here quietly treats "could not ask" as consent.
+    """
+    if os.environ.get("BARE_APPROVE", "").strip() in ("0", "no", "false"):
+        return None
+    try:
+        NXOpen = _nx()
+        wanted = _affirmative(NXOpen)
+        if wanted is None:
+            return None
+        ui = NXOpen.UI.GetUI()
+        box = ui.NXMessageBox
+        kind = NXOpen.NXMessageBox.DialogType.Question
+        text = ("Claude proposes to change this part:\n\n  "
+                + "\n  ".join(lines)
+                + "\n\nApply these changes?")
+        return box.Show("CADSmith", kind, text) == wanted
+    except Exception:
+        return None
+
+
 #: What Claude is told it can do. Deliberately thin: an argument name and
 #: what it is, and no advice about when to use which.
 TOOLS = [

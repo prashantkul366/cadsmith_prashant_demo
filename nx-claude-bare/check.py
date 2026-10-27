@@ -441,6 +441,41 @@ def write_path_half(session, work):
                     % (owner, stem))
 
 
+    # Can we ask the engineer before changing anything? The preview is
+    # printed either way; the dialog is what turns it into consent.
+    say()
+    try:
+        import NXOpen
+        box = NXOpen.UI.GetUI().NXMessageBox
+        mark(box is not None, "an approval dialog can be raised",
+             "NXMessageBox")
+        wanted = None
+        for group in ("DialogResponse", "Response", "DialogResponseType"):
+            enum = getattr(NXOpen.NXMessageBox, group, None)
+            if enum is None:
+                continue
+            for word in ("Yes", "Ok", "OK", "First"):
+                value = getattr(enum, word, None)
+                if value is not None:
+                    wanted = "%s.%s = %r" % (group, word, value)
+                    break
+            if wanted:
+                break
+        mark(wanted is not None, "and its answer for 'yes' can be named",
+             wanted or "not found - the tool prints the plan but cannot "
+                       "ask, and says so rather than assuming consent")
+        names = sorted(n for n in dir(NXOpen.NXMessageBox)
+                       if not n.startswith("_"))
+        if names:
+            say("       NXMessageBox offers: %s" % ", ".join(names[:10]))
+    except Exception as error:
+        mark(False, "an approval dialog can be raised",
+             "%s: %s" % (type(error).__name__, error))
+        say("       Not blocking: the plan is printed to the Information")
+        say("       window before any change either way, and every change")
+        say("       has an undo mark behind it.")
+
+
 def write_test_half(session, work, numeric):
     head("5. A real no-op write")
     if not DO_WRITE_TEST:

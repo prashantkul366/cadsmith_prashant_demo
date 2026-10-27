@@ -1,4 +1,3 @@
 Read the feature tree of the open part and tell me, in a few lines, what
-it is: how it was built, which expressions drive which features, and
-which single expression I would change to make the part 10 mm taller.
+it is: how it was built, and which expressions drive which features.
 Change nothing.

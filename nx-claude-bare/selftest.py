@@ -193,10 +193,18 @@ class FakeNX(object):
     """An NX that is a dictionary of expressions and nothing else."""
 
     TOOLS = nxside.TOOLS
+    WRITES = nxside.WRITES
+    describe = staticmethod(nxside.describe)
 
-    def __init__(self):
+    def __init__(self, verdict=True):
         self.values = {"p7": 12.0}
         self.done = []
+        self.asked = []
+        self.verdict = verdict        # what the approval dialog answers
+
+    def approve(self, plan):
+        self.asked.append(list(plan))
+        return self.verdict
 
     def perform(self, name, arguments):
         self.done.append((name, arguments))
@@ -301,15 +309,98 @@ def check_loop():
 # 4. the NX side, as far as it can be checked without NX
 # --------------------------------------------------------------------
 
+def check_preview():
+    print("the preview, before anything is changed:")
+
+    # a read-only round must not ask anybody anything
+    nx = FakeNX()
+    bare.conversation(nx, scripted(
+        use("a", "read_tree", {}),
+        {"content": [{"type": "text", "text": "done"}],
+         "stop_reason": "end_turn"}), "just look", note=lambda line: None)
+    check("a read-only round is never put to the engineer", nx.asked == [],
+          str(nx.asked))
+
+    # an approved round goes through, and the plan is in the engineer's words
+    nx = FakeNX(verdict=True)
+    lines = []
+    bare.conversation(nx, scripted(
+        use("b", "set_expression", {"name": "p7", "value": 20}),
+        {"content": [{"type": "text", "text": "done"}],
+         "stop_reason": "end_turn"}), "change it", note=lines.append)
+    check("a change is shown before it is made",
+          nx.asked == [["set p7 to 20"]], str(nx.asked))
+    check("and performed once approved", nx.values["p7"] == 20.0,
+          str(nx.values))
+    check("the plan is in the transcript too",
+          any("PROPOSED CHANGES" in line for line in lines))
+
+    # a refused round changes nothing, and the model is told why
+    nx = FakeNX(verdict=False)
+    lines = []
+    messages = bare.conversation(nx, scripted(
+        use("c", "set_expression", {"name": "p7", "value": 99}),
+        {"content": [{"type": "text", "text": "understood"}],
+         "stop_reason": "end_turn"}), "change it", note=lines.append)
+    check("a refusal performs nothing at all", nx.done == [], str(nx.done))
+    check("and the part is untouched", nx.values["p7"] == 12.0,
+          str(nx.values))
+    check("and it is said out loud",
+          any("refused at the dialog" in line for line in lines))
+    told = [block for message in messages
+            if isinstance(message.get("content"), list)
+            for block in message["content"]
+            if block.get("type") == "tool_result"]
+    check("the model is told the engineer declined",
+          len(told) == 1 and told[0]["is_error"] is True
+          and "declined" in told[0]["content"], str(told))
+
+    # where no dialog can be raised, that is never silently a yes
+    nx = FakeNX(verdict=None)
+    lines = []
+    bare.conversation(nx, scripted(
+        use("d", "set_expression", {"name": "p7", "value": 31}),
+        {"content": [{"type": "text", "text": "done"}],
+         "stop_reason": "end_turn"}), "change it", note=lines.append)
+    check("an unavailable dialog is reported, not assumed",
+          any("no approval dialog" in line for line in lines))
+    check("and the change still goes through, with undo behind it",
+          nx.values["p7"] == 31.0, str(nx.values))
+
+    print("the operations, in an engineer's words:")
+    for name, arguments, wanted in (
+            ("set_expression", {"name": "p58", "value": 60}, "set p58 to 60"),
+            ("suppress_feature", {"name": "BLEND(3)"}, "suppress BLEND(3)"),
+            ("delete_feature", {"name": "BLEND(3)"},
+             "DELETE the feature BLEND(3)"),
+            ("read_tree", {}, "read the feature tree (changes nothing)")):
+        check("%s reads as %r" % (name, wanted),
+              nxside.describe(name, arguments) == wanted,
+              nxside.describe(name, arguments))
+    code = nxside.describe("nx_python", {"code": "a = 1\nb = 2"})
+    check("nx_python says how much code and how it starts",
+          code.startswith("run 2 line(s)") and "a = 1" in code, code)
+
+
 def check_nxside():
     print("the NX side, without NX:")
     check("an unknown tool is refused, not raised",
           nxside.perform("fly", {})["ok"] is False)
     answer = nxside.perform("read_tree", {})
-    check("no NX means a refusal with NX's own words, not a traceback "
-          "out of the journal",
-          answer["ok"] is False and "NXOpen" in answer["why"],
-          json.dumps(answer)[:200])
+    try:
+        import NXOpen  # noqa: F401
+        has_nx = True
+    except Exception:
+        has_nx = False
+    if has_nx:
+        check("with an NX present, read_tree answers with a tree",
+              answer.get("features") is not None,
+              json.dumps(answer)[:160])
+    else:
+        check("no NX means a refusal with NX's own words, not a traceback "
+              "out of the journal",
+              answer.get("ok") is False and "NXOpen" in answer.get("why", ""),
+              json.dumps(answer)[:200])
 
     held = dict(os.environ)
     os.environ["BARE_DRY"] = "1"
@@ -331,11 +422,59 @@ def check_nxside():
         os.environ.update(held)
 
 
+def check_end_to_end():
+    """The real nxside, against an NX-shaped stand-in, with a scripted model.
+
+    Everything else here tests a piece. This drives the whole path -
+    conversation, preview, nxside, the NX object model - and is the
+    closest thing to the real run that exists without a seat. It is
+    skipped where no NXOpen can be imported, and runs against the real
+    one if there is one.
+    """
+    try:
+        import NXOpen  # noqa: F401
+    except Exception:
+        print("end to end: skipped, no NXOpen importable here")
+        return
+    print("end to end, real nxside against an NX:")
+    before = nxside.read_tree({})
+    check("read_tree returns a part with features and expressions",
+          before.get("ok") is not False and before.get("features")
+          and before.get("expressions"), str(before)[:120])
+    named = [e for e in before["expressions"] if e["describes"]]
+    check("expressions carry what they drive", len(named) > 0,
+          str(named[:1]))
+    check("units came back as text, not as an object",
+          all(isinstance(e["units"], str) for e in before["expressions"]))
+    plain = [e for e in before["expressions"] if not e["equation"]]
+    check("a plain number is not mistaken for a formula",
+          len(plain) > 0,
+          "all %d looked formula-driven" % len(before["expressions"]))
+
+    lines = []
+    bare.conversation(
+        nxside,
+        scripted(use("a", "read_tree", {}),
+                 use("b", "set_expression", {"name": "p7", "value": 20}),
+                 {"content": [{"type": "text", "text": "p7 is 20 now."}],
+                  "stop_reason": "end_turn"}),
+        "make the hole 20 mm", note=lines.append)
+    after = nxside.read_tree({})
+    changed = [e for e in after["expressions"] if e["name"] == "p7"]
+    check("the model's edit reached the part",
+          bool(changed) and abs(changed[0]["value"] - 20.0) < 1e-9,
+          str(changed))
+    check("and the plan was shown first",
+          any("set p7 to 20" in line for line in lines))
+
+
 def main():
     check_signature()
     check_request()
     check_loop()
+    check_preview()
     check_nxside()
+    check_end_to_end()
     print("")
     if failures:
         print("%d check%s failed:" % (len(failures),

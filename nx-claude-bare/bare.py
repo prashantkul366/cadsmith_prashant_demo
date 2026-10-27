@@ -75,6 +75,31 @@ def conversation(nx, ask, prompt, rounds=12, note=None):
             return messages
 
         messages.append({"role": "assistant", "content": reply["content"]})
+
+        # The whole round is known before any of it runs, so it can be
+        # shown as a set and approved as a set. Printing it always
+        # works; asking depends on a dialog that may not resolve, and
+        # "could not ask" is never treated as a yes without saying so.
+        changes = [c for c in calls if c.get("name") in nx.WRITES]
+        if changes:
+            plan = [nx.describe(c.get("name"), c.get("input")) for c in changes]
+            note("\nPROPOSED CHANGES")
+            for line in plan:
+                note("  - " + line)
+            verdict = nx.approve(plan)
+            if verdict is False:
+                note("  refused at the dialog. Nothing was changed.")
+                messages.append({"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": c.get("id"),
+                     "content": json.dumps(
+                         {"ok": False,
+                          "why": "the engineer declined these changes"}),
+                     "is_error": True} for c in calls]})
+                continue
+            if verdict is None:
+                note("  (no approval dialog on this NX, or it is switched"
+                     " off - proceeding, with an undo mark per change)")
+
         results = []
         for call in calls:
             arguments = call.get("input") or {}

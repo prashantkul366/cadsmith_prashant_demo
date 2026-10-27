@@ -33,6 +33,7 @@ is no pip in NX and on a corporate machine there is not going to be.
 | `sigv4.py`  | signs it, with the standard library alone. |
 | `selftest.py` | developer checks that run with no NX and no AWS account. |
 | `prompt.txt`| the task. Edit this. |
+| `selftest.py` | developer checks. Run against a stand-in NX with `PYTHONPATH=<fake>`; skips the NX parts without one. |
 
 ## Step 1 — before NX
 
@@ -105,6 +106,26 @@ block, it writes the `NXOpen.Features.BlockFeatureBuilder` calls itself,
 and if it gets a class name wrong on 2412 it sees the traceback and tries
 again. That is the experiment.
 
+## The preview
+
+Before any round that would change the part, the whole set of proposed
+changes is printed in the engineer's own words:
+
+```
+PROPOSED CHANGES
+  - set p58 to 60
+  - suppress BLEND(3)
+```
+
+Then it asks, through an NX message box, and performs nothing if the
+answer is no — the model is told it was declined and carries on from
+there. Where the dialog cannot be raised on a given release, that is
+**said out loud and never treated as a yes**; the plan is still printed
+and every change still has an undo mark behind it. `BARE_APPROVE=0`
+turns the asking off and leaves the printing.
+
+Read-only rounds are never put to the engineer.
+
 ## Before you run it on anything you care about
 
 * **An undo mark is set before every change.** A bad edit is one Ctrl+Z
@@ -131,6 +152,7 @@ again. That is the experiment.
 | `BARE_DRY=1`    | perform nothing; report what would have been done. |
 | `BARE_ROUNDS`   | how many model turns before giving up. Default 12. |
 | `BARE_THINKING=1` | adaptive extended thinking. Try it once the plain path works. |
+| `BARE_APPROVE=0` | print the plan but do not ask. |
 | `BARE_LOG`      | where to write the transcript. |
 | `AWS_REGION`    | else `~/.aws/config`, else `us-east-1`. |
 | `AWS_PROFILE`   | which profile to read. |
