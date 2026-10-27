@@ -20,8 +20,10 @@ FEATURE_NAME = ("JournalIdentifier", "Name")
 FEATURE_KIND = ("FeatureType", "Type")
 #: Both spellings of "is this feature switched off".
 FEATURE_OFF = ("Suppressed", "IsSuppressed")
-#: Both spellings of an expression's formula.
-EXPRESSION_FORMULA = ("Equation", "RightHandSide")
+#: Where the right-hand side might be. RightHandSide FIRST: on NX
+#: v2412.0.0.5001, measured, `Equation` answers with the whole equation
+#: - "p4_z=0.00000000000" - while `RightHandSide` answers "0.00000000000".
+EXPRESSION_FORMULA = ("RightHandSide", "Equation")
 
 
 def _first(thing, names, default=None):
@@ -65,13 +67,26 @@ def expression(raw):
     name = _text(_first(raw, ("Name",)))
     if not name:
         return None
-    formula = _text(_first(raw, EXPRESSION_FORMULA))
+    formula = _text(_first(raw, EXPRESSION_FORMULA)).strip()
     value = _number(_first(raw, ("Value",), 0.0))
-    # A formula that is just the number is not a formula. NX stores the
-    # right-hand side of `p7 = 13` as "13", and treating that as driven
-    # would make every plain number unwritable.
-    if formula.strip() in ("", _text(value), "%g" % value):
-        formula = ""
+    # Where only the whole equation is on offer, drop the name from the
+    # front of it, so "p4_z=0.0" is read as "0.0".
+    if formula.startswith(name + "="):
+        formula = formula[len(name) + 1:].strip()
+    # A right-hand side that is only the number is not a formula, and
+    # treating one as driven would make every plain number unwritable -
+    # which is to say, it would make the tool refuse to edit anything.
+    # Compared as numbers and never as text: "0.00000000000" and "0.0"
+    # are the same number and will never be the same string. That is
+    # exactly how this went wrong on 2412 before it was measured.
+    if not formula:
+        pass
+    else:
+        try:
+            if abs(float(formula) - value) < 1e-9:
+                formula = ""
+        except ValueError:
+            pass
     return {
         "name": name,
         "value": value,

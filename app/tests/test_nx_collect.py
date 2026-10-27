@@ -163,6 +163,57 @@ def main() -> int:
     check("a feature with no name at all is dropped rather than guessed at",
           collect.feature(Nameless()) is None, "")
 
+    print("\nWhat NX 2412.0.0.5001 actually answers")
+
+    class Real2412:
+        """Measured on a real NX v2412.0.0.5001, not assumed.
+
+        `Equation` carries the whole equation, name and all, and
+        `RightHandSide` carries only the number - with eleven decimal
+        places, so no string comparison against the value will ever
+        match it.
+        """
+        Name = "p7"
+        Value = 13.0
+        Units = "mm"
+        Description = "p7 (Simple Hole(12) Diameter)"
+        Equation = "p7=13.00000000000"
+        RightHandSide = "13.00000000000"
+
+    plain = collect.expression(Real2412())
+    check("the whole equation is not mistaken for a formula",
+          plain["formula"] == "",
+          "read as %r - if this is not empty the tool refuses to edit "
+          "every expression on the part" % plain["formula"])
+    check("and the value survives", plain["value"] == 13.0,
+          str(plain["value"]))
+
+    class Driven2412(Real2412):
+        Name = "p9"
+        Value = 3.0
+        Equation = "p9=p3/2"
+        RightHandSide = "p3/2"
+
+    driven = collect.expression(Driven2412())
+    check("a real formula on 2412 is still recognised",
+          driven["formula"] == "p3/2", repr(driven["formula"]))
+
+    class EquationOnly:
+        """Where only the whole equation is on offer."""
+        Name = "p4_z"
+        Value = 0.0
+        Units = "mm"
+        Description = "(Point(8) Z)"
+        Equation = "p4_z=0.00000000000"
+
+        @property
+        def RightHandSide(self):
+            raise RuntimeError("not available on this release")
+
+    stripped = collect.expression(EquationOnly())
+    check("the name is stripped from the front of a bare equation",
+          stripped["formula"] == "", repr(stripped["formula"]))
+
     print("\n" + "=" * 58)
     print("ALL CHECKS PASSED" if not failures else f"{failures} CHECK(S) FAILED")
     return 1 if failures else 0

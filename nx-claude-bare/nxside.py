@@ -94,6 +94,42 @@ def _get(thing, name, default=None):
         return default
 
 
+def _units(expression):
+    """The unit as text. On 2412 `Units` answers with an object."""
+    unit = _get(expression, "Units", "")
+    if isinstance(unit, str):
+        return unit
+    for attribute in ("Abbreviation", "Symbol", "Name"):
+        found = _get(unit, attribute, "")
+        if found:
+            return str(found)
+    return ""
+
+
+def _equation(expression, name):
+    """The right-hand side, or "" when it is just the number.
+
+    Measured on NX v2412.0.0.5001: `Equation` answers with the whole
+    equation, "p4_z=0.00000000000", and `RightHandSide` with just the
+    number. Reading Equation and comparing it to the value as text makes
+    every plain number look formula-driven, and a tool that thinks every
+    expression is driven will refuse to edit any of them.
+    """
+    text = str(_get(expression, "RightHandSide", "") or "").strip()
+    if not text:
+        text = str(_get(expression, "Equation", "") or "").strip()
+        if text.startswith(name + "="):
+            text = text[len(name) + 1:].strip()
+    if not text:
+        return ""
+    try:
+        if abs(float(text) - float(_get(expression, "Value", 0.0))) < 1e-9:
+            return ""          # a number, not a formula
+    except (TypeError, ValueError):
+        pass
+    return text
+
+
 # --------------------------------------------------------------------
 # the tools
 # --------------------------------------------------------------------
@@ -118,13 +154,12 @@ def read_tree(arguments):
         expressions.append({
             "name": str(name),
             "value": _get(one, "Value", None),
-            "units": str(_get(one, "Units", "")),
+            "units": _units(one),
             # NX writes what an expression drives in here, as
             # "p7 (Simple Hole(12) Diameter)". Without it the list is
             # p1..p40 and means nothing.
             "describes": str(_get(one, "Description", "")),
-            "equation": str(_get(one, "Equation",
-                                 _get(one, "RightHandSide", ""))),
+            "equation": _equation(one, str(name)),
         })
     return {
         "part": str(_get(work, "FullPath", _get(work, "Name", "?"))),
@@ -210,8 +245,16 @@ def delete_feature(arguments):
     if one is None:
         return {"ok": False, "why": "no feature called " + repr(name)}
     _mark("bare: delete " + name)
+    # NX v2412.0.0.5001 has no Features.DeleteFeatures - measured, not
+    # assumed. The documented route is to mark the object for deletion
+    # and let the update perform it. Try the direct call first for
+    # releases that do have it.
     try:
-        work.Features.DeleteFeatures([one])
+        deleter = getattr(work.Features, "DeleteFeatures", None)
+        if callable(deleter):
+            deleter([one])
+        else:
+            session().UpdateManager.AddToDeleteList([one])
     except Exception as error:
         return {"ok": False, "why": "%s: %s" % (type(error).__name__, error)}
     trouble = _update("bare: update after delete")

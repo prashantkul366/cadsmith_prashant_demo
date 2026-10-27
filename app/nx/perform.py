@@ -115,7 +115,16 @@ def delete_feature(arguments):
     for one in work.Features:
         if getattr(one, "JournalIdentifier", getattr(one, "Name", "")) == name:
             try:
-                work.Features.DeleteFeatures([one])
+                # Measured on NX v2412.0.0.5001: Features has no
+                # DeleteFeatures. The documented route is to add the
+                # object to the delete list and let the update do it.
+                # The direct call is tried first for releases that have
+                # it, so this works either way.
+                deleter = getattr(work.Features, "DeleteFeatures", None)
+                if callable(deleter):
+                    deleter([one])
+                else:
+                    session.UpdateManager.AddToDeleteList([one])
             except Exception as error:
                 return {"ok": False, "why": "%s: %s"
                                             % (type(error).__name__, error)}

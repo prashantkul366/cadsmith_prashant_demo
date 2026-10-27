@@ -99,6 +99,40 @@ def short(value, width=46):
     return text if len(text) <= width else text[:width - 1] + "…"
 
 
+def right_hand_side(expression, name):
+    """What is on the right of the `=`, whatever this release calls it.
+
+    NX 2412 answers `Equation` with the WHOLE equation - `p4_z=0.0` -
+    and `RightHandSide` with just `0.0`. Reading Equation and comparing
+    it to the value as a string therefore makes every plain number look
+    formula-driven, which would make the tool refuse to edit anything.
+    Measured on NX v2412.0.0.5001, which is why this function exists.
+    """
+    ok, text = ask(expression, "RightHandSide")
+    text = str(text) if ok and text is not None else ""
+    if not text.strip():
+        ok, whole = ask(expression, "Equation")
+        text = str(whole) if ok and whole is not None else ""
+        head = name + "="
+        if text.strip().startswith(head):
+            text = text.strip()[len(head):]
+    return text.strip()
+
+
+def is_plain_number(rhs, value):
+    """A right-hand side that is only the number is not a formula.
+
+    Compared as numbers, never as text: `0.00000000000` and `0.0` are
+    the same number and will never be the same string.
+    """
+    if not rhs:
+        return True
+    try:
+        return abs(float(rhs) - float(value)) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
 FEATURE_WANTS = [
     ("JournalIdentifier", "the stable handle we refer to a feature by"),
     ("Name", "what to call it in the tree"),
@@ -128,6 +162,8 @@ WRITE_PATH = [
     ("work.Features", "DeleteFeatures", "remove it"),
     ("session", "SetUndoMark", "make the change reversible"),
     ("session.UpdateManager", "DoUpdate", "rebuild the part"),
+    ("session.UpdateManager", "AddToDeleteList",
+     "the other way to delete: mark it, then update"),
 ]
 
 NX_FAILURES = []        # blocking problems on the NX side
@@ -248,20 +284,45 @@ def expression_half(work):
         else:
             mark(False, name, "not available  (%s)" % why)
 
-    described, numeric = 0, []
+    described, numeric, driven = 0, [], []
     for one in expressions:
         text = ask(one, "Description")[1]
         if text and str(text).strip():
             described += 1
-        formula = str(ask(one, "Equation")[1] or "")
         value = ask(one, "Value")[1]
         try:
             number = float(value)
         except (TypeError, ValueError):
             continue
         name = str(ask(one, "Name")[1] or "")
-        if name and formula.strip() in ("", str(value), "%g" % number):
+        if not name:
+            continue
+        rhs = right_hand_side(one, name)
+        if is_plain_number(rhs, number):
             numeric.append((one, name, number))
+        else:
+            driven.append((name, rhs))
+
+    say()
+    say("  How this release reports an expression's right-hand side:")
+    sample = expressions[0]
+    sname = str(ask(sample, "Name")[1] or "")
+    say("       Equation       %s" % short(ask(sample, "Equation")[1], 40))
+    say("       RightHandSide  %s" % short(ask(sample, "RightHandSide")[1], 40))
+    say("       read as        %s" % short(right_hand_side(sample, sname), 40))
+    say("       If Equation repeats the name, that is expected and")
+    say("       handled - it is read as a number, not as a formula.")
+
+    ok_units, unit = ask(expressions[0], "Units")
+    if ok_units and not isinstance(unit, str):
+        found = ""
+        for attribute in ("Abbreviation", "Symbol", "Name"):
+            got, value = ask(unit, attribute)
+            if got and value:
+                found = "%s = %s" % (attribute, value)
+                break
+        say("       Units is an object, not text; %s"
+            % (found or "no readable name found on it"))
 
     say()
     say("  THE NUMBER THAT MATTERS")
@@ -294,8 +355,12 @@ def expression_half(work):
 
     say()
     mark(len(numeric) > 0, "plain numbers we could safely edit",
-         "%d of %d (the rest are formula-driven or not numeric)"
-         % (len(numeric), len(expressions)))
+         "%d of %d (%d formula-driven, the rest not numeric)"
+         % (len(numeric), len(expressions), len(driven)))
+    if driven:
+        say("       Formula-driven, and deliberately left alone:")
+        for name, rhs in driven[:4]:
+            say("         %-10s = %s" % (name, short(rhs, 40)))
     say("       A formula-driven expression is deliberately refused by the")
     say("       tool rather than overwritten, so this is the part of the")
     say("       tree it would actually offer to change.")
@@ -326,6 +391,25 @@ def write_path_half(session, work):
         mark(found, "%s.%s" % (owner, method), why)
         if not found:
             NX_FAILURES.append("%s.%s is missing" % (owner, method))
+            # Do not guess a second time - ask the object what it has.
+            stem = ""
+            for letter in method[1:]:
+                if letter.isupper():
+                    break
+                stem += letter
+            stem = (method[0] + stem).lower()
+            try:
+                alternatives = sorted(
+                    n for n in dir(holder)
+                    if not n.startswith("_") and stem in n.lower())
+            except Exception:
+                alternatives = []
+            if alternatives:
+                say("       this release offers instead: %s"
+                    % ", ".join(alternatives[:8]))
+            else:
+                say("       and nothing on %s has '%s' in its name"
+                    % (owner, stem))
 
 
 def write_test_half(session, work, numeric):
