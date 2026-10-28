@@ -422,6 +422,30 @@ def check_nxside():
         os.environ.update(held)
 
 
+def check_code_gate():
+    print("running model-written code, which is off by default:")
+    held = dict(os.environ)
+    os.environ.pop("BARE_ALLOW_CODE", None)
+    try:
+        check("it is off unless asked for", nxside.code_allowed() is False)
+        offered = [tool["name"] for tool in nxside.tools()]
+        check("so the tool is not even offered to the model",
+              "nx_python" not in offered, str(offered))
+        answer = nxside.perform("nx_python", {"code": "workPart.Save()"})
+        check("and it is refused if asked for anyway",
+              answer["ok"] is False and "switched off" in answer["why"],
+              json.dumps(answer)[:160])
+        check("with the code it wanted kept in the record",
+              answer.get("would") == "workPart.Save()")
+        os.environ["BARE_ALLOW_CODE"] = "1"
+        check("and on when it is asked for", nxside.code_allowed() is True)
+        check("the tool comes back", "nx_python" in
+              [tool["name"] for tool in nxside.tools()])
+    finally:
+        os.environ.clear()
+        os.environ.update(held)
+
+
 def check_end_to_end():
     """The real nxside, against an NX-shaped stand-in, with a scripted model.
 
@@ -474,6 +498,7 @@ def main():
     check_loop()
     check_preview()
     check_nxside()
+    check_code_gate()
     check_end_to_end()
     print("")
     if failures:

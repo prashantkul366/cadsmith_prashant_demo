@@ -82,7 +82,9 @@ def conversation(nx, ask, prompt, rounds=12, note=None):
     note("TASK: " + prompt)
 
     for number in range(1, rounds + 1):
-        reply = ask(messages, nx.TOOLS, SYSTEM)
+        offered = getattr(nx, "tools", None)
+        reply = ask(messages, offered() if callable(offered) else nx.TOOLS,
+                    SYSTEM)
         said = _text(reply.get("content"))
         if said:
             note("\nCLAUDE: " + said)
@@ -186,9 +188,11 @@ def main():
                    "this again.")
         return 1
 
-    note("model %s in %s%s" % (bedrock.model(), sigv4.region(),
-                               "  [BARE_DRY: nothing will change]"
-                               if nxside.dry() else ""))
+    note("model %s in %s%s%s" % (
+        bedrock.model(), sigv4.region(),
+        "  [BARE_DRY: nothing will change]" if nxside.dry() else "",
+        "  [code execution ON]" if nxside.code_allowed()
+        else "  [code execution off]"))
     try:
         conversation(nxside, bedrock.ask, task(),
                      rounds=int(os.environ.get("BARE_ROUNDS", "12") or 12),

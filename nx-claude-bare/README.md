@@ -154,6 +154,7 @@ Read-only rounds are never put to the engineer.
 | `BARE_ROUNDS`   | how many model turns before giving up. Default 12. |
 | `BARE_THINKING=1` | adaptive extended thinking. Try it once the plain path works. |
 | `BARE_APPROVE=0` | print the plan but do not ask. |
+| `BARE_ALLOW_CODE=1` | let Claude run NX Open code it wrote itself. **Off by default** — without it the tool is not even offered. |
 | `BARE_LOG`      | where to write the transcript. |
 | `AWS_REGION`    | else `~/.aws/config`, else `us-east-1`. |
 | `AWS_PROFILE`   | which profile to read. |

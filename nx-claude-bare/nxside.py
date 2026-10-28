@@ -263,6 +263,19 @@ def delete_feature(arguments):
     return {"ok": True, "now": "deleted " + name}
 
 
+def code_allowed():
+    """Is Claude allowed to run NX Open code it wrote itself?
+
+    Off unless asked for. The four typed operations are bounded and
+    every one of them is reversible by NX's own undo; `nx_python` is
+    neither. On somebody else's laptop, on a first visit, that asymmetry
+    decides it - and the typed operations are enough to answer the
+    question the visit is for.
+    """
+    return os.environ.get("BARE_ALLOW_CODE", "").strip() in (
+        "1", "yes", "true")
+
+
 def nx_python(arguments):
     """Run Claude's own NX Open code in this session.
 
@@ -275,6 +288,12 @@ def nx_python(arguments):
     code = str(arguments.get("code", ""))
     if not code.strip():
         return {"ok": False, "why": "no code"}
+    if not code_allowed():
+        return {"ok": False,
+                "why": "running code is switched off on this machine. Use "
+                       "set_expression, suppress_feature or delete_feature "
+                       "instead.",
+                "would": code}
     if dry():
         return {"ok": False, "why": "BARE_DRY is set, nothing was run",
                 "would": code}
@@ -458,6 +477,17 @@ TOOLS = [
         },
     },
 ]
+
+def tools():
+    """What Claude is offered, which is not always everything there is.
+
+    A tool that would only ever be refused is worse than one that is
+    absent: it costs a round trip and invites the model to try again.
+    """
+    if code_allowed():
+        return TOOLS
+    return [tool for tool in TOOLS if tool["name"] != "nx_python"]
+
 
 PERFORM = {
     "read_tree": read_tree,
