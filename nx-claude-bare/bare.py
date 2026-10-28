@@ -38,6 +38,28 @@ SYSTEM = (
 )
 
 
+def brief(name, answer):
+    """A tool's answer in one line, for someone watching it work.
+
+    The model is sent the whole thing; this is only what the engineer
+    reads. Dumping the full tree into the Information window buries the
+    one line that matters - whether it worked - under a page of JSON.
+    """
+    if not isinstance(answer, dict):
+        return str(answer)[:200]
+    if name == "read_tree" and "features" in answer:
+        return "%d features, %d expressions" % (
+            len(answer.get("features") or []),
+            len(answer.get("expressions") or []))
+    if answer.get("ok") is False:
+        detail = answer.get("why") or answer.get("would") or ""
+        return "refused: " + " ".join(str(detail).split())[:180]
+    for key in ("now", "detail", "printed", "result"):
+        if answer.get(key):
+            return "ok: " + " ".join(str(answer[key]).split())[:180]
+    return "ok"
+
+
 def _text(block_list):
     out = []
     for block in block_list or []:
@@ -106,7 +128,7 @@ def conversation(nx, ask, prompt, rounds=12, note=None):
             note("\n  %s %s" % (call.get("name"),
                                 json.dumps(arguments)[:2000]))
             answer = nx.perform(call.get("name"), arguments)
-            note("  -> " + json.dumps(answer)[:2000])
+            note("  -> " + brief(call.get("name"), answer))
             results.append({
                 "type": "tool_result",
                 "tool_use_id": call.get("id"),

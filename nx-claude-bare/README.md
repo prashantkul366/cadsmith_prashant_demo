@@ -31,6 +31,7 @@ is no pip in NX and on a corporate machine there is not going to be.
 | `nxside.py` | the only file that touches NX: five tools. |
 | `bedrock.py`| builds one Bedrock request and parses the reply. |
 | `sigv4.py`  | signs it, with the standard library alone. |
+| `demo.py` | **see it work with no NX and no AWS.** `python demo.py read | hole | refused` prints what the Information window shows, using the real loop against a stand-in of the part NX 2412 reported. |
 | `selftest.py` | developer checks that run with no NX and no AWS account. |
 | `prompt.txt`| the task. Edit this. |
 | `selftest.py` | developer checks. Run against a stand-in NX with `PYTHONPATH=<fake>`; skips the NX parts without one. |
