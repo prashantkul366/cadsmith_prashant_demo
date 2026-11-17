@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the CADSmith web application.
+# Start the Text to CAD web application.
 #
 #   ./app/run_app.sh              # serve on http://127.0.0.1:8000
 #   PORT=9000 ./app/run_app.sh    # somewhere else
@@ -68,6 +68,6 @@ if [ -f "$ROOT/.env" ]; then
   done < "$ROOT/.env"
 fi
 
-echo "CADSmith → http://${HOST}:${PORT}"
+echo "Text to CAD → http://${HOST}:${PORT}"
 exec "$PYTHON" -m uvicorn app.server.app:app \
   --host "$HOST" --port "$PORT" --log-level info "$@"

@@ -1,4 +1,4 @@
-"""HTTP surface for the CADSmith web application.
+"""HTTP surface for the Text to CAD web application.
 
 Serves the single-page frontend, starts pipeline jobs, streams their progress
 as Server-Sent Events, and hands back the artifacts the CAD kernel produced.
@@ -118,7 +118,7 @@ FALLBACK_EXAMPLES = [
 # cannot verify the re-signed certificates and every model call fails.
 tls.configure()
 
-app = FastAPI(title="CADSmith", docs_url="/api/docs", redoc_url=None)
+app = FastAPI(title="Text to CAD", docs_url="/api/docs", redoc_url=None)
 manager = JobManager(RUNS_DIR)
 
 _render_capability: Optional[dict] = None
@@ -878,7 +878,7 @@ def _startup() -> None:
     # One account's guess is another account's 404.
     threading.Thread(target=providers.warm_bedrock_models, daemon=True).start()
     status = _health()
-    print(f"CADSmith app ready - {restored} past run(s) restored"
+    print(f"Text to CAD app ready - {restored} past run(s) restored"
           + (f", {pruned} old run(s) removed" if pruned else ""))
     for name, check in status["checks"].items():
         print(f"  [{'ok ' if check['ok'] else 'MISS'}] {name}: {check['detail']}")

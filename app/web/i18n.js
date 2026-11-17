@@ -1,6 +1,6 @@
 "use strict";
 /* ═══════════════════════════════════════════════════════════════════════
-   CADSmith — interface language.
+   Text to CAD — interface language.
 
    Two languages, one dictionary, and a hard rule: nothing the model reads
    passes through here.  The Refiner is told what the kernel measured in
@@ -30,8 +30,8 @@ const I18N = (function () {
   const DICT = {
 
     /* ── chrome ─────────────────────────────────────────────────────── */
-    "app.title":        ["CADSmith — Multi-Agent CAD Generation",
-                         "CADSmith — マルチエージェント CAD 生成"],
+    "app.title":        ["Text to CAD — Multi-Agent CAD Generation",
+                         "Text to CAD — マルチエージェント CAD 生成"],
     "app.engine":       ["Planner · Coder · Executor · Validator · Refiner",
                          "プランナー · コーダー · 実行 · 検証 · リファイナー"],
     "app.history":      ["History", "履歴"],

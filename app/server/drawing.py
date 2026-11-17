@@ -1371,7 +1371,7 @@ def _title_block(prompt: str, geometry: dict, job_id: str, version: int,
         out.append(_text(x + 2.0, y_top + 11.4, value, size, anchor="start"))
 
     # Row 1 - who owns the drawing, and what it is
-    field(TITLE_L, TITLE_T, TITLE_W, i18n.t('sheet.owner', lang), "CADSmith")
+    field(TITLE_L, TITLE_T, TITLE_W, i18n.t('sheet.owner', lang), "Text to CAD")
     out.append(_line(TITLE_L + 60, TITLE_T, TITLE_L + 60, edges[0], W_THIN))
     field(TITLE_L + 60, TITLE_T, TITLE_W - 60, i18n.t('sheet.title', lang), title)
 
@@ -1465,7 +1465,7 @@ def _notes(geometry: dict, spec: Any = None,
         out.append(_text(FRAME_L + 2.0, y, text,
                          TEXT_SMALL, anchor="start", fill="#333"))
     out.append(_text(FRAME_L + 2.0, FRAME_B - 3.0,
-                     "Projected from the exported STEP solid by CADSmith",
+                     "Projected from the exported STEP solid by Text to CAD",
                      TEXT_SMALL, anchor="start", fill="#777"))
     return out
 
@@ -1733,7 +1733,7 @@ def build_dxf(step_path: Path, geometry: dict, prompt: str, job_id: str,
 
     bbox = geometry.get("bounding_box", {})
     rows = [
-        (i18n.t('sheet.owner', lang), "CADSmith"),
+        (i18n.t('sheet.owner', lang), "Text to CAD"),
         (i18n.t('sheet.title', lang), " ".join(prompt.split()).rstrip(".")),
         ("DRAWING No.", f"{job_id}-{version:02d}"),
         (i18n.t('sheet.date', lang), time.strftime("%Y-%m-%d")),

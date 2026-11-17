@@ -1,4 +1,4 @@
-# CADSmith — User Guide
+# Text to CAD — User Guide
 
 Describe a part in plain English or Japanese. Five AI agents plan it, write
 CAD code, build it in a real CAD kernel, and measure what came out. You get

@@ -131,11 +131,11 @@ def test_index_route_reads_a_non_ascii_page(tmp_path, monkeypatch) -> None:
     from app.server import app as app_module
 
     page = tmp_path / "index.html"
-    page.write_text("<h1>══ CADSmith ° → █</h1>", encoding="utf-8")
+    page.write_text("<h1>══ Text to CAD ° → █</h1>", encoding="utf-8")
     monkeypatch.setattr(app_module, "WEB_DIR", tmp_path)
 
     with TestClient(app_module.app) as client:
         response = client.get("/")
 
     assert response.status_code == 200
-    assert "CADSmith" in response.text
+    assert "Text to CAD" in response.text

@@ -562,7 +562,7 @@ def main() -> int:
     parser.add_argument("--skip-models", action="store_true")
     args = parser.parse_args()
 
-    print("CADSmith preflight")
+    print("Text to CAD preflight")
     print("=" * 58)
 
     check_python()

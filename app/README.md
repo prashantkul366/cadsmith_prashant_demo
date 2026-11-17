@@ -1,4 +1,4 @@
-# CADSmith — web application
+# Text to CAD — web application
 
 A working front end for the CADSmith pipeline. Describe a part in English, watch
 five agents plan it, write CadQuery, build it in the OpenCASCADE kernel and

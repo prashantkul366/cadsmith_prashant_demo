@@ -95,7 +95,7 @@ def main() -> int:
         print("\nPage load")
         page.goto(args.url, wait_until="networkidle")
         page.wait_for_timeout(1500)
-        check("title", "CADSmith" in page.title(), page.title())
+        check("title", "Text to CAD" in page.title(), page.title())
         check("three.js loaded", page.evaluate("typeof THREE !== 'undefined'"))
         check("viewer initialised", page.evaluate("typeof Viewer !== 'undefined'"))
         check("canvas present", page.locator("#gl canvas").count() == 1)

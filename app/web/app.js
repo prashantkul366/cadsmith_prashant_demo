@@ -1,6 +1,6 @@
 "use strict";
 /* ═══════════════════════════════════════════════════════════════════════
-   CADSmith — application logic.
+   Text to CAD — application logic.
 
    Every panel on screen is fed by the backend: the Design Plan is the
    Planner agent's JSON, the code is what the Coder wrote, the dimensions

@@ -1,11 +1,30 @@
-> **Provenance.** The CADSmith pipeline in `autofab/`, the benchmark in
-> `data/`, and everything below this note are the work of Jesse Barkley, Rumi
-> Loghmani and Amir Barati Farimani (Carnegie Mellon University) — see
-> [the paper](https://arxiv.org/abs/2603.26512) and the upstream repository,
-> [Ashutosh-Chauhan3025/CADSmith](https://github.com/Ashutosh-Chauhan3025/CADSmith).
-> This repository adds a web application in [`app/`](app/) around that
-> pipeline, which is itself unmodified. See [`app/README.md`](app/README.md)
-> to run it.
+> **Two names, and they are not the same thing.**
+>
+> **CADSmith** is the research: the multi-agent pipeline in `autofab/` and the
+> benchmark in `data/`, the work of Jesse Barkley, Rumi Loghmani and Amir
+> Barati Farimani (Carnegie Mellon University) — see
+> [the paper](https://arxiv.org/abs/2603.26512) and the authors' repository,
+> [jabarkle/CADSmith](https://github.com/jabarkle/CADSmith), from which this
+> repository is forked. Everything below this note describes *that* system
+> and keeps its name. **Do not rename it.**
+>
+> **Text to CAD** is the application in [`app/`](app/) built around it — the
+> interface, the standard-parts catalogue, the measured checks, the
+> engineering drawings, the cost estimate and the bilingual interface. That
+> is this project's work, and it is the name a user sees.
+>
+> **The pipeline is not unmodified.** Three commits changed `autofab/`:
+> UTF-8 handling (`9745b29`), material and tolerance in the spec plus
+> assembly results (`b7903c8`), and holding the request's own numbers fixed
+> while no longer passing API keys to generated code (`c467040`) — about 315
+> lines added and 56 removed. Earlier wording here said it was untouched;
+> that was wrong, and the published benchmark numbers should be re-run before
+> being called reproducible against this checkout.
+>
+> **The authors' repository carries no licence file**, so the default is all
+> rights reserved. Attribution is not permission.
+>
+> See [`app/README.md`](app/README.md) to run it.
 
 # CADSmith
 

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Start the CADSmith web application on Windows.
+  Start the Text to CAD web application on Windows.
 
 .EXAMPLE
   .\app\run_app.ps1
@@ -89,5 +89,5 @@ $arguments = @("-m", "uvicorn", "app.server.app:app",
                "--host", $AppHost, "--port", $Port, "--log-level", "info")
 if ($Reload) { $arguments += "--reload" }
 
-Write-Host "CADSmith -> http://${AppHost}:${Port}" -ForegroundColor Cyan
+Write-Host "Text to CAD -> http://${AppHost}:${Port}" -ForegroundColor Cyan
 & $python @arguments

@@ -1,6 +1,6 @@
 "use strict";
 /* ═══════════════════════════════════════════════════════════════════════
-   API client — every call hits the real CADSmith backend.
+   API client — every call hits the real Text to CAD backend.
    There is no mock path here; if the server cannot do something it says so.
    ═══════════════════════════════════════════════════════════════════════ */
 
